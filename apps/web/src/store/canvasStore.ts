@@ -1567,20 +1567,53 @@ const useCanvasStore = create<RFState>()(
       const dirty = new Set(nodeContentQueue.pendingNodeIds());
       const skippedNodeIds: string[] = [];
       const skippedRemoteNodes: Node[] = [];
+      const preservedPendingNodeIds = new Set<string>();
+      const localNodesById = new Map(get().nodes.map((node) => [node.id, node]));
       const safeDeltas =
         dirty.size === 0
           ? deltas
-          : deltas.filter((d) => {
+          : deltas.flatMap((d): Delta[] => {
               if (d.type === 'REPLACE_NODE' && dirty.has(d.next.id)) {
+                const prevData = (d.prev.data ?? {}) as Record<string, unknown>;
+                const nextData = (d.next.data ?? {}) as Record<string, unknown>;
+                const changesPendingContent = [...NODE_CONTENT_KEYS].some(
+                  (key) => !Object.is(prevData[key], nextData[key]),
+                );
+                if (!changesPendingContent) {
+                  // Coarse REPLACE_NODE deltas carry the server's full node,
+                  // including stale content fields. A lifecycle-only update
+                  // (for example Question running/done/viewed) is safe to
+                  // apply while preserving every locally pending content
+                  // field; otherwise applying `next` would erase the edit.
+                  const local = localNodesById.get(d.next.id);
+                  if (local) {
+                    const localData = (local.data ?? {}) as Record<
+                      string,
+                      unknown
+                    >;
+                    const mergedData = { ...nextData };
+                    for (const key of NODE_CONTENT_KEYS) {
+                      if (key in localData) mergedData[key] = localData[key];
+                      else delete mergedData[key];
+                    }
+                    preservedPendingNodeIds.add(d.next.id);
+                    return [
+                      {
+                        ...d,
+                        next: { ...d.next, data: mergedData },
+                      },
+                    ];
+                  }
+                }
                 skippedNodeIds.push(d.next.id);
                 skippedRemoteNodes.push(d.next as unknown as Node);
-                return false;
+                return [];
               }
               if (d.type === 'DELETE_NODE' && dirty.has(d.node.id)) {
                 skippedNodeIds.push(d.node.id);
-                return false;
+                return [];
               }
-              return true;
+              return [d];
             });
 
       // Local-first rebase for a node the user is mid-editing: we keep their
@@ -1660,7 +1693,10 @@ const useCanvasStore = create<RFState>()(
       {
         const skippedSet = new Set(skippedNodeIds);
         nodeContentQueue.seedBaselines(
-          (applied.nodes as Node[]).filter((n) => !skippedSet.has(n.id)),
+          (applied.nodes as Node[]).filter(
+            (n) =>
+              !skippedSet.has(n.id) && !preservedPendingNodeIds.has(n.id),
+          ),
         );
       }
 
