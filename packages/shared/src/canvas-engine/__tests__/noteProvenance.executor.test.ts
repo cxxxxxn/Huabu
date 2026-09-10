@@ -52,6 +52,24 @@ describe('executeCanvasCommands: AI note provenance', () => {
     expect(blocks[0].baselineMarkdown).toBe('Original paragraph.');
   });
 
+  it('accumulates sequential agent rewrites against the last human content', () => {
+    const start = note('n1', { content: 'Original human paragraph.' });
+    const first = runContentEdit('agent', start, 'First AI rewrite.');
+    const firstNode = first.out.writeResult.nodes.find((n) => n.id === 'n1');
+    expect(firstNode).toBeDefined();
+
+    const second = runContentEdit(
+      'agent',
+      firstNode as CanvasNode,
+      'Second AI rewrite.',
+    );
+
+    expect(second.provenance?.blocks).toHaveLength(1);
+    expect(second.provenance?.blocks[0]?.baselineMarkdown).toBe(
+      'Original human paragraph.',
+    );
+  });
+
   it('marks a brand-new appended block as inserted', () => {
     const start = note('n1', { content: 'Kept paragraph.' });
     const { provenance } = runContentEdit(

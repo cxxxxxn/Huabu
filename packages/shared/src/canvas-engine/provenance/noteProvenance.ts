@@ -127,7 +127,9 @@ export interface StampInput {
  * in the SAME slot (same surrounding surviving blocks) is a
  * **modification**, not delete+insert. Unpaired leftovers become
  * inserts (`kind: 'inserted'`) or tombstones. Existing entries whose key
- * still appears are kept untouched.
+ * still appears are kept untouched. When an AI-edited block is edited again,
+ * its original user-owned baseline and first-edit timestamp move to the new
+ * key so sequential AI edits remain one cumulative pending diff.
  */
 export function stampAiEdit(
   prov: MarkdownProvenance | undefined,
@@ -141,6 +143,10 @@ export function stampAiEdit(
     input.oldKeys,
     input.newKeys,
   );
+  const existingBlocksByKey = new Map(base.blocks.map((b) => [b.key, b]));
+  const replacementKeyByOldKey = new Map(
+    modifications.map((m) => [m.removedKey, m.addedKey]),
+  );
 
   const keptBlocks: BlockProvenance[] = base.blocks.filter((b) =>
     newKeySet.has(b.key),
@@ -151,12 +157,13 @@ export function stampAiEdit(
 
   for (const m of modifications) {
     if (keptKeySet.has(m.addedKey)) continue;
+    const existing = existingBlocksByKey.get(m.removedKey);
     const baselineMarkdown = input.oldMarkdownByKey.get(m.removedKey) ?? '';
     newBlocks.push({
       key: m.addedKey,
-      kind: 'modified',
-      baselineMarkdown,
-      at,
+      kind: existing?.kind ?? 'modified',
+      baselineMarkdown: existing?.baselineMarkdown ?? baselineMarkdown,
+      at: existing?.at ?? at,
     });
   }
 
@@ -166,17 +173,31 @@ export function stampAiEdit(
   }
 
   const liveAnchorSet = newKeySet;
-  const keptTombstones: DeletedBlockInfo[] = base.deletedBlocks.filter(
-    (t) => t.anchorKey === null || liveAnchorSet.has(t.anchorKey),
-  );
+  const keptTombstones: DeletedBlockInfo[] = base.deletedBlocks.flatMap((t) => {
+    if (t.anchorKey === null || liveAnchorSet.has(t.anchorKey)) return [t];
+    const replacementAnchor = replacementKeyByOldKey.get(t.anchorKey);
+    return replacementAnchor && liveAnchorSet.has(replacementAnchor)
+      ? [{ ...t, anchorKey: replacementAnchor }]
+      : [];
+  });
   const keptTombKeys = new Set(keptTombstones.map((t) => t.key));
 
   const newTombstones: DeletedBlockInfo[] = [];
   for (const { key, anchorKey } of pureRemoves) {
     if (keptTombKeys.has(key)) continue;
-    const baselineMarkdown = input.oldMarkdownByKey.get(key) ?? '';
+    const existing = existingBlocksByKey.get(key);
+    // An AI-only insertion that a later AI edit removes has no net change
+    // relative to the last user-owned document, so there is nothing to review.
+    if (existing?.kind === 'inserted') continue;
+    const baselineMarkdown =
+      existing?.baselineMarkdown ?? input.oldMarkdownByKey.get(key) ?? '';
     if (anchorKey !== null && !liveAnchorSet.has(anchorKey)) continue;
-    newTombstones.push({ key, baselineMarkdown, anchorKey, at });
+    newTombstones.push({
+      key,
+      baselineMarkdown,
+      anchorKey,
+      at: existing?.at ?? at,
+    });
   }
 
   return {
