@@ -81,6 +81,7 @@ docs/
 | -------------------------------------------------------------------------------------------------------------------- | -------------- | -------------------------------------------------------------------------------------- |
 | [active-space-external-note-watcher.md](./proposals/active-space-external-note-watcher.md)                           | Proposed       | Scope external-note watchers to Spaces with active SSE subscribers.                    |
 | [agent-node-freshness-cas-plan.md](./proposals/agent-node-freshness-cas-plan.md)                                     | In-Progress    | Read/write revision freshness across agent and web paths.                              |
+| [agent-space-change-auto-accept.md](./proposals/agent-space-change-auto-accept.md)                                   | Proposed       | Global General setting to suppress routine Agent Space Change Review records.          |
 | [agent-turn-realtime-sync.md](./proposals/agent-turn-realtime-sync.md)                                               | Proposed       | Live attachment and durable event replay for UI, RFS, and Headless turns.              |
 | [canvas-checkpoint-plan.md](./proposals/canvas-checkpoint-plan.md)                                                   | Proposed       | Canvas checkpoint and restoration design.                                              |
 | [canvas-realtime-sync-plan.md](./proposals/canvas-realtime-sync-plan.md)                                             | In-Progress    | Roadmap from multi-agent sync to multi-user co-editing.                                |
@@ -99,6 +100,7 @@ docs/
 | [multi-backend-storage.md](./proposals/multi-backend-storage.md)                                                     | Partly shipped | Phases 1–3: Blob, structured repositories, catalogue, and bounded reads.               |
 | [note-auto-height-stable-geometry.md](./proposals/note-auto-height-stable-geometry.md)                               | Proposed       | Revision-aware offscreen Note measurement and stable auto-height geometry.             |
 | [space-preview-and-world-redesign.md](./proposals/space-preview-and-world-redesign.md)                               | In-Progress    | View-only Space previews, a preview-based World, and deferred zoom-through navigation. |
+| [space-prompt-topology-scoping.md](./proposals/space-prompt-topology-scoping.md)                                     | Shipped        | Topology-derived global/direct-Agent targeting for Prompt Frames.                      |
 
 ### Shipped
 
