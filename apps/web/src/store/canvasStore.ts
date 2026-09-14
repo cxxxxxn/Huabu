@@ -14,6 +14,7 @@ import {
   type Connection,
   type ReactFlowInstance,
 } from '@xyflow/react';
+import deepEqual from 'fast-deep-equal';
 import { create, type StateCreator } from 'zustand';
 
 import {
@@ -1568,7 +1569,9 @@ const useCanvasStore = create<RFState>()(
       const skippedNodeIds: string[] = [];
       const skippedRemoteNodes: Node[] = [];
       const preservedPendingNodeIds = new Set<string>();
-      const localNodesById = new Map(get().nodes.map((node) => [node.id, node]));
+      const localNodesById = new Map(
+        get().nodes.map((node) => [node.id, node]),
+      );
       const safeDeltas =
         dirty.size === 0
           ? deltas
@@ -1576,8 +1579,10 @@ const useCanvasStore = create<RFState>()(
               if (d.type === 'REPLACE_NODE' && dirty.has(d.next.id)) {
                 const prevData = (d.prev.data ?? {}) as Record<string, unknown>;
                 const nextData = (d.next.data ?? {}) as Record<string, unknown>;
+                // JSON transport gives unchanged keywords/provenance separate
+                // object identities; compare their values, not references.
                 const changesPendingContent = [...NODE_CONTENT_KEYS].some(
-                  (key) => !Object.is(prevData[key], nextData[key]),
+                  (key) => !deepEqual(prevData[key], nextData[key]),
                 );
                 if (!changesPendingContent) {
                   // Coarse REPLACE_NODE deltas carry the server's full node,
@@ -1694,8 +1699,7 @@ const useCanvasStore = create<RFState>()(
         const skippedSet = new Set(skippedNodeIds);
         nodeContentQueue.seedBaselines(
           (applied.nodes as Node[]).filter(
-            (n) =>
-              !skippedSet.has(n.id) && !preservedPendingNodeIds.has(n.id),
+            (n) => !skippedSet.has(n.id) && !preservedPendingNodeIds.has(n.id),
           ),
         );
       }

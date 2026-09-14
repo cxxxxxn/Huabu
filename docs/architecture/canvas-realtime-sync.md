@@ -99,7 +99,7 @@ otherwise                → apply
 - Resolution is deterministic **local-first**: a skipped node keeps the human's
   value, and its post-effects (preprocessing / fit) are skipped too. `version`
   still advances to `toVersion` so the next autosave doesn't 409.
-- Coarse `REPLACE_NODE` deltas include the server's full node even when only a lifecycle field such as Question `status` or `viewed` changed. When the remote delta leaves every markdown-sidecar field unchanged, the applier overlays the locally pending content fields onto the incoming node and applies the remaining update. This avoids treating the initiating tab's own lifecycle broadcast as an edit conflict without allowing stale server content to overwrite the local edit.
+- Coarse `REPLACE_NODE` deltas include the server's full node even when only a lifecycle field such as Question `status` or `viewed` changed. Markdown-sidecar fields are compared by value, including nested `keywords` and `provenance` metadata, rather than object identity or object property order after JSON transport. When the remote delta leaves every markdown-sidecar field unchanged, the applier overlays the locally pending content fields onto the incoming node and applies the remaining update. This avoids treating the initiating tab's own lifecycle broadcast as an edit conflict without allowing stale server content to overwrite the local edit.
 - **Baseline rebase (no false conflict):** for a skipped `REPLACE_NODE`, the
   applier adopts the agent's just-written revision as that node's content-CAS
   baseline (`nodeContentQueue.seedBaselines` on the delta's `next`) **without**

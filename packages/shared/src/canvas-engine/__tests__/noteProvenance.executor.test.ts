@@ -84,6 +84,147 @@ describe('executeCanvasCommands: AI note provenance', () => {
     expect(blocks[0].baselineMarkdown).toBe('');
   });
 
+  it.each([
+    {
+      name: 'the exact human text',
+      original: 'Original human paragraph.',
+      restored: 'Original human paragraph.',
+    },
+    {
+      name: 'equivalent list markers',
+      original: '* alpha\n* beta',
+      restored: '- alpha\n- beta',
+    },
+    {
+      name: 'equivalent math delimiters',
+      original: String.raw`The result is \(x + y\).`,
+      restored: 'The result is $x + y$.',
+    },
+    {
+      name: 'equivalent reference-style links',
+      original: 'Read [the guide](https://example.com "Docs").',
+      restored:
+        'Read [the guide][guide].\n\n[guide]: https://example.com "Docs"',
+    },
+  ])(
+    'clears the pending modification when AI restores $name',
+    ({ original, restored }) => {
+      const first = runContentEdit(
+        'agent',
+        note('n1', { content: original }),
+        'AI rewrite.',
+      );
+      const firstNode = first.out.writeResult.nodes[0];
+      expect(first.provenance?.blocks).toHaveLength(1);
+
+      const second = runContentEdit('agent', firstNode, restored);
+
+      expect(second.provenance).toEqual({
+        version: 1,
+        blocks: [],
+        deletedBlocks: [],
+      });
+      expect(second.out.writeResult.nodes[0].data.content).toBe(restored);
+      // Clearing a current marker does not mutate an earlier execution result.
+      expect(first.provenance?.blocks).toHaveLength(1);
+      expect(firstNode.data.content).toBe('AI rewrite.');
+    },
+  );
+
+  it('clears a restored duplicate block despite its occurrence suffix', () => {
+    const original = 'Repeated paragraph.\n\nSeparator.\n\nRepeated paragraph.';
+    const first = runContentEdit(
+      'agent',
+      note('n1', { content: original }),
+      'Repeated paragraph.\n\nSeparator.\n\nAI rewrite.',
+    );
+    expect(fingerprintMarkdownKeys(original)[2]).toMatch(/#2$/);
+
+    const second = runContentEdit(
+      'agent',
+      first.out.writeResult.nodes[0],
+      original,
+    );
+
+    expect(second.provenance?.blocks).toEqual([]);
+    expect(second.provenance?.deletedBlocks).toEqual([]);
+  });
+
+  it('preserves other pending edits and tombstones when one block is restored', () => {
+    const original =
+      'Human first.\n\nSeparator.\n\nHuman second.\n\nDeleted paragraph.';
+    const first = runContentEdit(
+      'agent',
+      note('n1', { content: original }),
+      'AI first.\n\nSeparator.\n\nHuman second.',
+    );
+    const second = runContentEdit(
+      'agent',
+      first.out.writeResult.nodes[0],
+      'AI first.\n\nSeparator.\n\nAI second.',
+    );
+    const finalContent = 'AI first.\n\nSeparator.\n\nHuman second.';
+    const third = runContentEdit(
+      'agent',
+      second.out.writeResult.nodes[0],
+      finalContent,
+    );
+
+    expect(third.provenance?.blocks).toEqual([first.provenance?.blocks[0]]);
+    expect(third.provenance?.deletedBlocks).toEqual(
+      first.provenance?.deletedBlocks,
+    );
+    expect(third.provenance?.deletedBlocks).toHaveLength(1);
+  });
+
+  it('starts a fresh pending modification after an earlier edit was fully restored', () => {
+    const original = 'Original human paragraph.';
+    const first = runContentEdit(
+      'agent',
+      note('n1', { content: original }),
+      'AI rewrite.',
+    );
+    const restored = runContentEdit(
+      'agent',
+      first.out.writeResult.nodes[0],
+      original,
+    );
+    const next = runContentEdit(
+      'agent',
+      restored.out.writeResult.nodes[0],
+      'Another AI rewrite.',
+    );
+
+    expect(restored.provenance?.blocks).toEqual([]);
+    expect(next.provenance?.blocks).toHaveLength(1);
+    expect(next.provenance?.blocks[0]).toMatchObject({
+      kind: 'modified',
+      baselineMarkdown: original,
+    });
+  });
+
+  it('keeps a rewritten AI insertion pending when it duplicates human text', () => {
+    const first = runContentEdit(
+      'agent',
+      note('n1', { content: 'Human paragraph.' }),
+      'Human paragraph.\n\nAI insertion.',
+    );
+    const finalContent = 'Human paragraph.\n\nHuman paragraph.';
+    const second = runContentEdit(
+      'agent',
+      first.out.writeResult.nodes[0],
+      finalContent,
+    );
+
+    expect(second.provenance?.blocks).toEqual([
+      {
+        ...first.provenance?.blocks[0],
+        key: fingerprintMarkdownKeys(finalContent)[1],
+      },
+    ]);
+    expect(second.provenance?.blocks[0]?.kind).toBe('inserted');
+  });
+
   it('does NOT stamp provenance for a user (ui) content edit', () => {
     const start = note('n1', { content: 'Original paragraph.' });
     const { provenance } = runContentEdit(

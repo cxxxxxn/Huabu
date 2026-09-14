@@ -129,7 +129,8 @@ export interface StampInput {
  * inserts (`kind: 'inserted'`) or tombstones. Existing entries whose key
  * still appears are kept untouched. When an AI-edited block is edited again,
  * its original user-owned baseline and first-edit timestamp move to the new
- * key so sequential AI edits remain one cumulative pending diff.
+ * key so sequential AI edits remain one cumulative pending diff. A rewrite
+ * back to that normalized baseline clears the pending modification.
  */
 export function stampAiEdit(
   prov: MarkdownProvenance | undefined,
@@ -158,6 +159,19 @@ export function stampAiEdit(
   for (const m of modifications) {
     if (keptKeySet.has(m.addedKey)) continue;
     const existing = existingBlocksByKey.get(m.removedKey);
+    if (existing && existing.kind !== 'inserted') {
+      const baselineBlocks = fingerprintMarkdownBlocks(
+        existing.baselineMarkdown,
+      );
+      // Occurrence suffixes identify duplicate positions, not block content.
+      // Only a return to the original normalized block cancels a modification.
+      if (
+        baselineBlocks.length === 1 &&
+        baselineBlocks[0].key === m.addedKey.split('#')[0]
+      ) {
+        continue;
+      }
+    }
     const baselineMarkdown = input.oldMarkdownByKey.get(m.removedKey) ?? '';
     newBlocks.push({
       key: m.addedKey,

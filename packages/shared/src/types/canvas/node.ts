@@ -171,8 +171,8 @@ export interface BlockProvenance {
    */
   kind?: 'modified' | 'inserted';
   /**
-    * Markdown of the block at its last user-owned state. Sequential AI edits
-    * preserve this original baseline. Empty string for `kind === 'inserted'`.
+   * Markdown of the block at its last user-owned state. Sequential AI edits
+   * preserve this original baseline. Empty string for `kind === 'inserted'`.
    */
   baselineMarkdown: string;
   /** ISO timestamp when the AI edit was stamped. */
