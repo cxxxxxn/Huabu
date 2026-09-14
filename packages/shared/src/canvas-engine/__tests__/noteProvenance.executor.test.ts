@@ -131,6 +131,147 @@ describe('executeCanvasCommands: AI note provenance', () => {
     },
   );
 
+  it.each([
+    {
+      name: 'reference link',
+      original:
+        'Read [the guide][guide].\n\n[guide]: https://example.com "Docs"',
+      inline: 'Read [the guide](https://example.com "Docs").',
+    },
+    {
+      name: 'reference image',
+      original:
+        '![Diagram][diagram]\n\n[diagram]: artifacts/diagram.png "Architecture"',
+      inline: '![Diagram](artifacts/diagram.png "Architecture")',
+    },
+  ])(
+    'retains a $name baseline through serialized sequential edits',
+    ({ original, inline }) => {
+      const first = runContentEdit(
+        'agent',
+        note('n1', { content: original }),
+        'First AI rewrite.',
+      );
+      const firstNode = JSON.parse(
+        JSON.stringify(first.out.writeResult.nodes[0]),
+      ) as CanvasNode;
+      const second = runContentEdit('agent', firstNode, 'Second AI rewrite.');
+      const secondNode = JSON.parse(
+        JSON.stringify(second.out.writeResult.nodes[0]),
+      ) as CanvasNode;
+      const baselineKey = fingerprintMarkdownKeys(original)[0];
+      expect(first.provenance?.blocks[0]?.baselineKey).toBe(baselineKey);
+      expect(second.provenance?.blocks[0]?.baselineKey).toBe(baselineKey);
+
+      for (const restored of [original, inline]) {
+        const result = runContentEdit('agent', secondNode, restored);
+        expect(result.provenance).toEqual({
+          version: 1,
+          blocks: [],
+          deletedBlocks: [],
+        });
+        expect(result.out.writeResult.nodes[0].data.content).toBe(restored);
+      }
+      // The same visible reference text with a different target is not a restoration.
+      const changedTarget = original
+        .replace('example.com', 'other.example')
+        .replace('diagram.png', 'other.png');
+      const changed = runContentEdit('agent', secondNode, changedTarget);
+      expect(changed.provenance?.blocks).toHaveLength(1);
+      expect(first.provenance?.blocks).toHaveLength(1);
+      expect(second.provenance?.blocks).toHaveLength(1);
+    },
+  );
+
+  it('restores a duplicate reference block using its original canonical identity', () => {
+    const original =
+      'Read [guide][g].\n\nSeparator.\n\nRead [guide][g].\n\n[g]: https://example.com';
+    const first = runContentEdit(
+      'agent',
+      note('n1', { content: original }),
+      'Read [guide][g].\n\nSeparator.\n\nAI rewrite.\n\n[g]: https://example.com',
+    );
+    expect(fingerprintMarkdownKeys(original)[2]).toMatch(/#2$/);
+
+    const restored = runContentEdit(
+      'agent',
+      first.out.writeResult.nodes[0],
+      original,
+    );
+
+    expect(first.provenance?.blocks[0]?.baselineKey).toBe(
+      fingerprintMarkdownKeys(original)[0],
+    );
+    expect(restored.provenance?.blocks).toEqual([]);
+  });
+
+  it('keeps legacy records without a baseline key compatible across rewrites', () => {
+    const original = '* alpha\n* beta';
+    const legacy: MarkdownProvenance = {
+      version: 1,
+      blocks: [
+        {
+          key: fingerprintMarkdownKeys('First AI rewrite.')[0],
+          baselineMarkdown: original,
+          at: '2026-09-14T00:00:00.000Z',
+        },
+      ],
+      deletedBlocks: [],
+    };
+    const second = runContentEdit(
+      'agent',
+      note('n1', { content: 'First AI rewrite.', provenance: legacy }),
+      'Second AI rewrite.',
+    );
+    const restored = runContentEdit(
+      'agent',
+      second.out.writeResult.nodes[0],
+      '- alpha\n- beta',
+    );
+
+    expect(second.provenance?.blocks[0]?.baselineMarkdown).toBe(original);
+    expect(second.provenance?.blocks[0]?.baselineKey).toBeUndefined();
+    expect(restored.provenance?.blocks).toEqual([]);
+    expect(legacy.blocks).toHaveLength(1);
+  });
+
+  it('does not invent a canonical baseline for a legacy reference fragment', () => {
+    const legacy: MarkdownProvenance = {
+      version: 1,
+      blocks: [
+        {
+          key: fingerprintMarkdownKeys('First AI rewrite.')[0],
+          kind: 'modified',
+          baselineMarkdown: 'Read [guide][g].',
+          at: '2026-09-14T00:00:00.000Z',
+        },
+      ],
+      deletedBlocks: [],
+    };
+    const first = runContentEdit(
+      'agent',
+      note('n1', { content: 'First AI rewrite.', provenance: legacy }),
+      'Read [guide][g].\n\n[g]: https://example.com',
+    );
+    const second = runContentEdit(
+      'agent',
+      first.out.writeResult.nodes[0],
+      'Another rewrite.',
+    );
+    const third = runContentEdit(
+      'agent',
+      second.out.writeResult.nodes[0],
+      'Read [guide][g].\n\n[g]: https://other.example',
+    );
+
+    // The missing historical target is unknown; a current definition is not evidence.
+    expect(third.provenance?.blocks).toHaveLength(1);
+    expect(third.provenance?.blocks[0]?.baselineKey).toBeUndefined();
+    expect(third.provenance?.blocks[0]?.baselineMarkdown).toBe(
+      'Read [guide][g].',
+    );
+  });
+
   it('clears a restored duplicate block despite its occurrence suffix', () => {
     const original = 'Repeated paragraph.\n\nSeparator.\n\nRepeated paragraph.';
     const first = runContentEdit(

@@ -159,16 +159,25 @@ export function stampAiEdit(
   for (const m of modifications) {
     if (keptKeySet.has(m.addedKey)) continue;
     const existing = existingBlocksByKey.get(m.removedKey);
+    // Capture the full-document fingerprint before the first AI edit loses
+    // reference definitions. Never substitute an intermediate AI key for a
+    // legacy record's missing original baseline key.
+    const baselineKey = existing
+      ? existing.baselineKey
+      : m.removedKey.split('#')[0];
     if (existing && existing.kind !== 'inserted') {
-      const baselineBlocks = fingerprintMarkdownBlocks(
-        existing.baselineMarkdown,
-      );
+      let comparisonKey = baselineKey;
+      if (comparisonKey === undefined) {
+        // Best-effort compatibility for old records; definitions omitted from
+        // a legacy baseline fragment cannot be recovered from the current doc.
+        const baselineBlocks = fingerprintMarkdownBlocks(
+          existing.baselineMarkdown,
+        );
+        if (baselineBlocks.length === 1) comparisonKey = baselineBlocks[0].key;
+      }
       // Occurrence suffixes identify duplicate positions, not block content.
       // Only a return to the original normalized block cancels a modification.
-      if (
-        baselineBlocks.length === 1 &&
-        baselineBlocks[0].key === m.addedKey.split('#')[0]
-      ) {
+      if (comparisonKey === m.addedKey.split('#')[0]) {
         continue;
       }
     }
@@ -177,6 +186,7 @@ export function stampAiEdit(
       key: m.addedKey,
       kind: existing?.kind ?? 'modified',
       baselineMarkdown: existing?.baselineMarkdown ?? baselineMarkdown,
+      ...(baselineKey !== undefined ? { baselineKey } : {}),
       at: existing?.at ?? at,
     });
   }

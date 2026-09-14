@@ -181,6 +181,7 @@ describe('stampAiEdit', () => {
         key: 'A2',
         kind: 'modified',
         baselineMarkdown: 'Human text',
+        baselineKey: 'H',
         at: T0,
       },
     ]);
@@ -309,7 +310,13 @@ describe('stampAiEdit', () => {
     // No tombstone — the remove was paired up.
     expect(prov.deletedBlocks).toEqual([]);
     expect(prov.blocks).toEqual([
-      { key: 'B-prime', kind: 'modified', baselineMarkdown: 'old B', at: T0 },
+      {
+        key: 'B-prime',
+        kind: 'modified',
+        baselineMarkdown: 'old B',
+        baselineKey: 'B',
+        at: T0,
+      },
     ]);
   });
 
@@ -326,7 +333,13 @@ describe('stampAiEdit', () => {
       at: T0,
     });
     expect(prov.blocks).toEqual([
-      { key: 'B-prime', kind: 'modified', baselineMarkdown: 'old B', at: T0 },
+      {
+        key: 'B-prime',
+        kind: 'modified',
+        baselineMarkdown: 'old B',
+        baselineKey: 'B',
+        at: T0,
+      },
     ]);
     expect(prov.deletedBlocks).toEqual([
       { key: 'C', baselineMarkdown: 'old C', anchorKey: 'A', at: T0 },
@@ -343,7 +356,13 @@ describe('stampAiEdit', () => {
       at: T0,
     });
     expect(prov.blocks).toEqual([
-      { key: 'B-prime', kind: 'modified', baselineMarkdown: 'old B', at: T0 },
+      {
+        key: 'B-prime',
+        kind: 'modified',
+        baselineMarkdown: 'old B',
+        baselineKey: 'B',
+        at: T0,
+      },
       { key: 'B-extra', kind: 'inserted', baselineMarkdown: '', at: T0 },
     ]);
     expect(prov.deletedBlocks).toEqual([]);

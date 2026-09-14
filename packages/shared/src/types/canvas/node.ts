@@ -175,6 +175,12 @@ export interface BlockProvenance {
    * preserve this original baseline. Empty string for `kind === 'inserted'`.
    */
   baselineMarkdown: string;
+  /**
+   * Original normalized block fingerprint, without a duplicate occurrence
+   * suffix, captured with the full document's reference definitions.
+   * Preserved across AI rewrites; absent for insertions and legacy records.
+   */
+  baselineKey?: string;
   /** ISO timestamp when the AI edit was stamped. */
   at: string;
 }
