@@ -10,7 +10,10 @@
  * so a broken extension substrate or a missing cascade fails here.
  */
 
+import { mountAgenetes } from '@agenetes/agenetes';
+import { defineDriver } from '@agenetes/runtime';
 import { afterEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 
 import {
   conversationEventLogStore,
@@ -75,7 +78,7 @@ describe('Agenetes conversation stores on SQLite', () => {
   for (const kind of ['events', 'turns'] as const) {
     describe(`${kind} replacement`, () => {
       async function setupReplacement() {
-        await openWithSpace();
+        const opened = await openWithSpace();
         const namespace = canvasAcpNamespace(CANVAS_ID);
         const substrate = conversationTables(namespace);
         if (!substrate) throw new Error('Expected SQLite conversation tables');
@@ -108,11 +111,17 @@ describe('Agenetes conversation stores on SQLite', () => {
             ? conversationEventLogStore.readRecords(namespace, THREAD_ID)
             : conversationTurnStore.list(namespace, THREAD_ID);
         replace([1, 2]);
-        return { namespace, database: substrate.database, replace, read };
+        return {
+          opened,
+          namespace,
+          database: substrate.database,
+          replace,
+          read,
+        };
       }
 
       it('restores the complete old log when a later replacement insert fails', async () => {
-        const { database, replace, read } = await setupReplacement();
+        const { opened, database, replace, read } = await setupReplacement();
         const before = read();
         // Fail the second insert after the delete and first insert have run.
         const sequence = kind === 'events' ? 'seq' : 'seq_start';
@@ -126,6 +135,8 @@ describe('Agenetes conversation stores on SQLite', () => {
         expect(database.isTransaction).toBe(false);
 
         database.exec('DROP TRIGGER reject_replacement');
+        await opened.reopen();
+        expect(read()).toEqual(before);
         replace([3, 4]);
         expect(read()).toHaveLength(2);
         expect(read()).not.toEqual(before);
@@ -159,6 +170,150 @@ describe('Agenetes conversation stores on SQLite', () => {
       });
     });
   }
+
+  it.each([
+    {
+      stage: 'target events',
+      table: 'events',
+      operation: 'INSERT',
+      row: 'NEW',
+      sequence: 'AND NEW.seq = 2',
+    },
+    {
+      stage: 'target turns',
+      table: 'turns',
+      operation: 'INSERT',
+      row: 'NEW',
+      sequence: 'AND NEW.ordinal = 2',
+    },
+    {
+      stage: 'target record',
+      table: 'threads',
+      operation: 'INSERT',
+      row: 'NEW',
+      sequence: '',
+    },
+    {
+      stage: 'source record',
+      table: 'threads',
+      operation: 'DELETE',
+      row: 'OLD',
+      sequence: '',
+    },
+    {
+      stage: 'source events',
+      table: 'events',
+      operation: 'DELETE',
+      row: 'OLD',
+      sequence: 'AND OLD.seq = 2',
+    },
+    {
+      stage: 'source turns',
+      table: 'turns',
+      operation: 'DELETE',
+      row: 'OLD',
+      sequence: 'AND OLD.ordinal = 2',
+    },
+  ])(
+    'restores a conversation after rehome fails at $stage, then permits retry',
+    async ({ stage, table, operation, row, sequence }) => {
+      const opened = await openWithSpace();
+      const targetId = 'canvas-target';
+      expect(
+        (
+          await opened.storage.structured
+            .spaces()
+            .create({ canvasId: targetId, title: 'Target' })
+        ).ok,
+      ).toBe(true);
+      const source = canvasAcpNamespace(CANVAS_ID);
+      const target = canvasAcpNamespace(targetId);
+      const record: ThreadRecord = {
+        driverSchemaVersion: 1,
+        spec: {
+          kind: 'test',
+          workloadType: 'Deployment',
+          threadId: THREAD_ID,
+          namespace: source,
+          spec: {},
+        },
+        state: { driverState: {} },
+      };
+      conversationThreadStore.upsert(source, THREAD_ID, record);
+      for (let seq = 1; seq <= 2; seq++) {
+        conversationEventLogStore.appendTurnStart(source, THREAD_ID, null);
+        conversationTurnStore.append(source, THREAD_ID, {
+          seqStart: seq,
+          seqEnd: seq,
+          turn: { request: null, transcript: [] },
+        });
+      }
+      const snapshot = (namespace: typeof source, threadId = THREAD_ID) => ({
+        record: conversationThreadStore.get(namespace, threadId),
+        events: conversationEventLogStore.readRecords(namespace, threadId),
+        turns: conversationTurnStore.list(namespace, threadId),
+      });
+      const before = snapshot(source);
+      conversationEventLogStore.replace(
+        target,
+        'unrelated-thread',
+        before.events,
+      );
+      conversationTurnStore.replace(target, 'unrelated-thread', before.turns);
+      const unrelated = snapshot(target, 'unrelated-thread');
+      const empty = { record: undefined, events: [], turns: [] };
+      const inst = mountAgenetes({
+        drivers: {
+          test: defineDriver({
+            schemaVersion: 1,
+            workloadTypes: ['Deployment'],
+            specSchema: z.object({}),
+            stateSchema: z.object({}),
+            initialState: () => ({}),
+            create: () => {
+              throw new Error('Rehome must not spawn a driver');
+            },
+          }),
+        },
+        threadStore: conversationThreadStore,
+        eventLogStore: conversationEventLogStore,
+        turnStore: conversationTurnStore,
+      });
+      const substrate = conversationTables(
+        stage.startsWith('target') ? target : source,
+      );
+      if (!substrate) throw new Error('Expected SQLite conversation tables');
+      // Fail a real SQLite write at each stage, including after source deletion
+      // has begun. The rehome coordinator and every storage port remain real.
+      substrate.database.exec(`
+      CREATE TRIGGER reject_rehome BEFORE ${operation} ON agenetes_${table}
+      WHEN ${row}.extension_id = ${substrate.extensionId}
+        AND ${row}.thread_id = 'thread-1' ${sequence}
+      BEGIN SELECT RAISE(ABORT, 'rehome write failed'); END;
+    `);
+      const targetSpec = { ...record.spec, namespace: target };
+      expect(() =>
+        inst.rehome({ namespace: source, threadId: THREAD_ID }, targetSpec),
+      ).toThrow('rehome write failed');
+      expect(snapshot(source)).toEqual(before);
+      expect(snapshot(target)).toEqual(empty);
+      expect(snapshot(target, 'unrelated-thread')).toEqual(unrelated);
+      expect(substrate.database.isTransaction).toBe(false);
+      substrate.database.exec('DROP TRIGGER reject_rehome');
+
+      await opened.reopen();
+      expect(snapshot(source)).toEqual(before);
+      expect(snapshot(target)).toEqual(empty);
+      inst.rehome({ namespace: source, threadId: THREAD_ID }, targetSpec);
+      await opened.reopen();
+      expect(snapshot(source)).toEqual(empty);
+      expect(snapshot(target)).toEqual({
+        ...before,
+        record: { ...record, spec: targetSpec },
+      });
+      expect(snapshot(target, 'unrelated-thread')).toEqual(unrelated);
+    },
+  );
 
   it('keeps a Space with no directory out of the file stores', async () => {
     await openWithSpace();

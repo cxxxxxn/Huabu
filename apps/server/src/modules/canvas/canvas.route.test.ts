@@ -712,56 +712,68 @@ function useTablesProfile(): () => void {
 }
 
 describe('Disk-only capability refusals', () => {
-  it('rejects an unsupported import before waiting for multipart file data', async () => {
-    const restore = useTablesProfile();
-    const app = await buildApp();
-    let upload: ClientRequest | undefined;
-    try {
-      const address = await app.listen({ port: 0, host: '127.0.0.1' });
-      const body = await new Promise<string>((resolve, reject) => {
-        upload = httpRequest(
-          `${address}/canvas/import`,
-          {
-            method: 'POST',
-            headers: {
-              'content-type': 'multipart/form-data; boundary=unfinished-upload',
-              'transfer-encoding': 'chunked',
+  it.each(['headers only', 'partial file'] as const)(
+    'rejects an unsupported import with %s without waiting for the upload to finish',
+    async (uploadState) => {
+      const restore = useTablesProfile();
+      const app = await buildApp();
+      let upload: ClientRequest | undefined;
+      try {
+        const address = await app.listen({ port: 0, host: '127.0.0.1' });
+        const body = await new Promise<string>((resolve, reject) => {
+          upload = httpRequest(
+            `${address}/canvas/import`,
+            {
+              method: 'POST',
+              headers: {
+                'content-type':
+                  'multipart/form-data; boundary=unfinished-upload',
+                'transfer-encoding': 'chunked',
+              },
             },
-          },
-          (response) => {
-            let body = '';
-            response.setEncoding('utf8');
-            response.on('data', (chunk: string) => {
-              body += chunk;
-            });
-            response.on('error', reject);
-            response.on('end', () => {
-              if (response.statusCode !== 400) {
-                reject(new Error(`Unexpected status ${response.statusCode}`));
-              } else resolve(body);
-            });
-          },
-        );
-        upload.on('error', reject);
-        upload.setTimeout(2_000, () => {
-          upload?.destroy(
-            new Error('Import waited for unsupported upload data'),
+            (response) => {
+              let body = '';
+              response.setEncoding('utf8');
+              response.on('data', (chunk: string) => {
+                body += chunk;
+              });
+              response.on('error', reject);
+              response.on('end', () => {
+                if (response.statusCode !== 400) {
+                  reject(new Error(`Unexpected status ${response.statusCode}`));
+                } else resolve(body);
+              });
+            },
           );
+          upload.on('error', reject);
+          upload.setTimeout(2_000, () => {
+            upload?.destroy(
+              new Error('Import waited for unsupported upload data'),
+            );
+          });
+          // Leave the request open: neither a client that has not sent a file
+          // nor one stalled partway through a file should delay this refusal.
+          upload.flushHeaders();
+          if (uploadState === 'partial file') {
+            upload.write(
+              '--unfinished-upload\r\n' +
+                'Content-Disposition: form-data; name="file"; filename="space.zip"\r\n' +
+                'Content-Type: application/zip\r\n\r\n',
+            );
+            upload.write(Buffer.alloc(64 * 1024));
+          }
         });
-        // Send only HTTP headers. An unsupported profile already has enough
-        // information to refuse, even if the client has not sent a file yet.
-        upload.flushHeaders();
-      });
-      expect(JSON.parse(body)).toEqual({
-        code: 'STORAGE_CAPABILITY_UNAVAILABLE',
-        message: unavailableCapabilityMessage('space-bundle-import'),
-      });
-    } finally {
-      upload?.destroy();
-      await app.close();
-      restore();
-    }
-  });
+        expect(JSON.parse(body)).toEqual({
+          code: 'STORAGE_CAPABILITY_UNAVAILABLE',
+          message: unavailableCapabilityMessage('space-bundle-import'),
+        });
+      } finally {
+        upload?.destroy();
+        await app.close();
+        restore();
+      }
+    },
+  );
 
   it('preflights Disk export without sending an archive, then still downloads it', async () => {
     createCanvas('c1', 'Disk Space');

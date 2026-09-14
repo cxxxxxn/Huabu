@@ -35,6 +35,7 @@ it('keeps SQLite scope and World identity unchanged when a lease refuses activat
   ).toBe(true);
   const target = await createNamedWorkspace('Target');
   const lease = acquireWorkspaceOperationLease();
+  const secondLease = acquireWorkspaceOperationLease();
 
   try {
     expect(lease.workspaceKey).toBe(`workspace:${original?.workspaceId}`);
@@ -53,12 +54,35 @@ it('keeps SQLite scope and World identity unchanged when a lease refuses activat
         (space) => space.canvasId,
       ),
     ).toEqual(['original-space']);
+    lease.release();
+    lease.release();
+    // Releasing one holder twice must not release the other holder's lease.
+    await expect(activateWorkspace(target)).rejects.toThrow(
+      WorkspaceOperationInProgressError,
+    );
+    expect(
+      (
+        await mounted.storage.structured.spaces().create({
+          canvasId: 'after-refusal',
+          title: 'Written after refused switch',
+        })
+      ).ok,
+    ).toBe(true);
   } finally {
     lease.release();
+    secondLease.release();
   }
 
   await activateWorkspace(target);
   expect(getWorkspaceHandle()).toEqual(target);
   expect(await mounted.storage.structured.spaces().list()).toEqual([]);
   expect(getWorldCanvasId()).not.toBe(originalWorld);
+  if (!original) throw new Error('Expected original Workspace');
+  await activateWorkspace(original);
+  expect(getWorldCanvasId()).toBe(originalWorld);
+  expect(
+    (await mounted.storage.structured.spaces().list())
+      .map((space) => space.canvasId)
+      .sort(),
+  ).toEqual(['after-refusal', 'original-space']);
 });
