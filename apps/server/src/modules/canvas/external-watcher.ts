@@ -115,8 +115,8 @@ function nodesPathFor(canvasId: string): string | null {
   // documents that arrived without going through the application is the
   // declared `external-note-discovery` capability, and this is where its
   // absence becomes "there is nothing to watch".
-  const directory = space(canvasId).diskTree?.directory();
-  return directory === undefined ? null : path.join(directory, 'nodes');
+  const directory = space(canvasId).diskTree?.existingDirectory() ?? null;
+  return directory === null ? null : path.join(directory, 'nodes');
 }
 
 function noteIdsFromCanvas(canvas: CanvasFile | null): Set<string> {

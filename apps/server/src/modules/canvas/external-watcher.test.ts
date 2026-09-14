@@ -77,8 +77,8 @@ const spaceHandle = vi.hoisted(() => ({
  *
  * `diskTree` is resolved per call from the same directory index the real one
  * uses, so the "renamed outside the server" case still moves the watched path
- * — and a Space with no directory is `null`, the way a non-Disk backend
- * reports it.
+ * — while an unknown Disk id still has a tree with a fallback directory.
+ * Only the existence-aware locator reports that the Space is absent.
  */
 const spaceFacade = vi.hoisted(() => (canvasId: string) => ({
   ...spaceHandle,
@@ -86,9 +86,11 @@ const spaceFacade = vi.hoisted(() => (canvasId: string) => ({
     const entry = canvasDirs
       .list()
       .find((candidate) => candidate.id === canvasId);
-    return entry
-      ? { canvasId, directory: () => `/ws/${entry.filename}` }
-      : null;
+    return {
+      canvasId,
+      directory: () => `/ws/${entry?.filename ?? canvasId}`,
+      existingDirectory: () => (entry ? `/ws/${entry.filename}` : null),
+    };
   })(),
 }));
 

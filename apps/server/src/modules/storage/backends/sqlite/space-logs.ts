@@ -103,30 +103,21 @@ class SqliteSpaceLogCoordinator {
   async readEvents(limit?: number): Promise<CanvasEvent[]> {
     this.#workspace();
     const database = this.#context.database();
-    if (limit !== undefined && !(limit > 0)) return [];
-    if (limit === undefined || !Number.isFinite(limit)) {
-      return decodeEvents(
-        database
-          .prepare(
-            `SELECT event_json
-             FROM events
-             WHERE canvas_id = ?
-             ORDER BY event_id ASC`,
-          )
-          .all(this.#canvasId),
-      );
-    }
-    const rows = database
-      .prepare(
-        `SELECT event_json
+    const records = decodeEvents(
+      database
+        .prepare(
+          `SELECT event_json
          FROM events
          WHERE canvas_id = ?
-         ORDER BY event_id DESC
-         LIMIT ?`,
-      )
-      .all(this.#canvasId, Math.ceil(limit))
-      .reverse();
-    return decodeEvents(rows);
+         ORDER BY event_id ASC`,
+        )
+        .all(this.#canvasId),
+    );
+    // Match Disk's strict reads: an older malformed row remains an error
+    // even when the caller requests only the tail (or no entries).
+    if (limit === undefined) return records;
+    if (!(limit > 0)) return [];
+    return records.slice(-Math.ceil(limit));
   }
 
   async appendEvents(events: readonly NewCanvasEvent[]): Promise<void> {

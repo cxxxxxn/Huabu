@@ -33,6 +33,44 @@ import type { CanvasNode } from '@huabu/shared/canvas-engine';
 
 const cleanups: Array<() => Promise<void> | void> = [];
 
+it.each([undefined, 1, 0, -1, NaN, Infinity])(
+  'validates older persisted events before applying limit %s',
+  async (limit) => {
+    const { store, filename, world } = await trackedOpenStore(
+      'huabu-event-corruption-',
+    );
+    const records = [
+      '{}',
+      JSON.stringify({
+        ts: 2,
+        payload: {
+          action: 'node_selected',
+          node: { id: 'n1', type: 'note', label: 'Note' },
+        },
+      }),
+    ];
+    withTestDatabase(filename, (database) => {
+      const insert = database.prepare(
+        'INSERT INTO events (canvas_id, event_json) VALUES (?, ?)',
+      );
+      for (const record of records) insert.run(world.canvasId, record);
+    });
+    await expect(
+      store.space(world.canvasId).events.read(limit),
+    ).rejects.toBeInstanceOf(SyntaxError);
+    expect(
+      withTestDatabase(filename, (database) =>
+        database
+          .prepare(
+            'SELECT event_json FROM events WHERE canvas_id = ? ORDER BY event_id',
+          )
+          .all(world.canvasId)
+          .map((row) => row['event_json']),
+      ),
+    ).toEqual(records);
+  },
+);
+
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) {
     await cleanup();
