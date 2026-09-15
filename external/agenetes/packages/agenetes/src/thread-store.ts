@@ -9,7 +9,7 @@ import {
 } from '@agenetes/protocol';
 import { AgenetesError } from '@agenetes/runtime';
 
-import { copyAnnotations } from './annotations.js';
+import { copyHostMetadata } from './host-metadata.js';
 import { atomicWriteJson, sanitizeId } from './io.js';
 
 export const THREAD_STORE_SCHEMA_VERSION = 'agenetes-v2';
@@ -20,7 +20,7 @@ export interface ThreadRecord {
   readonly spec: WorkloadSpec;
   readonly state: AgentStateSnapshot;
   /** Host-owned JSON values, independent of wholesale driver snapshots. */
-  readonly annotations?: Record<string, unknown>;
+  readonly hostMetadata?: Record<string, unknown>;
 }
 
 interface ThreadStoreFile {
@@ -124,10 +124,10 @@ export class FileThreadStore implements ThreadStore {
         },
       },
       state: parsedState.data,
-      ...(value.annotations !== undefined
+      ...(value.hostMetadata !== undefined
         ? {
-            annotations: copyAnnotations(
-              value.annotations,
+            hostMetadata: copyHostMetadata(
+              value.hostMetadata,
               'invalid_persisted_record',
             ),
           }

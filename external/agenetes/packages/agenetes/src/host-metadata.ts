@@ -1,14 +1,14 @@
 import { AgenetesError } from '@agenetes/runtime';
 
-/** Validate and copy host annotations without silently losing non-JSON values. */
-export function copyAnnotations(
+/** Validate and copy host metadata without silently losing non-JSON values. */
+export function copyHostMetadata(
   value: unknown,
-  errorCode: 'invalid_annotations' | 'invalid_persisted_record',
+  errorCode: 'invalid_host_metadata' | 'invalid_persisted_record',
 ): Record<string, unknown> {
   const invalid = (): never => {
     throw new AgenetesError(
       errorCode,
-      'annotations must be an object of JSON values',
+      'hostMetadata must be an object of JSON values',
     );
   };
   const ancestors = new Set<object>();

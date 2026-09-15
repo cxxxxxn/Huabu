@@ -189,27 +189,27 @@ describe('notification surface (M5.5/A3.0, I9.7)', () => {
     }
   });
 
-  it('preserves annotations before and after wholesale state reports and live reuse', async () => {
+  it('preserves host metadata before and after wholesale state reports and live reuse', async () => {
     const inst = mount((spec) => new ReportingHandle(spec));
     const spec = deployment('thr_1');
     const handle = inst.create(spec) as unknown as ReportingHandle;
     const collected = take(inst.notifications(spec.threadId), 2);
     const first = { driverState: { sessionId: 'first' }, metadata: meta };
     const second = { driverState: { sessionId: 'second' } };
-    const annotations = { label: 'host label', details: { owner: 'host' } };
-    inst.updateAnnotations(spec.namespace, spec.threadId, annotations);
+    const hostMetadata = { label: 'host label', details: { owner: 'host' } };
+    inst.updateHostMetadata(spec.namespace, spec.threadId, hostMetadata);
     handle.emit(first);
-    expect(inst.record(spec.namespace, spec.threadId)?.annotations).toEqual(
-      annotations,
+    expect(inst.record(spec.namespace, spec.threadId)?.hostMetadata).toEqual(
+      hostMetadata,
     );
     expect(
-      inst.updateAnnotations(spec.namespace, spec.threadId, {
+      inst.updateHostMetadata(spec.namespace, spec.threadId, {
         label: 'updated',
       }).state,
     ).toEqual(first);
     handle.emit(second);
     expect(inst.record(spec.namespace, spec.threadId)).toMatchObject({
-      annotations: { ...annotations, label: 'updated' },
+      hostMetadata: { ...hostMetadata, label: 'updated' },
       state: second,
     });
     expect(
@@ -220,14 +220,14 @@ describe('notification surface (M5.5/A3.0, I9.7)', () => {
     const last = { driverState: {}, metadata: { ...meta, metaUpdatedAt: 2 } };
     handle.emit(last);
     expect(await collected).toEqual([meta, last.metadata]);
-    expect(inst.record(spec.namespace, spec.threadId)?.annotations).toEqual({
-      ...annotations,
+    expect(inst.record(spec.namespace, spec.threadId)?.hostMetadata).toEqual({
+      ...hostMetadata,
       label: 'updated',
     });
     inst.close(spec.threadId);
     inst.create(spec);
-    expect(inst.record(spec.namespace, spec.threadId)?.annotations).toEqual({
-      ...annotations,
+    expect(inst.record(spec.namespace, spec.threadId)?.hostMetadata).toEqual({
+      ...hostMetadata,
       label: 'updated',
     });
     inst.close(spec.threadId);
@@ -251,12 +251,12 @@ describe('notification surface (M5.5/A3.0, I9.7)', () => {
     const spec = deployment('thr_1');
     inst.create(spec);
     expect(inst.record(spec.namespace, spec.threadId)?.state).toEqual(snapshot);
-    inst.updateAnnotations(spec.namespace, spec.threadId, { label: 'host' });
+    inst.updateHostMetadata(spec.namespace, spec.threadId, { label: 'host' });
     inst.close(spec.threadId);
     inst.create(spec);
     expect(inst.record(spec.namespace, spec.threadId)).toMatchObject({
       state: snapshot,
-      annotations: { label: 'host' },
+      hostMetadata: { label: 'host' },
     });
     inst.close(spec.threadId);
   });

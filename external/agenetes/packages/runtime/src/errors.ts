@@ -7,7 +7,7 @@ export type AgenetesErrorCode =
   | 'invalid_driver_definition'
   | 'invalid_persisted_record'
   | 'thread_not_found'
-  | 'invalid_annotations'
+  | 'invalid_host_metadata'
   | 'rehome_conflict'
   | 'rehome_unknown_outcome';
 

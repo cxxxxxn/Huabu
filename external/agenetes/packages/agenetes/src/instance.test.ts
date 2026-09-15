@@ -87,12 +87,12 @@ function mount() {
 }
 
 describe('mounted Agenetes instance (M5 INST skeleton)', () => {
-  it('updates annotations synchronously without spawning or changing spec/state', () => {
+  it('updates host metadata synchronously without spawning or changing spec/state', () => {
     const threadStore = new InMemoryThreadStore();
     const driver = stubDriver();
     const create = vi.spyOn(driver, 'create');
     const inst = mountAgenetes({ drivers: { external: driver }, threadStore });
-    const namespace = ns('annotations');
+    const namespace = ns('host-metadata');
     const record = {
       driverSchemaVersion: 1,
       spec: {
@@ -103,7 +103,7 @@ describe('mounted Agenetes instance (M5 INST skeleton)', () => {
         spec: { note: 'original' },
       },
       state: { driverState: { sessionId: 'session' } },
-      annotations: { untouched: ['keep'], details: { old: true } },
+      hostMetadata: { untouched: ['keep'], details: { old: true } },
     };
     threadStore.upsert(namespace, 'thread', record);
     const patch = {
@@ -111,42 +111,42 @@ describe('mounted Agenetes instance (M5 INST skeleton)', () => {
       details: { replacement: true },
       nullable: null,
     };
-    const updated = inst.updateAnnotations(namespace, 'thread', patch);
+    const updated = inst.updateHostMetadata(namespace, 'thread', patch);
     expect(updated).not.toBeInstanceOf(Promise);
     expect(updated.spec).toBe(record.spec);
     expect(updated.state).toBe(record.state);
-    expect(updated.annotations).toEqual({ untouched: ['keep'], ...patch });
-    expect(record.annotations).toEqual({
+    expect(updated.hostMetadata).toEqual({ untouched: ['keep'], ...patch });
+    expect(record.hostMetadata).toEqual({
       untouched: ['keep'],
       details: { old: true },
     });
     patch.details.replacement = false;
-    (updated.annotations!.details as { replacement: boolean }).replacement =
+    (updated.hostMetadata!.details as { replacement: boolean }).replacement =
       false;
-    expect(inst.record(namespace, 'thread')?.annotations?.details).toEqual({
+    expect(inst.record(namespace, 'thread')?.hostMetadata?.details).toEqual({
       replacement: true,
     });
-    expect(inst.records(namespace)[0]?.annotations).toEqual({
+    expect(inst.records(namespace)[0]?.hostMetadata).toEqual({
       untouched: ['keep'],
       label: 'host label',
       details: { replacement: true },
       nullable: null,
     });
-    expect(inst.updateAnnotations(namespace, 'thread', {}).annotations).toEqual(
-      inst.record(namespace, 'thread')?.annotations,
-    );
+    expect(
+      inst.updateHostMetadata(namespace, 'thread', {}).hostMetadata,
+    ).toEqual(inst.record(namespace, 'thread')?.hostMetadata);
     expect(create).not.toHaveBeenCalled();
     expect(inst.get('thread')).toBeUndefined();
   });
 
   it('throws a typed missing-thread error without creating a record or handle', () => {
     const inst = mount();
-    const namespace = ns('annotations');
+    const namespace = ns('host-metadata');
     for (const threadId of ['missing', '']) {
       expect(() =>
-        inst.updateAnnotations(namespace, threadId, { label: 'host' }),
+        inst.updateHostMetadata(namespace, threadId, { label: 'host' }),
       ).toThrow(AgenetesError);
-      expect(() => inst.updateAnnotations(namespace, threadId, {})).toThrow(
+      expect(() => inst.updateHostMetadata(namespace, threadId, {})).toThrow(
         expect.objectContaining({
           code: 'thread_not_found',
           details: { namespace: namespace.name, threadId },
@@ -159,7 +159,7 @@ describe('mounted Agenetes instance (M5 INST skeleton)', () => {
 
   it('rejects non-JSON patches without changing the durable record', () => {
     const inst = mount();
-    const namespace = ns('annotations');
+    const namespace = ns('host-metadata');
     inst.create({
       threadId: 'thread',
       kind: 'external',
@@ -167,7 +167,7 @@ describe('mounted Agenetes instance (M5 INST skeleton)', () => {
       namespace,
       spec: {},
     });
-    inst.updateAnnotations(namespace, 'thread', { keep: true });
+    inst.updateHostMetadata(namespace, 'thread', { keep: true });
     const before = inst.record(namespace, 'thread');
     const cycle: Record<string, unknown> = {};
     cycle.self = cycle;
@@ -185,22 +185,22 @@ describe('mounted Agenetes instance (M5 INST skeleton)', () => {
       cycle,
     ]) {
       expect(() =>
-        inst.updateAnnotations(
+        inst.updateHostMetadata(
           namespace,
           'thread',
           patch as Record<string, unknown>,
         ),
-      ).toThrow(expect.objectContaining({ code: 'invalid_annotations' }));
+      ).toThrow(expect.objectContaining({ code: 'invalid_host_metadata' }));
       expect(inst.record(namespace, 'thread')).toEqual(before);
     }
     inst.close('thread');
   });
 
   it.each(['Deployment', 'Job'] as const)(
-    'preserves annotations through file-backed restart, %s realization, and rehome',
+    'preserves host metadata through file-backed restart, %s realization, and rehome',
     (workloadType) => {
       const scratch = mkdtempSync(
-        path.join(process.cwd(), '.agenetes-annotations-'),
+        path.join(process.cwd(), '.agenetes-host-metadata-'),
       );
       try {
         const namespace = ns('source', path.join(scratch, 'source'));
@@ -223,28 +223,28 @@ describe('mounted Agenetes instance (M5 INST skeleton)', () => {
           drivers: { external: stubDriver() },
           threadStore,
         });
-        const annotations = {
+        const hostMetadata = {
           label: 'host label',
           details: { origin: 'host' },
         };
-        first.updateAnnotations(namespace, spec.threadId, annotations);
+        first.updateHostMetadata(namespace, spec.threadId, hostMetadata);
         expect(first.get(spec.threadId)).toBeUndefined();
 
         const restarted = mountAgenetes({
           drivers: { external: stubDriver() },
           threadStore: new FileThreadStore(),
         });
-        expect(restarted.records(namespace)[0]?.annotations).toEqual(
-          annotations,
+        expect(restarted.records(namespace)[0]?.hostMetadata).toEqual(
+          hostMetadata,
         );
         const recovered = restarted.create(spec) as unknown as StubHandle;
         expect(recovered.createContext.recoveryInput?.state).toEqual(state);
         expect(recovered.createContext.recoveryInput).not.toHaveProperty(
-          'annotations',
+          'hostMetadata',
         );
-        expect(restarted.record(namespace, spec.threadId)?.annotations).toEqual(
-          annotations,
-        );
+        expect(
+          restarted.record(namespace, spec.threadId)?.hostMetadata,
+        ).toEqual(hostMetadata);
         restarted.close(spec.threadId);
         const targetSpec = {
           ...spec,
@@ -264,10 +264,10 @@ describe('mounted Agenetes instance (M5 INST skeleton)', () => {
           driverSchemaVersion: 1,
           spec: targetSpec,
           state,
-          annotations,
+          hostMetadata,
         });
         expect(() =>
-          afterMove.updateAnnotations(namespace, spec.threadId, {}),
+          afterMove.updateHostMetadata(namespace, spec.threadId, {}),
         ).toThrow(expect.objectContaining({ code: 'thread_not_found' }));
         afterMove.close(spec.threadId);
       } finally {
@@ -276,13 +276,13 @@ describe('mounted Agenetes instance (M5 INST skeleton)', () => {
     },
   );
 
-  it('fork deep-copies host annotations while resetting driver state', () => {
+  it('fork deep-copies host metadata while resetting driver state', () => {
     const threadStore = new InMemoryThreadStore();
     const inst = mountAgenetes({
       drivers: { external: stubDriver() },
       threadStore,
     });
-    const namespace = ns('annotations');
+    const namespace = ns('host-metadata');
     const spec: StubSpec = {
       threadId: 'source',
       kind: 'external',
@@ -291,29 +291,31 @@ describe('mounted Agenetes instance (M5 INST skeleton)', () => {
       spec: {},
     };
     inst.create(spec);
-    const annotations = {
+    const hostMetadata = {
       label: 'source label',
       details: { tags: ['source'] },
     };
-    inst.updateAnnotations(namespace, spec.threadId, annotations);
+    inst.updateHostMetadata(namespace, spec.threadId, hostMetadata);
     inst.fork(
       { namespace, threadId: spec.threadId },
       { ...spec, threadId: 'target' },
     );
-    expect(inst.record(namespace, 'target')?.annotations).toEqual(annotations);
-    expect(threadStore.get(namespace, 'target')?.annotations?.details).not.toBe(
-      threadStore.get(namespace, 'source')?.annotations?.details,
+    expect(inst.record(namespace, 'target')?.hostMetadata).toEqual(
+      hostMetadata,
     );
-    inst.updateAnnotations(namespace, 'target', {
+    expect(
+      threadStore.get(namespace, 'target')?.hostMetadata?.details,
+    ).not.toBe(threadStore.get(namespace, 'source')?.hostMetadata?.details);
+    inst.updateHostMetadata(namespace, 'target', {
       label: 'target label',
       details: { tags: ['target'] },
     });
-    inst.updateAnnotations(namespace, 'source', { other: true });
-    expect(inst.record(namespace, 'source')?.annotations).toEqual({
-      ...annotations,
+    inst.updateHostMetadata(namespace, 'source', { other: true });
+    expect(inst.record(namespace, 'source')?.hostMetadata).toEqual({
+      ...hostMetadata,
       other: true,
     });
-    expect(inst.record(namespace, 'target')?.annotations).toEqual({
+    expect(inst.record(namespace, 'target')?.hostMetadata).toEqual({
       label: 'target label',
       details: { tags: ['target'] },
     });

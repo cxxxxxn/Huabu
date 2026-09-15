@@ -20,7 +20,6 @@ import {
 } from '@agenetes/protocol';
 import { AgenetesError } from '@agenetes/runtime';
 
-import { copyAnnotations } from './annotations.js';
 import {
   EventLog,
   InMemoryEventLogStore,
@@ -28,6 +27,7 @@ import {
   type TurnStartLogEntry,
 } from './event-log.js';
 import { createTranscriptFolder } from './fold.js';
+import { copyHostMetadata } from './host-metadata.js';
 import { materializeHistory } from './materialize-history.js';
 import { ThreadNotificationBus } from './notifications.js';
 import {
@@ -76,7 +76,7 @@ export interface Agenetes {
    * can read it independent of handle liveness (I9.4).
    */
   create(spec: WorkloadSpec): AgentHandle;
-  /** Fork source turns with fresh driver state and deep-copied annotations. */
+  /** Fork source turns with fresh driver state and deep-copied host metadata. */
   fork(source: ThreadIdentity, targetSpec: WorkloadSpec): AgentHandle;
   /**
    * The destructive counterpart to {@link Agenetes.fork}: relocate a
@@ -128,12 +128,12 @@ export interface Agenetes {
   /** Enumerate a namespace's persisted thread records (I9.4). */
   records(namespace: Namespace): ThreadRecord[];
   /**
-   * Synchronously shallow-merge host annotation keys into an existing record,
+   * Synchronously shallow-merge host metadata keys into an existing record,
    * without spawning or changing spec/state. Values must be JSON-compatible;
    * null is a stored value, not deletion. Throws `thread_not_found` when absent
-   * or `invalid_annotations` for a non-JSON patch. Does not emit driver metadata.
+   * or `invalid_host_metadata` for a non-JSON patch. Does not emit driver metadata.
    */
-  updateAnnotations(
+  updateHostMetadata(
     namespace: Namespace,
     threadId: string,
     patch: Record<string, unknown>,
@@ -398,10 +398,10 @@ export function createAgenetesInstance(
         ...record.state,
         driverState: driver.validateState(record.state.driverState),
       },
-      ...(record.annotations !== undefined
+      ...(record.hostMetadata !== undefined
         ? {
-            annotations: copyAnnotations(
-              record.annotations,
+            hostMetadata: copyHostMetadata(
+              record.hostMetadata,
               'invalid_persisted_record',
             ),
           }
@@ -541,7 +541,7 @@ export function createAgenetesInstance(
     driver: MountedAgentDriver,
     context: AgentCreateContext,
     initialState: AgentStateSnapshot,
-    annotations?: Record<string, unknown>,
+    hostMetadata?: Record<string, unknown>,
   ): AgentHandle => {
     let handle: AgentHandle;
     let needsUpReport = false;
@@ -568,7 +568,7 @@ export function createAgenetesInstance(
     if (!isTransientJob) {
       const latest = threadStore.get(targetSpec.namespace, targetSpec.threadId);
       threadStore.upsert(targetSpec.namespace, targetSpec.threadId, {
-        ...(annotations !== undefined ? { annotations } : {}),
+        ...(hostMetadata !== undefined ? { hostMetadata } : {}),
         ...latest,
         driverSchemaVersion: driver.schemaVersion,
         spec: targetSpec,
@@ -669,9 +669,9 @@ export function createAgenetesInstance(
           },
         },
         { driverState: target.driver.initialState() },
-        sourceRecord.annotations !== undefined
-          ? copyAnnotations(
-              sourceRecord.annotations,
+        sourceRecord.hostMetadata !== undefined
+          ? copyHostMetadata(
+              sourceRecord.hostMetadata,
               'invalid_persisted_record',
             )
           : undefined,
@@ -851,28 +851,28 @@ export function createAgenetesInstance(
     records(namespace: Namespace): ThreadRecord[] {
       return threadStore.list(namespace).map(validateRecord);
     },
-    updateAnnotations(namespace, threadId, patch): ThreadRecord {
+    updateHostMetadata(namespace, threadId, patch): ThreadRecord {
       const record = threadStore.get(namespace, threadId);
       if (!record) {
         throw new AgenetesError(
           'thread_not_found',
-          `cannot annotate missing thread '${namespace.name}/${threadId}'`,
+          `cannot update host metadata for missing thread '${namespace.name}/${threadId}'`,
           { namespace: namespace.name, threadId },
         );
       }
-      const annotations = copyAnnotations(
+      const hostMetadata = copyHostMetadata(
         {
-          ...record.annotations,
-          ...copyAnnotations(patch, 'invalid_annotations'),
+          ...record.hostMetadata,
+          ...copyHostMetadata(patch, 'invalid_host_metadata'),
         },
-        'invalid_annotations',
+        'invalid_host_metadata',
       );
-      const updated = { ...record, annotations };
+      const updated = { ...record, hostMetadata };
       // Both writers read/merge/write synchronously; no async mutex is needed.
       threadStore.upsert(namespace, threadId, updated);
       return {
         ...updated,
-        annotations: copyAnnotations(annotations, 'invalid_annotations'),
+        hostMetadata: copyHostMetadata(hostMetadata, 'invalid_host_metadata'),
       };
     },
     notifications(

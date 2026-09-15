@@ -89,7 +89,7 @@ describe('FileThreadStore agenetes-v2 durable backing', () => {
       expect(store.get(namespace, threadId)).toBeUndefined();
       const saved = {
         ...record(threadId, 'session', meta),
-        annotations: JSON.parse(
+        hostMetadata: JSON.parse(
           '{"constructor":{"title":"saved"},"__proto__":{"safe":true}}',
         ),
       };
@@ -103,11 +103,11 @@ describe('FileThreadStore agenetes-v2 durable backing', () => {
     },
   );
 
-  it('preserves optional annotations across writes, listing, and restart', () => {
+  it('preserves optional host metadata across writes, listing, and restart', () => {
     const namespace = ns('canvas-1');
-    const annotated: ThreadRecord = {
+    const withHostMetadata: ThreadRecord = {
       ...record('t1', 'session', meta),
-      annotations: {
+      hostMetadata: {
         label: 'Host label',
         details: { source: 'host', version: 2 },
         values: [null, false, 0, '', { nested: ['value'] }],
@@ -115,37 +115,39 @@ describe('FileThreadStore agenetes-v2 durable backing', () => {
       },
     };
     const store = new FileThreadStore();
-    store.upsert(namespace, 't1', annotated);
+    store.upsert(namespace, 't1', withHostMetadata);
     store.upsert(namespace, 'legacy', record('legacy'));
-    store.upsert(namespace, 'empty', { ...record('empty'), annotations: {} });
+    store.upsert(namespace, 'empty', { ...record('empty'), hostMetadata: {} });
 
     const restarted = new FileThreadStore();
-    expect(restarted.get(namespace, 't1')).toEqual(annotated);
+    expect(restarted.get(namespace, 't1')).toEqual(withHostMetadata);
     expect(restarted.list(namespace)).toEqual([
-      annotated,
+      withHostMetadata,
       record('legacy'),
-      { ...record('empty'), annotations: {} },
+      { ...record('empty'), hostMetadata: {} },
     ]);
     expect(restarted.get(namespace, 'legacy')).not.toHaveProperty(
-      'annotations',
+      'hostMetadata',
     );
     restarted.delete(namespace, 'empty');
-    expect(new FileThreadStore().get(namespace, 't1')).toEqual(annotated);
+    expect(new FileThreadStore().get(namespace, 't1')).toEqual(
+      withHostMetadata,
+    );
   });
 
   it.each([null, [], 'label', 42, true])(
-    'rejects malformed persisted annotations: %j',
-    (annotations) => {
+    'rejects malformed persisted host metadata: %j',
+    (hostMetadata) => {
       const namespace = ns('canvas-1');
       writeStore(namespace, {
         schemaVersion: THREAD_STORE_SCHEMA_VERSION,
-        records: { t1: { ...record('t1'), annotations } },
+        records: { t1: { ...record('t1'), hostMetadata } },
       });
       expect(() => new FileThreadStore().get(namespace, 't1')).toThrow(
         expect.objectContaining({ code: 'invalid_persisted_record' }),
       );
       expect(() => new FileThreadStore().list(namespace)).toThrow(
-        /annotations must be an object of JSON values/,
+        /hostMetadata must be an object of JSON values/,
       );
     },
   );
