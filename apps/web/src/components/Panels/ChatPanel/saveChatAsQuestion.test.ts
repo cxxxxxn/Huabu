@@ -15,18 +15,51 @@ const input: AddNodeInput & { id: CanvasNodeId } = {
 };
 
 describe('saveChatAsQuestion', () => {
+  it.each([
+    ['user', 'user'],
+    ['acp', 'auto'],
+    ['generated', 'auto'],
+    ['fallback', 'auto'],
+  ] as const)(
+    'transfers the effective %s title with labelSource %s',
+    (source, labelSource) => {
+      const addNode = vi.fn();
+      saveChatAsQuestion(input, {
+        canvasId: 'canvas-1',
+        previewTabId: 'tab-1',
+        addNode,
+        nodeExists: () => true,
+        replaceTabTarget: vi.fn(),
+        conversationTitle: { title: 'Retained conversation name', source },
+      });
+      expect(addNode).toHaveBeenCalledWith({
+        ...input,
+        data: {
+          ...input.data,
+          label: 'Retained conversation name',
+          labelSource,
+          conversationTitleSource: source,
+        },
+      });
+    },
+  );
   it('replaces the workspace tab after node creation succeeds', () => {
     const replaceTabTarget = vi.fn();
+    const addNode = vi.fn();
 
     const saved = saveChatAsQuestion(input, {
       canvasId: 'canvas-1',
       previewTabId: 'tab-1',
-      addNode: vi.fn(),
+      addNode,
       nodeExists: () => true,
       replaceTabTarget,
     });
 
     expect(saved).toBe(true);
+    expect(addNode).toHaveBeenCalledWith({
+      ...input,
+      data: { ...input.data, conversationTitleSource: 'fallback' },
+    });
     expect(replaceTabTarget).toHaveBeenCalledWith('tab-1', {
       kind: 'node',
       canvasId: 'canvas-1',

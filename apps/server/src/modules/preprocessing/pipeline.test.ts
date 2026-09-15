@@ -45,6 +45,58 @@ beforeEach(() => {
   extractMock.mockReset();
 });
 
+describe('Question title Enrich', () => {
+  it('uses coordinated generation even with an ACP label and leaves direct automatic projection protected', async () => {
+    const harness = deps(vi.fn());
+    const generateQuestionLabel = vi.fn(async () => 'Generated title');
+    const result = await runPipeline(
+      {
+        ...request,
+        nodeType: 'question',
+        snapshot: {
+          content: 'First user prompt',
+          title: 'ACP fallback',
+          labelSource: 'agent',
+        },
+      },
+      ['resolve_input', 'generate_label', 'build_patch'],
+      undefined,
+      undefined,
+      {
+        ...harness.value,
+        generateQuestionLabel,
+      },
+    );
+    expect(generateQuestionLabel).toHaveBeenCalledExactlyOnceWith(
+      'First user prompt',
+    );
+    expect(result.enriched?.suggestedLabel).toBe('Generated title');
+    expect(result.patch).not.toHaveProperty('label');
+    expect(result.success).toBe(true);
+  });
+
+  it('does not perform paid naming when allowLLM is false', async () => {
+    const harness = deps(vi.fn());
+    const generateQuestionLabel = vi.fn();
+    await runPipeline(
+      {
+        ...request,
+        nodeType: 'question',
+        snapshot: { content: 'First prompt' },
+        options: { allowLLM: false },
+      },
+      ['resolve_input', 'generate_label', 'build_patch'],
+      undefined,
+      undefined,
+      {
+        ...harness.value,
+        generateQuestionLabel,
+      },
+    );
+    expect(generateQuestionLabel).not.toHaveBeenCalled();
+  });
+});
+
 describe('runPipeline artifact lease lifecycle', () => {
   it('passes the materialized path to extraction and releases after success', async () => {
     const release = vi.fn().mockResolvedValue(undefined);

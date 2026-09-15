@@ -28,16 +28,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { nodeRevisionOf } from '@huabu/shared/canvas-engine';
 
-import { applyDeltasOnServer, executeOnServer } from './canvas-executor.js';
+import { executeCanvasCommandsOnHost } from './canvas-command-router.js';
+import {
+  applyDeltasOnServer,
+  executeOnServer,
+  executeOnServerAlreadyLocked,
+} from './canvas-executor.js';
 import { setAgentChangeReviewConfig } from '../agent/change-review-config.js';
+import {
+  CONVERSATION_TITLE_ANNOTATION,
+  ConversationTitleService,
+} from '../agent/conversation-title.service.js';
 import {
   space,
   getCanvasStore,
   getStructuredStore,
   updateNode,
+  withCanvasMutex,
 } from '../storage/index.js';
 import { setWorkspacePath } from '../workspace.js';
 
+import type { ThreadRecord } from '@agenetes/agenetes';
 import type { CanvasCommand, ExecuteOriginator } from '@huabu/shared';
 
 let tmp: string;
@@ -59,22 +70,25 @@ afterEach(() => {
 });
 
 /** Seed a Space with one note (topology entry + `.md` body). */
-function seedNote(canvasId: string, id: string, content: string): void {
+function seedNote(
+  canvasId: string,
+  id: string,
+  content: string,
+  type = 'note',
+): void {
   const store = getCanvasStore(canvasId);
   store.write({
     canvasId,
     title: null,
     version: 1,
     state: {
-      nodes: [
-        { id, type: 'note', position: { x: 0, y: 0 }, data: { label: 'A' } },
-      ],
+      nodes: [{ id, type, position: { x: 0, y: 0 }, data: { label: 'A' } }],
       edges: [],
     },
     createdAt: Date.now(),
     updatedAt: Date.now(),
   });
-  store.writeNode(id, { nodeId: id, type: 'note', label: 'A', content });
+  store.writeNode(id, { nodeId: id, type, label: 'A', content });
 }
 
 /** Current authored-content rev, computed exactly as the executor does. */
@@ -89,6 +103,327 @@ function currentRev(canvasId: string, id: string): string {
 function bodyOf(canvasId: string, id: string): string | undefined {
   return getCanvasStore(canvasId).readNode(id)?.content ?? undefined;
 }
+
+describe('atomic automatic label commits', () => {
+  it('persists title provenance across ACP sync, restart, and generated upgrade', async () => {
+    const canvasId = 'canvas-title-provenance';
+    seedNote(canvasId, 'node-q', 'First prompt', 'question');
+    await executeOnServer({
+      canvasId,
+      originator: { source: 'system' },
+      commands: [
+        {
+          type: 'MERGE_NODE_DATA',
+          patches: [{ nodeId: 'node-q', patch: { threadId: 'thread-a' } }],
+        },
+      ],
+    });
+    let record: ThreadRecord = {
+      driverSchemaVersion: 1,
+      spec: {
+        kind: 'test',
+        workloadType: 'Deployment',
+        threadId: 'thread-a',
+        namespace: { name: canvasId },
+        spec: {},
+      },
+      state: { driverState: {} },
+    };
+    const deps = {
+      readRecord: () => record,
+      updateAnnotations: (
+        _canvas: string,
+        _thread: string,
+        patch: Record<string, unknown>,
+      ) => {
+        record = {
+          ...record,
+          annotations: { ...record.annotations, ...patch },
+        };
+      },
+      firstPrompt: () => 'First prompt',
+      resolveQuestion: async () => {
+        const node = getCanvasStore(canvasId).readNode('node-q');
+        return {
+          canvasId,
+          nodeId: 'node-q' as const,
+          threadId: 'thread-a',
+          label: node?.label,
+          labelSource: node?.['labelSource'],
+        };
+      },
+      generate: vi.fn(async () => 'Generated title'),
+      execute: executeOnServerAlreadyLocked,
+      notifications: async function* () {},
+      onError: vi.fn(),
+    };
+    await new ConversationTitleService(deps).acceptAcpTitle(
+      canvasId,
+      'thread-a',
+      'ACP fallback',
+    );
+    expect(record.annotations?.[CONVERSATION_TITLE_ANNOTATION]).toMatchObject({
+      lastSyncedNodeLabel: { nodeId: 'node-q', label: 'ACP fallback' },
+    });
+    record = JSON.parse(JSON.stringify(record)) as ThreadRecord;
+    const restarted = new ConversationTitleService(deps);
+    await restarted.initialize(canvasId, 'thread-a', 'Later prompt');
+    await restarted.acceptAcpTitle(canvasId, 'thread-a', 'Late ACP');
+    expect(getCanvasStore(canvasId).readNode('node-q')).toMatchObject({
+      label: 'Generated title',
+      labelSource: 'agent',
+      content: 'First prompt',
+    });
+    expect(record.annotations?.[CONVERSATION_TITLE_ANNOTATION]).toMatchObject({
+      lastSyncedNodeLabel: { nodeId: 'node-q', label: 'Generated title' },
+    });
+    expect(deps.generate).toHaveBeenCalledExactlyOnceWith('First prompt');
+    expect(deps.onError).not.toHaveBeenCalled();
+  });
+
+  it.each(['upgrade', 'user rename', 'agent rename', 'thread rebind'])(
+    'guards generated upgrades of title-owned ACP labels at persistence: %s',
+    async (scenario) => {
+      const canvasId = 'canvas-title';
+      const acp = 'ACP fallback';
+      seedNote(canvasId, 'node-q', 'Body must survive', 'question');
+      const merge = (patch: Record<string, unknown>) =>
+        executeCanvasCommandsOnHost({
+          canvasId,
+          originator: { source: 'system' },
+          commands: [
+            {
+              type: 'MERGE_NODE_DATA',
+              patches: [{ nodeId: 'node-q' as never, patch }],
+            },
+          ],
+        });
+      await merge({
+        label: acp,
+        labelSource: 'agent',
+        threadId: 'thread-a',
+        status: 'done',
+      });
+      let record: ThreadRecord = {
+        driverSchemaVersion: 1,
+        spec: {
+          kind: 'test',
+          workloadType: 'Deployment',
+          threadId: 'thread-a',
+          namespace: { name: canvasId },
+          spec: {},
+        },
+        state: {
+          driverState: {},
+          metadata: { sessionInfo: { title: acp, updatedAt: null } },
+        },
+        annotations: {
+          [CONVERSATION_TITLE_ANNOTATION]: {
+            acp,
+            lastSyncedNodeLabel: { nodeId: 'node-q', label: acp },
+          },
+        },
+      };
+      const execute = vi.fn(executeOnServerAlreadyLocked);
+      const service = new ConversationTitleService({
+        readRecord: () => record,
+        updateAnnotations: (_canvas, _thread, patch) => {
+          record = {
+            ...record,
+            annotations: { ...record.annotations, ...patch },
+          };
+        },
+        firstPrompt: () => 'Original user request',
+        resolveQuestion: async () => ({
+          canvasId,
+          nodeId: 'node-q' as never,
+          threadId: 'thread-a',
+          label: getCanvasStore(canvasId).readNode('node-q')?.label,
+          labelSource:
+            getCanvasStore(canvasId).readNode('node-q')?.['labelSource'],
+        }),
+        generate: vi.fn(),
+        execute,
+        notifications: async function* () {},
+        onError: vi.fn(),
+      });
+      let release!: () => void;
+      let entered!: () => void;
+      const locked = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const hold = withCanvasMutex(canvasId, async () => {
+        entered();
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      });
+      await locked;
+      const concurrent =
+        scenario === 'upgrade'
+          ? Promise.resolve()
+          : merge(
+              scenario === 'thread rebind'
+                ? { threadId: 'different-thread' }
+                : {
+                    label: 'Concurrent name',
+                    labelSource: scenario === 'user rename' ? 'user' : 'agent',
+                  },
+            );
+      const upgrade = service.saveGenerated(
+        canvasId,
+        'thread-a',
+        'Generated title',
+      );
+      expect(execute).not.toHaveBeenCalled();
+      release();
+      await Promise.all([hold, concurrent, upgrade]);
+      expect(getCanvasStore(canvasId).readNode('node-q')).toMatchObject({
+        label:
+          scenario === 'upgrade'
+            ? 'Generated title'
+            : scenario === 'thread rebind'
+              ? acp
+              : 'Concurrent name',
+        labelSource: scenario === 'user rename' ? 'user' : 'agent',
+        content: 'Body must survive',
+      });
+      expect(record.state.metadata?.sessionInfo?.title).toBe(acp);
+      expect(record.annotations?.[CONVERSATION_TITLE_ANNOTATION]).toMatchObject(
+        {
+          generated: 'Generated title',
+          lastSyncedNodeLabel: {
+            nodeId: 'node-q',
+            label: scenario === 'upgrade' ? 'Generated title' : acp,
+          },
+        },
+      );
+      expect(getCanvasStore(canvasId).read()?.state.nodes).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: 'node-q',
+            data: expect.objectContaining({
+              status: 'done',
+              threadId:
+                scenario === 'thread rebind' ? 'different-thread' : 'thread-a',
+            }),
+          }),
+        ]),
+      );
+    },
+  );
+
+  it('routes an internal guard under the Canvas mutex and sees a queued user rename', async () => {
+    seedNote('canvas-title', 'node-q', 'Body must survive', 'question');
+    let release!: () => void;
+    let entered!: () => void;
+    const locked = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const hold = withCanvasMutex('canvas-title', async () => {
+      entered();
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    await locked;
+    const manual = executeCanvasCommandsOnHost({
+      canvasId: 'canvas-title',
+      originator: { source: 'ui' },
+      commands: [
+        {
+          type: 'MERGE_NODE_DATA',
+          patches: [
+            {
+              nodeId: 'node-q' as never,
+              patch: { label: 'User name', labelSource: 'user' },
+            },
+          ],
+        },
+      ],
+    });
+    const guard = vi.fn(
+      (nodes: readonly { data: Record<string, unknown> }[]) =>
+        nodes[0]?.data.labelSource !== 'user',
+    );
+    const automatic = executeCanvasCommandsOnHost({
+      canvasId: 'canvas-title',
+      originator: { source: 'system' },
+      guard,
+      commands: [
+        {
+          type: 'MERGE_NODE_DATA',
+          patches: [
+            {
+              nodeId: 'node-q' as never,
+              patch: { label: 'Late ACP', labelSource: 'agent' },
+            },
+          ],
+        },
+      ],
+    });
+    expect(guard).not.toHaveBeenCalled();
+    release();
+    await hold;
+    await manual;
+    const result = await automatic;
+    expect(guard).toHaveBeenCalledOnce();
+    expect(result.toVersion).toBe(result.fromVersion);
+    expect(result.deltas).toEqual([]);
+    expect(getCanvasStore('canvas-title').readNode('node-q')).toMatchObject({
+      label: 'User name',
+      labelSource: 'user',
+      content: 'Body must survive',
+    });
+  });
+
+  it.each(['user', 'agent'])(
+    'drops only late auto-label fields over a protected %s label',
+    async (source) => {
+      seedNote('canvas-title', 'node-q', 'Body must survive', 'question');
+      await executeOnServer({
+        canvasId: 'canvas-title',
+        originator: { source: 'system' },
+        commands: [
+          {
+            type: 'MERGE_NODE_DATA',
+            patches: [
+              {
+                nodeId: 'node-q' as never,
+                patch: { label: 'Protected', labelSource: source },
+              },
+            ],
+          },
+        ],
+      });
+      await executeOnServer({
+        canvasId: 'canvas-title',
+        originator: { source: 'system' },
+        commands: [
+          {
+            type: 'MERGE_NODE_DATA',
+            patches: [
+              {
+                nodeId: 'node-q' as never,
+                patch: {
+                  label: 'Late preprocess',
+                  labelSource: 'auto',
+                  summary: 'New summary',
+                },
+              },
+            ],
+          },
+        ],
+      });
+      expect(getCanvasStore('canvas-title').readNode('node-q')).toMatchObject({
+        label: 'Protected',
+        labelSource: source,
+        content: 'Body must survive',
+        summary: 'New summary',
+      });
+    },
+  );
+});
 
 function imageStyleOf(
   canvasId: string,

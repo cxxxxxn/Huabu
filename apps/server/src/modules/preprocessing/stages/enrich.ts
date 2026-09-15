@@ -34,6 +34,7 @@ export async function enrich(
   capabilities: Capability[],
   provider: ProviderManager,
   canvasId: string,
+  generateQuestionLabel?: (prompt: string) => Promise<string | undefined>,
 ): Promise<EnrichResult> {
   const needsLabel = capabilities.includes('generate_label');
   const needsSummary = capabilities.includes('generate_summary');
@@ -51,6 +52,11 @@ export async function enrich(
       resolved.prefetchedContent;
     if (!content || !content.trim()) {
       return { skipped: true };
+    }
+
+    if (nodeType === 'question' && generateQuestionLabel) {
+      const label = await generateQuestionLabel(content);
+      return label ? { suggestedLabel: label } : { skipped: true };
     }
 
     const result = await provider.generateContentMeta(content, {

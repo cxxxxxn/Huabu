@@ -41,6 +41,11 @@ import {
   shouldComposeConversationOwner,
   validateConversationView,
 } from '@/store/conversationOwner';
+import {
+  receiveAcpConversationTitle,
+  refreshConversationTitleAfterStream,
+  seedConversationTitle,
+} from '@/store/conversationTitleStore';
 import { useGesturePreviewStore } from '@/store/gesturePreviewStore';
 import { usePreviewWorkspaceStore } from '@/store/previewWorkspace/store';
 import { snapshotAgentIcon } from '@/utils/agentIcon';
@@ -140,6 +145,8 @@ interface StreamEventContext {
    */
   threadId: string;
   assistantId: string;
+  /** Only unbound chats mirror ACP title metadata; Questions use node labels. */
+  titleCanvasId?: string;
 }
 
 /**
@@ -603,6 +610,13 @@ export function handleStreamEvent(
     // the owning ChatPanel's mode/model/config selector dropdowns. If
     // that thread has no mounted panel (e.g. headless reconnect), drop.
     acpSessionMetaSinks.get(ctx.threadId)?.(event);
+    if (event.type === 'session_info_update' && ctx.titleCanvasId) {
+      receiveAcpConversationTitle(
+        ctx.titleCanvasId,
+        ctx.threadId,
+        event.data.title,
+      );
+    }
   }
 }
 
@@ -720,6 +734,8 @@ export function useAgentStream(
       }
 
       setThreadLastAction(threadId, agentMode);
+      if (!conversationView) seedConversationTitle(canvasId, threadId, prompt);
+      let titleCreationConfirmed = false;
 
       // Merge pending attachments + selection attachment into a single array.
       // Sketch-rasterization is now performed server-side in `agent.route.ts`
@@ -986,6 +1002,10 @@ export function useAgentStream(
           agentMode,
           {
             onEvent: (event: AgentStreamEvent) => {
+              if (!conversationView && !titleCreationConfirmed) {
+                titleCreationConfirmed = true;
+                refreshConversationTitleAfterStream(canvasId, threadId);
+              }
               if (isComposingQuestion && !serverSettingsConfirmed) {
                 serverSettingsConfirmed = true;
                 useChatStore.getState().makeThreadMetadataEphemeral(threadId);
@@ -994,6 +1014,7 @@ export function useAgentStream(
               handleStreamEvent(event, {
                 threadId,
                 assistantId,
+                titleCanvasId: conversationView ? undefined : canvasId,
               });
             },
             onError: (err) => {
@@ -1189,6 +1210,9 @@ export function useAgentStream(
           status: 'error',
           detail: err instanceof Error ? err.message : 'Unknown error',
         });
+      } finally {
+        if (!conversationView)
+          refreshConversationTitleAfterStream(canvasId, threadId);
       }
     },
     [

@@ -74,6 +74,7 @@ function createHarness(options?: {
     control: vi.fn().mockResolvedValue({ ok: true }),
   } as unknown as AcpHandle;
   const createHandle = vi.fn(() => handle);
+  const subscribeTitles = vi.fn();
   const buildSpec = vi.fn(
     ({
       binding,
@@ -148,12 +149,14 @@ function createHarness(options?: {
     createHandle,
     buildSpec,
     subscribeProfileCache: vi.fn(),
+    subscribeTitles,
     ensureSession,
   });
   return {
     service,
     handle,
     createHandle,
+    subscribeTitles,
     buildSpec,
     collectSpacePrompt,
     ensureSession,
@@ -172,6 +175,16 @@ describe('ExternalAgentRealizationService', () => {
     });
 
     await harness.service.ensureSession(realized, logger);
+    expect(harness.subscribeTitles).toHaveBeenCalledWith(
+      'canvas-1',
+      'thread-1',
+    );
+    expect(harness.createHandle.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.subscribeTitles.mock.invocationCallOrder[0],
+    );
+    expect(harness.subscribeTitles.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.ensureSession.mock.invocationCallOrder[0],
+    );
     await realized.handle.control({
       type: 'set_mode',
       data: { modeId: 'plan' },

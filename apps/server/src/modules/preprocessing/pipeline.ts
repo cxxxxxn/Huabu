@@ -41,6 +41,8 @@ export interface PipelineDeps {
   nodes: SpaceNodes;
   artifacts: BlobScope;
   provider: ProviderManager;
+  /** Durable Questions share naming work with turn initialization. */
+  generateQuestionLabel?: (prompt: string) => Promise<string | undefined>;
 }
 
 /**
@@ -305,6 +307,7 @@ async function runPipelineStages(
           plan,
           deps.provider,
           request.canvasId,
+          deps.generateQuestionLabel,
         );
         if (has('generate_label')) usedCapabilities.push('generate_label');
         if (has('generate_summary')) usedCapabilities.push('generate_summary');

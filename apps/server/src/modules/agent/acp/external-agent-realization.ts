@@ -20,6 +20,7 @@ import {
   type AgentNodeTarget,
   type FixedAgentNodeTarget,
 } from '../agent-thread-resolver.js';
+import { conversationTitleService } from '../conversation-title.service.js';
 import { resolveSpacePrompt } from '../space-instruction-frames.js';
 import { ensureProfileCacheSubscription } from './profile-cache-port.js';
 import { getExternalAgentRuntimeConfig } from './runtime-config.js';
@@ -82,6 +83,7 @@ interface RealizationDependencies {
   createHandle: (spec: AcpWorkloadSpec) => AcpHandle;
   buildSpec: typeof buildAcpWorkloadSpec;
   subscribeProfileCache: typeof ensureProfileCacheSubscription;
+  subscribeTitles?: (canvasId: string, threadId: string) => void;
   ensureSession: (
     realized: RealizedExternalAgentThread,
     logger: FastifyBaseLogger,
@@ -139,6 +141,8 @@ const DEFAULT_DEPENDENCIES: RealizationDependencies = {
   createHandle: (spec) => agenetes.create(spec) as AcpHandle,
   buildSpec: buildAcpWorkloadSpec,
   subscribeProfileCache: ensureProfileCacheSubscription,
+  subscribeTitles: (canvasId, threadId) =>
+    conversationTitleService.subscribe(canvasId, threadId),
   ensureSession: ensureSessionFromCanonicalSpec,
 };
 
@@ -222,6 +226,10 @@ export class ExternalAgentRealizationService {
         options.threadId,
         binding.profileId,
       );
+      this.dependencies.subscribeTitles?.(
+        options.canvasId ?? '',
+        options.threadId,
+      );
       return realized;
     }
 
@@ -298,6 +306,10 @@ export class ExternalAgentRealizationService {
     this.dependencies.subscribeProfileCache(
       options.threadId,
       binding.profileId,
+    );
+    this.dependencies.subscribeTitles?.(
+      options.canvasId ?? '',
+      options.threadId,
     );
     return realized;
   }

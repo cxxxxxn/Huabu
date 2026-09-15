@@ -38,6 +38,7 @@ import {
 } from '../agenetes/drivers.js';
 import { createChatSubmission } from '../agenetes/handle.js';
 import { dumpAssembledPrompt } from '../conversation/prompt/debug-prompt.js';
+import { conversationTitleService } from '../conversation-title.service.js';
 
 import type { HuabuSubmission } from '../agenetes/handle.js';
 import type { ChatEnvelope } from '../conversation/envelope.js';
@@ -306,6 +307,12 @@ export async function* runAcpAgent(
   // The shared realization service has already created the complete durable
   // workload and subscribed its metadata before either message or control
   // dispatch reaches this point.
+  if (canvasId)
+    void conversationTitleService.initialize(
+      canvasId,
+      opts.threadId,
+      opts.envelope.user.text,
+    );
   const iterator = handle.run(submission, {
     overlay,
     signal,
