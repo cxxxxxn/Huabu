@@ -39,23 +39,22 @@ function planFor(request: PreprocessNodeRequest): string[] {
   return buildPlan(profile, request);
 }
 
-describe('buildPlan — Question title ownership', () => {
-  it('allows title-owned ACP labels through the existing generate_label profile', () => {
-    const request = req('question', {
-      content: 'First prompt',
-      title: 'ACP fallback',
-      labelSource: 'agent',
-    });
-    expect(buildPlan(getProfile('question')!, request, true)).toContain(
-      'generate_label',
-    );
-    expect(buildPlan(getProfile('question')!, request)).not.toContain(
-      'generate_label',
-    );
+describe('buildPlan — question label gating', () => {
+  it('runs generate_label for an automatic question label', () => {
+    expect(
+      planFor(
+        req('question', {
+          content: 'First prompt',
+          title: 'Existing automatic label',
+          labelSource: 'auto',
+        }),
+      ),
+    ).toContain('generate_label');
   });
 
-  it('keeps manual and unrelated agent labels protected by default', () => {
-    for (const labelSource of ['user', 'agent']) {
+  it.each(['user', 'agent'])(
+    'protects every non-empty %s question label',
+    (labelSource) => {
       expect(
         planFor(
           req('question', {
@@ -65,8 +64,23 @@ describe('buildPlan — Question title ownership', () => {
           }),
         ),
       ).not.toContain('generate_label');
-    }
-  });
+    },
+  );
+
+  it.each(['user', 'agent'])(
+    'allows generation when a %s question label is empty',
+    (labelSource) => {
+      expect(
+        planFor(
+          req('question', {
+            content: 'First prompt',
+            title: '',
+            labelSource,
+          }),
+        ),
+      ).toContain('generate_label');
+    },
+  );
 });
 
 describe('buildPlan — image label gating', () => {

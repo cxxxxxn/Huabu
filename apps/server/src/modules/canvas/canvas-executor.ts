@@ -586,8 +586,6 @@ export interface ExecuteOnServerInput {
   canvasId: string;
   commands: readonly CanvasCommand[];
   originator: ExecuteOriginator;
-  /** Server-only precondition evaluated on hydrated state under the Canvas mutex. */
-  guard?: (nodes: readonly CanvasNode[]) => boolean;
   runId?: string;
   /**
    * When true, derive {@link CanvasChangeRecord}s from the batch deltas
@@ -740,28 +738,7 @@ export async function executeOnServerAlreadyLocked(
   );
   const prestateEdges = (canvas.state.edges ?? []) as CanvasEdge[];
 
-  if (input.guard && !input.guard(prestateNodes)) {
-    return {
-      canvasId,
-      fromVersion,
-      toVersion: fromVersion,
-      deltas: [],
-      commands,
-      results: commands.map((command) => ({
-        command,
-        applied: false,
-        reason: 'conflict',
-      })),
-      pendingEffects: {
-        mutatedNodes: [],
-        deletedNodeIds: [],
-        contentEditedNodeIds: [],
-        deferredFitFrameIds: [],
-      },
-    };
-  }
-
-  // Automatic preprocessing can arrive after an ACP title or user rename.
+  // Automatic preprocessing can arrive after an agent or user rename.
   // Filter only its label fields at the actual commit, not at request time.
   commands = commands.map((command) =>
     command.type !== 'MERGE_NODE_DATA'

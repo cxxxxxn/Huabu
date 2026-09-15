@@ -21,13 +21,11 @@ export function saveChatAsQuestion(
     ...input,
     data: {
       ...input.data,
-      // Carry provenance through canonical creation, including a missing
-      // cached title. The service adopts thread candidates, never copied text.
-      conversationTitleSource: title?.source ?? 'fallback',
+      // Copy once; ordinary preprocessing must not replace this node label.
       ...(title?.title
         ? {
             label: title.title,
-            labelSource: title.source === 'user' ? 'user' : 'auto',
+            labelSource: title.source === 'user' ? 'user' : 'agent',
           }
         : {}),
     },

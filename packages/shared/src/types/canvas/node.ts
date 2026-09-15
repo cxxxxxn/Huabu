@@ -10,7 +10,6 @@ import type { AccentToken } from './color.js';
 import type { AgentMode } from '../agent/agent.js';
 import type { AgentBinding } from '../api/acp.js';
 import type { AgentIcon } from '../api/agent-profile.js';
-import type { ConversationTitle } from '../api/conversation-title.js';
 import type { InteractiveViewDefinitionV1 } from '../api/interactive-view.js';
 
 // ==================== Basic Node Types ====================
@@ -315,6 +314,7 @@ export interface BaseNodeData {
    * Who last set the label.
    * - 'auto': derived from content (H1 / first line). May be overwritten automatically.
    * - 'user': manually set by the user. Auto-title will not overwrite this.
+   * - 'agent': agent-authored or copied from a nonmanual Chat title. Auto-title will not overwrite this.
    * Absent means the label was generated at node creation time (treated like 'auto').
    */
   labelSource?: LabelSource;
@@ -799,12 +799,6 @@ export interface QuestionNodeData extends BaseNodeData {
   status?: QuestionNodeStatus;
   /** Agent thread ID (set when the node is opened for composition). */
   threadId?: string;
-  /**
-   * Initial title source when saving a panel chat as a Question. Persisted
-   * conversion provenance, not current label ownership: copied auto labels
-   * must never be inferred to be pre-thread generated names from their text.
-   */
-  conversationTitleSource?: NonNullable<ConversationTitle['source']>;
   /** Error message when status === 'error'. */
   errorMessage?: string;
   /** Short AI response shown on node after completion. */

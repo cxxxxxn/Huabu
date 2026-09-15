@@ -14,7 +14,6 @@ import { isLabelProtected } from './label-policy.js';
 import { runPipeline, type PipelineDeps } from './pipeline.js';
 import { getProfile } from './profiles.js';
 import { ProviderManager } from './provider-manager.js';
-import { conversationTitleService } from '../agent/conversation-title.service.js';
 import { space, getStructuredStore } from '../storage/index.js';
 
 import type {
@@ -43,7 +42,6 @@ import type { PreprocessNodeRequest } from '@huabu/shared';
 export function buildPlan(
   profile: NodePreprocessProfile,
   request: PreprocessNodeRequest,
-  titleOwnedLabel = false,
 ): Capability[] {
   // Always include structural capabilities
   const structural: Capability[] = ['resolve_input', 'build_patch'];
@@ -77,7 +75,7 @@ export function buildPlan(
 
   return profile.capabilities.filter((cap) => {
     // Never (re)generate a label the user or an agent already owns.
-    if (cap === 'generate_label' && labelProtected && !titleOwnedLabel) {
+    if (cap === 'generate_label' && labelProtected) {
       return false;
     }
     // Trigger-gated capabilities run only when one of their fields is dirty.
@@ -164,47 +162,12 @@ export class PreprocessDispatcher {
       };
     }
 
-    // Only a durable Question's exact title-synced label may bypass agent
-    // protection. Project remains conservative; the title service commits
-    // upgrades with an authoritative ownership guard under the Canvas mutex.
-    const canvas =
-      request.nodeType === 'question'
-        ? await space(request.canvasId).read()
-        : null;
-    const node = (
-      canvas?.state.nodes as
-        | Array<{ id: string; type: string; data: { threadId?: string } }>
-        | undefined
-    )?.find((item) => item.id === request.nodeId && item.type === 'question');
-    const threadId = node?.data.threadId;
-    const durableQuestion =
-      typeof threadId === 'string' &&
-      conversationTitleService.hasThread(request.canvasId, threadId);
-    const titleOwnedLabel =
-      durableQuestion &&
-      conversationTitleService.ownsQuestionLabel(
-        request.canvasId,
-        threadId,
-        request.nodeId,
-        request.snapshot.title,
-        request.snapshot.labelSource,
-      );
-    const plan = buildPlan(profile, request, titleOwnedLabel);
+    const plan = buildPlan(profile, request);
 
     const deps: PipelineDeps = {
       nodes: getStructuredStore().space(request.canvasId).nodes,
       artifacts: space(request.canvasId).artifacts,
       provider: this.provider,
-      ...(durableQuestion
-        ? {
-            generateQuestionLabel: (prompt: string) =>
-              conversationTitleService.generateQuestionLabel(
-                request.canvasId,
-                threadId,
-                prompt,
-              ),
-          }
-        : {}),
     };
 
     return runPipeline(

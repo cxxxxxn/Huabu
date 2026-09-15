@@ -226,10 +226,12 @@ export class ExternalAgentRealizationService {
         options.threadId,
         binding.profileId,
       );
-      this.dependencies.subscribeTitles?.(
-        options.canvasId ?? '',
-        options.threadId,
-      );
+      if (!agentTarget && !fixedTarget) {
+        this.dependencies.subscribeTitles?.(
+          options.canvasId ?? '',
+          options.threadId,
+        );
+      }
       return realized;
     }
 
@@ -307,10 +309,12 @@ export class ExternalAgentRealizationService {
       options.threadId,
       binding.profileId,
     );
-    this.dependencies.subscribeTitles?.(
-      options.canvasId ?? '',
-      options.threadId,
-    );
+    if (!agentTarget && !fixedTarget) {
+      this.dependencies.subscribeTitles?.(
+        options.canvasId ?? '',
+        options.threadId,
+      );
+    }
     return realized;
   }
 

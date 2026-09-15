@@ -27,16 +27,18 @@ function deps(release: () => Promise<void>) {
     release,
   });
   const put = vi.fn().mockResolvedValue({ name: 'artifact_test.pdf' });
+  const generateContentMeta = vi.fn();
   return {
     materialize,
     put,
+    generateContentMeta,
     value: {
       nodes: {
         canvasId: request.canvasId,
         read: async () => null,
       } as unknown as SpaceNodes,
       artifacts: { materialize, put } as unknown as BlobScope,
-      provider: {} as ProviderManager,
+      provider: { generateContentMeta } as unknown as ProviderManager,
     },
   };
 }
@@ -46,38 +48,74 @@ beforeEach(() => {
 });
 
 describe('Question title Enrich', () => {
-  it('uses coordinated generation even with an ACP label and leaves direct automatic projection protected', async () => {
+  it('uses the ordinary content metadata provider to generate an automatic label', async () => {
     const harness = deps(vi.fn());
-    const generateQuestionLabel = vi.fn(async () => 'Generated title');
+    harness.generateContentMeta.mockResolvedValue({ label: 'Generated title' });
     const result = await runPipeline(
       {
         ...request,
         nodeType: 'question',
         snapshot: {
           content: 'First user prompt',
-          title: 'ACP fallback',
-          labelSource: 'agent',
+          title: 'Existing automatic label',
+          labelSource: 'auto',
         },
       },
       ['resolve_input', 'generate_label', 'build_patch'],
       undefined,
       undefined,
+      harness.value,
+    );
+    expect(harness.generateContentMeta).toHaveBeenCalledExactlyOnceWith(
+      'First user prompt',
       {
-        ...harness.value,
-        generateQuestionLabel,
+        title: 'Existing automatic label',
+        needLabel: true,
+        needSummary: false,
+        needKeywords: false,
       },
     );
-    expect(generateQuestionLabel).toHaveBeenCalledExactlyOnceWith(
-      'First user prompt',
-    );
     expect(result.enriched?.suggestedLabel).toBe('Generated title');
-    expect(result.patch).not.toHaveProperty('label');
+    expect(result.patch).toMatchObject({
+      label: 'Generated title',
+      labelSource: 'auto',
+    });
     expect(result.success).toBe(true);
   });
 
-  it('does not perform paid naming when allowLLM is false', async () => {
+  it.each(['user', 'agent'])(
+    'protects a %s label even when enrichment is forced',
+    async (labelSource) => {
+      const harness = deps(vi.fn());
+      harness.generateContentMeta.mockResolvedValue({
+        label: 'Generated title',
+      });
+      const result = await runPipeline(
+        {
+          ...request,
+          nodeType: 'question',
+          snapshot: {
+            content: 'First user prompt',
+            title: 'Protected label',
+            labelSource,
+          },
+          options: { force: true },
+        },
+        ['resolve_input', 'generate_label', 'build_patch'],
+        undefined,
+        undefined,
+        harness.value,
+      );
+      expect(harness.generateContentMeta).toHaveBeenCalledOnce();
+      expect(result.enriched?.suggestedLabel).toBe('Generated title');
+      expect(result.patch).not.toHaveProperty('label');
+      expect(result.patch).not.toHaveProperty('labelSource');
+      expect(result.success).toBe(true);
+    },
+  );
+
+  it('does not call the provider when allowLLM is false', async () => {
     const harness = deps(vi.fn());
-    const generateQuestionLabel = vi.fn();
     await runPipeline(
       {
         ...request,
@@ -88,12 +126,32 @@ describe('Question title Enrich', () => {
       ['resolve_input', 'generate_label', 'build_patch'],
       undefined,
       undefined,
-      {
-        ...harness.value,
-        generateQuestionLabel,
-      },
+      harness.value,
     );
-    expect(generateQuestionLabel).not.toHaveBeenCalled();
+    expect(harness.generateContentMeta).not.toHaveBeenCalled();
+  });
+
+  it('keeps the local fallback when the provider returns no metadata', async () => {
+    const harness = deps(vi.fn());
+    harness.generateContentMeta.mockResolvedValue(undefined);
+    const result = await runPipeline(
+      {
+        ...request,
+        nodeType: 'question',
+        snapshot: { content: 'First user prompt' },
+      },
+      ['resolve_input', 'generate_label', 'build_patch'],
+      undefined,
+      undefined,
+      harness.value,
+    );
+    expect(harness.generateContentMeta).toHaveBeenCalledOnce();
+    expect(result.enriched).toBeUndefined();
+    expect(result.patch).toMatchObject({
+      label: 'First user prompt',
+      labelSource: 'auto',
+    });
+    expect(result.success).toBe(true);
   });
 });
 

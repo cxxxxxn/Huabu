@@ -73,6 +73,8 @@ export interface RunAcpAgentOptions {
    * any fs/* request from a session opened without a canvasId.
    */
   canvasId?: string;
+  /** Trusted upstream Question ownership; node labels are not Chat titles. */
+  questionOwned?: boolean;
   /**
    * This turn's structured envelope — the single source of truth shared
    * with the built-in path. The preprocessor reads the user's text,
@@ -307,7 +309,7 @@ export async function* runAcpAgent(
   // The shared realization service has already created the complete durable
   // workload and subscribed its metadata before either message or control
   // dispatch reaches this point.
-  if (canvasId)
+  if (canvasId && !opts.questionOwned)
     void conversationTitleService.initialize(
       canvasId,
       opts.threadId,

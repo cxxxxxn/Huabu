@@ -50,7 +50,6 @@ import {
   WorldReferenceResolutionError,
 } from './world-reference-resolver.js';
 import { MAX_UPLOAD_BYTES } from '../../upload-limits.js';
-import { conversationTitleService } from '../agent/conversation-title.service.js';
 import { ARTIFACT_URL_REGEX } from '../artifact/utils.js';
 import { getPreprocessDispatcher, getProfile } from '../preprocessing/index.js';
 import { isLabelProtected } from '../preprocessing/label-policy.js';
@@ -1042,21 +1041,6 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
       };
 
       const result = await dispatcher.preprocess(ppRequest);
-
-      if (nodeType === 'question') {
-        const nodes = (await space(canvasId).read())?.state.nodes as
-          | NodeLike[]
-          | undefined;
-        const current = nodes?.find((node) => node.id === nodeId);
-        const threadId = current?.data?.threadId;
-        if (typeof threadId === 'string') {
-          await conversationTitleService.saveGenerated(
-            canvasId,
-            threadId,
-            result.enriched?.suggestedLabel,
-          );
-        }
-      }
 
       const response: PreprocessNodeResponse = {
         nodeId,

@@ -4,14 +4,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  CONVERSATION_TITLE_ANNOTATION,
+  CONVERSATION_TITLE_METADATA_KEY,
   ConversationTitleService,
   effectiveConversationTitle,
 } from './conversation-title.service.js';
 
 import type { ConversationTitleDependencies } from './conversation-title.service.js';
 import type { ThreadRecord } from '@agenetes/agenetes';
-import type { CanvasNode } from '@huabu/shared/canvas-engine';
 
 function fixture() {
   const records = new Map<string, ThreadRecord>([
@@ -30,45 +29,26 @@ function fixture() {
       },
     ],
   ]);
-  let node: CanvasNode | undefined;
+  const getRecord = (canvas = 'canvas-a', thread = 'thread-a') => {
+    const record = records.get(`${canvas}/${thread}`);
+    if (!record) throw new Error(`Missing thread record: ${canvas}/${thread}`);
+    return record;
+  };
   const deps: ConversationTitleDependencies = {
     readRecord: (canvas, thread) => records.get(`${canvas}/${thread}`),
-    updateAnnotations: vi.fn((canvas, thread, patch) => {
-      const record = records.get(`${canvas}/${thread}`)!;
+    updateHostMetadata: vi.fn((canvas, thread, patch) => {
+      const record = getRecord(canvas, thread);
       records.set(`${canvas}/${thread}`, {
         ...record,
-        annotations: { ...record.annotations, ...patch },
+        hostMetadata: { ...record.hostMetadata, ...patch },
       });
     }),
     firstPrompt: vi.fn(() => 'Original first prompt'),
-    resolveQuestion: vi.fn(async () =>
-      node
-        ? {
-            canvasId: 'canvas-a',
-            nodeId: node.id as `node-${string}`,
-            threadId: 'thread-a',
-            label: node.data.label,
-            labelSource: node.data.labelSource,
-            conversationTitleSource: node.data.conversationTitleSource,
-          }
-        : null,
-    ),
     generate: vi.fn(async () => 'Semantic title'),
-    execute: vi.fn(async (input) => {
-      const applied = !!node && !!input.guard?.([node]);
-      if (applied && node)
-        for (const command of input.commands) {
-          if (command.type === 'MERGE_NODE_DATA')
-            for (const entry of command.patches)
-              Object.assign(node.data, entry.patch);
-        }
-      return { results: [{ applied }] } as never;
-    }),
     notifications: vi.fn(async function* () {}),
     onError: vi.fn(),
   };
   const service = new ConversationTitleService(deps);
-  const getRecord = () => records.get('canvas-a/thread-a')!;
   const metadata = (title: string | null) => {
     records.set('canvas-a/thread-a', {
       ...getRecord(),
@@ -78,32 +58,231 @@ function fixture() {
       },
     });
   };
-  const question = (label = 'Original first prompt', labelSource = 'auto') => {
-    node = {
-      id: 'node-q',
-      type: 'question',
-      position: { x: 0, y: 0 },
-      data: {
-        label,
-        labelSource,
-        threadId: 'thread-a',
-        content: 'Original first prompt',
-        status: 'done',
-      },
-    } as CanvasNode;
-    return node;
+  const notify = async (
+    title: string | null,
+    target = service,
+    canvas = 'canvas-a',
+    thread = 'thread-a',
+  ) => {
+    let finished = false;
+    vi.mocked(deps.notifications).mockImplementationOnce(async function* () {
+      yield { sessionInfo: { title, updatedAt: null } };
+      finished = true;
+    });
+    target.subscribe(canvas, thread);
+    await vi.waitFor(() => expect(finished).toBe(true));
   };
-  return { service, deps, records, getRecord, metadata, question };
+  return { service, deps, records, getRecord, metadata, notify };
 }
 
 describe('generated-first conversation titles', () => {
-  it('orders manual > generated > current ACP > saved ACP > fallback without metadata writes', async () => {
-    const { service, deps, metadata, getRecord } = fixture();
+  it('normalizes titles with the shared host and ACP policies', async () => {
+    const { service, deps, getRecord, notify } = fixture();
+    await notify('  ACP\n\t title  ');
+    expect(getRecord().hostMetadata).toEqual({
+      [CONVERSATION_TITLE_METADATA_KEY]: { title: 'ACP title', source: 'acp' },
+    });
+    vi.mocked(deps.generate).mockResolvedValueOnce(`  ${'x'.repeat(121)}  `);
+    await service.initialize('canvas-a', 'thread-a', 'Prompt');
+    expect(getRecord().hostMetadata).toEqual({
+      [CONVERSATION_TITLE_METADATA_KEY]: {
+        title: 'x'.repeat(120),
+        source: 'generated',
+      },
+    });
+    service.setUserTitle('canvas-a', 'thread-a', '  Manual\n\t title  ');
+    expect(getRecord().hostMetadata).toEqual({
+      [CONVERSATION_TITLE_METADATA_KEY]: {
+        title: 'Manual title',
+        source: 'user',
+      },
+    });
+    expect(() => service.setUserTitle('canvas-a', 'thread-a', ' \n ')).toThrow(
+      'Invalid conversation title',
+    );
+  });
+
+  it.each([undefined, null, '', ' \n ', 42])(
+    'ignores unusable generated title %j',
+    async (value) => {
+      const { service, deps, getRecord, metadata } = fixture();
+      metadata('Retained ACP');
+      // Exercise malformed runtime provider output as well as typed absence.
+      vi.mocked(deps.generate).mockImplementationOnce(
+        vi.fn().mockResolvedValue(value),
+      );
+      await service.initialize('canvas-a', 'thread-a', 'Prompt');
+      expect(deps.generate).toHaveBeenCalledExactlyOnceWith(
+        'Original first prompt',
+      );
+      expect(
+        service.query('canvas-a', ['thread-a']).titles['thread-a'],
+      ).toEqual({
+        title: 'Retained ACP',
+        source: 'acp',
+      });
+      expect(getRecord().hostMetadata).toBeUndefined();
+      expect(deps.updateHostMetadata).not.toHaveBeenCalled();
+    },
+  );
+
+  it('derives first-prompt fallback on query without persisting or generating', () => {
+    const { service, deps, getRecord } = fixture();
+    vi.mocked(deps.firstPrompt).mockReturnValue('Intro\n# **First** heading');
+    const before = JSON.stringify(getRecord());
+    expect(service.query('canvas-a', ['thread-a'])).toEqual({
+      titles: { 'thread-a': { title: 'First heading', source: 'fallback' } },
+    });
+    vi.mocked(deps.firstPrompt).mockReturnValue(undefined);
+    expect(service.get('canvas-a', 'thread-a')).toEqual({
+      title: null,
+      source: null,
+    });
+    expect(JSON.stringify(getRecord())).toBe(before);
+    expect(deps.generate).not.toHaveBeenCalled();
+    expect(deps.updateHostMetadata).not.toHaveBeenCalled();
+  });
+
+  it('uses the submission before history exists and retries failed generation later', async () => {
+    const { service, deps, getRecord } = fixture();
+    vi.mocked(deps.firstPrompt).mockReturnValue(undefined);
+    vi.mocked(deps.generate).mockResolvedValueOnce(undefined);
+    await service.initialize('canvas-a', 'thread-a', '# **First** submission');
+    expect(deps.generate).toHaveBeenCalledExactlyOnceWith(
+      '# **First** submission',
+    );
+    expect(getRecord().hostMetadata).toEqual({
+      [CONVERSATION_TITLE_METADATA_KEY]: {
+        title: 'First submission',
+        source: 'fallback',
+      },
+    });
+    vi.mocked(deps.firstPrompt).mockReturnValue('# **First** submission');
+    await new ConversationTitleService(deps).initialize(
+      'canvas-a',
+      'thread-a',
+      'Later turn',
+    );
+    expect(deps.generate).toHaveBeenCalledTimes(2);
+    expect(deps.generate).toHaveBeenLastCalledWith('# **First** submission');
+    expect(getRecord().hostMetadata).toEqual({
+      [CONVERSATION_TITLE_METADATA_KEY]: {
+        title: 'Semantic title',
+        source: 'generated',
+      },
+    });
+  });
+
+  it('does not generate from an empty prompt', async () => {
+    const { service, deps, getRecord } = fixture();
+    vi.mocked(deps.firstPrompt).mockReturnValue(undefined);
+    await service.initialize('canvas-a', 'thread-a', ' \n ');
+    expect(deps.generate).not.toHaveBeenCalled();
+    expect(getRecord().hostMetadata).toBeUndefined();
+  });
+
+  it('persists only the current title and source, rejecting lower-priority writes', async () => {
+    const { service, deps, getRecord, metadata, notify } = fixture();
+    vi.mocked(deps.generate).mockResolvedValueOnce(undefined);
+    await service.initialize('canvas-a', 'thread-a', 'Prompt');
+    expect(getRecord().hostMetadata?.[CONVERSATION_TITLE_METADATA_KEY]).toEqual(
+      {
+        title: 'Original first prompt',
+        source: 'fallback',
+      },
+    );
+    await notify('ACP');
+    expect(getRecord().hostMetadata?.[CONVERSATION_TITLE_METADATA_KEY]).toEqual(
+      {
+        title: 'ACP',
+        source: 'acp',
+      },
+    );
+    let complete!: (title: string) => void;
+    vi.mocked(deps.generate).mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          complete = resolve;
+        }),
+    );
+    const competing = new ConversationTitleService(deps).initialize(
+      'canvas-a',
+      'thread-a',
+      'Competing request',
+    );
+    await vi.waitFor(() => expect(deps.generate).toHaveBeenCalledTimes(2));
+    vi.mocked(deps.generate).mockResolvedValueOnce('Generated');
+    await service.initialize('canvas-a', 'thread-a', 'Prompt');
+    vi.mocked(deps.updateHostMetadata).mockClear();
+    metadata('Late ACP');
+    await notify('Late ACP');
+    complete('Second generation');
+    await competing;
+    expect(getRecord().hostMetadata?.[CONVERSATION_TITLE_METADATA_KEY]).toEqual(
+      {
+        title: 'Generated',
+        source: 'generated',
+      },
+    );
+    expect(deps.updateHostMetadata).not.toHaveBeenCalled();
+    service.setUserTitle('canvas-a', 'thread-a', 'Manual');
+    vi.mocked(deps.updateHostMetadata).mockClear();
+    await service.initialize('canvas-a', 'thread-a', 'Rejected');
+    await notify('Rejected ACP');
+    expect(deps.generate).toHaveBeenCalledTimes(3);
+    expect(getRecord().hostMetadata?.[CONVERSATION_TITLE_METADATA_KEY]).toEqual(
+      {
+        title: 'Manual',
+        source: 'user',
+      },
+    );
+    expect(deps.updateHostMetadata).not.toHaveBeenCalled();
+    expect(
+      new ConversationTitleService(deps).get('canvas-a', 'thread-a'),
+    ).toEqual({ title: 'Manual', source: 'user' });
+    service.setUserTitle('canvas-a', 'thread-a', 'Second manual');
+    expect(service.get('canvas-a', 'thread-a').title).toBe('Second manual');
+  });
+
+  it('rejects late generation and ACP after a manual rename without retaining candidates', async () => {
+    const { service, deps, getRecord, notify } = fixture();
+    let complete!: (title: string) => void;
+    vi.mocked(deps.generate).mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          complete = resolve;
+        }),
+    );
+    const running = service.initialize('canvas-a', 'thread-a', 'Prompt');
+    await vi.waitFor(() => expect(deps.generate).toHaveBeenCalledOnce());
+    await notify('ACP name');
+    service.setUserTitle('canvas-a', 'thread-a', 'Manual panel');
+    vi.mocked(deps.updateHostMetadata).mockClear();
+    complete('Late generated');
+    await running;
+    await notify('Late ACP');
+    await new ConversationTitleService(deps).initialize(
+      'canvas-a',
+      'thread-a',
+      'Retry',
+    );
+    expect(deps.generate).toHaveBeenCalledOnce();
+    expect(deps.updateHostMetadata).not.toHaveBeenCalled();
+    expect(getRecord().hostMetadata).toEqual({
+      [CONVERSATION_TITLE_METADATA_KEY]: {
+        title: 'Manual panel',
+        source: 'user',
+      },
+    });
+  });
+
+  it('orders manual > generated > current ACP > saved ACP > fallback without driver metadata writes', async () => {
+    const { service, deps, metadata, getRecord, notify } = fixture();
     expect(service.get('canvas-a', 'thread-a')).toEqual({
       title: 'Original first prompt',
       source: 'fallback',
     });
-    await service.acceptAcpTitle('canvas-a', 'thread-a', 'Saved ACP');
+    await notify('Saved ACP');
     metadata('Current ACP');
     expect(service.get('canvas-a', 'thread-a')).toEqual({
       title: 'Current ACP',
@@ -116,7 +295,7 @@ describe('generated-first conversation titles', () => {
       'Original first prompt',
     );
     metadata('Late ACP');
-    await service.acceptAcpTitle('canvas-a', 'thread-a', 'Late ACP');
+    await notify('Late ACP');
     expect(service.get('canvas-a', 'thread-a')).toEqual({
       title: 'Semantic title',
       source: 'generated',
@@ -141,12 +320,11 @@ describe('generated-first conversation titles', () => {
       metadata('ACP fallback');
       records.set('canvas-a/thread-a', {
         ...getRecord(),
-        annotations: {
+        hostMetadata: {
           otherFeature: { enabled: true },
-          [CONVERSATION_TITLE_ANNOTATION]: {
-            acp: 'ACP fallback',
-            fallback: 'Original first prompt',
-            generationAttempted: true,
+          [CONVERSATION_TITLE_METADATA_KEY]: {
+            title: 'ACP fallback',
+            source: 'acp',
           },
         },
       });
@@ -173,7 +351,13 @@ describe('generated-first conversation titles', () => {
       expect(deps.generate).toHaveBeenCalledTimes(2);
       expect(deps.generate).toHaveBeenLastCalledWith('Original first prompt');
       expect(restarted.get('canvas-a', 'thread-a').source).toBe('generated');
-      expect(getRecord().annotations?.otherFeature).toEqual({ enabled: true });
+      expect(getRecord().hostMetadata).toEqual({
+        otherFeature: { enabled: true },
+        [CONVERSATION_TITLE_METADATA_KEY]: {
+          title: 'Semantic title',
+          source: 'generated',
+        },
+      });
       expect(getRecord().state.metadata?.sessionInfo?.title).toBe(
         'ACP fallback',
       );
@@ -181,7 +365,7 @@ describe('generated-first conversation titles', () => {
   );
 
   it('accepts prompt-like ACP text and never mutates or pays for query reads', async () => {
-    const { service, deps, metadata, getRecord } = fixture();
+    const { service, deps, metadata, getRecord, notify } = fixture();
     const title =
       'You are a helpful assistant collaborating with a user inside **Huabu**';
     metadata(title);
@@ -192,37 +376,34 @@ describe('generated-first conversation titles', () => {
     });
     expect(JSON.stringify(getRecord())).toBe(before);
     expect(deps.generate).not.toHaveBeenCalled();
-    expect(deps.updateAnnotations).not.toHaveBeenCalled();
-    expect(deps.resolveQuestion).not.toHaveBeenCalled();
-    await service.acceptAcpTitle('canvas-a', 'thread-a', title);
+    expect(deps.updateHostMetadata).not.toHaveBeenCalled();
+    await notify(title);
     metadata('x'.repeat(121));
-    await service.acceptAcpTitle('canvas-a', 'thread-a', 'x'.repeat(121));
+    await notify('x'.repeat(121));
     expect(service.get('canvas-a', 'thread-a').title).toBe(title);
   });
 
   it.each([null, '', '  ', 'x'.repeat(121)])(
     'ignores invalid raw/saved ACP %j without recovery',
     async (invalid) => {
-      const { service, deps, metadata, records, getRecord, question } =
-        fixture();
+      const { service, deps, metadata, records, getRecord, notify } = fixture();
       metadata(invalid);
       records.set('canvas-a/thread-a', {
         ...getRecord(),
-        annotations: { [CONVERSATION_TITLE_ANNOTATION]: { acp: invalid } },
+        hostMetadata: {
+          [CONVERSATION_TITLE_METADATA_KEY]: { title: invalid, source: 'acp' },
+        },
       });
-      const node = question('Unrelated agent name', 'agent');
       const before = JSON.stringify(getRecord());
       expect(service.get('canvas-a', 'thread-a').source).toBe('fallback');
-      await service.acceptAcpTitle('canvas-a', 'thread-a', invalid);
+      await notify(invalid);
       expect(JSON.stringify(getRecord())).toBe(before);
-      expect(node.data.label).toBe('Unrelated agent name');
-      expect(deps.execute).not.toHaveBeenCalled();
+      expect(deps.updateHostMetadata).not.toHaveBeenCalled();
     },
   );
 
-  it('preserves manual panel and Question names while generation and ACP race', async () => {
-    const { service, deps, metadata, question } = fixture();
-    const node = question();
+  it('coalesces initialization and upgrades ACP with late generation', async () => {
+    const { service, deps, metadata, getRecord, notify } = fixture();
     let complete!: (title: string) => void;
     deps.generate = vi.fn(
       () =>
@@ -231,184 +412,50 @@ describe('generated-first conversation titles', () => {
         }),
     );
     const running = service.initialize('canvas-a', 'thread-a', 'Prompt');
+    const concurrent = service.initialize('canvas-a', 'thread-a', 'Later');
+    expect(concurrent).toBe(running);
     await vi.waitFor(() => expect(deps.generate).toHaveBeenCalledOnce());
     metadata('ACP arrived');
-    await service.acceptAcpTitle('canvas-a', 'thread-a', 'ACP arrived');
-    service.setUserTitle('canvas-a', 'thread-a', 'Panel manual');
-    Object.assign(node.data, { label: 'Node manual', labelSource: 'user' });
+    await notify('ACP arrived');
     complete('Slow generated');
-    await running;
+    await Promise.all([running, concurrent]);
+    await notify('Late ACP');
     expect(service.get('canvas-a', 'thread-a')).toEqual({
-      title: 'Panel manual',
-      source: 'user',
-    });
-    expect(node.data).toMatchObject({
-      label: 'Node manual',
-      labelSource: 'user',
-      content: 'Original first prompt',
-      status: 'done',
-    });
-  });
-
-  it('upgrades ACP-owned Questions through shared Enrich/init and rejects late ACP', async () => {
-    const { service, deps, metadata, question, getRecord } = fixture();
-    const node = question();
-    metadata('ACP fallback');
-    await service.acceptAcpTitle('canvas-a', 'thread-a', 'ACP fallback');
-    expect(
-      service.ownsQuestionLabel(
-        'canvas-a',
-        'thread-a',
-        'node-q',
-        node.data.label,
-        node.data.labelSource,
-      ),
-    ).toBe(true);
-    const [label] = await Promise.all([
-      service.generateQuestionLabel('canvas-a', 'thread-a', 'Later node text'),
-      service.initialize('canvas-a', 'thread-a', 'Later turn'),
-    ]);
-    expect(label).toBe('Semantic title');
-    expect(deps.generate).toHaveBeenCalledExactlyOnceWith(
-      'Original first prompt',
-    );
-    expect(node.data.label).toBe('Semantic title');
-    metadata('Late ACP');
-    await service.acceptAcpTitle('canvas-a', 'thread-a', 'Late ACP');
-    expect(node.data.label).toBe('Semantic title');
-    expect(
-      getRecord().annotations?.[CONVERSATION_TITLE_ANNOTATION],
-    ).toMatchObject({
-      lastSyncedNodeLabel: { nodeId: 'node-q', label: 'Semantic title' },
-    });
-    await service.saveGenerated(
-      'canvas-a',
-      'thread-a',
-      'Later preprocessed label',
-    );
-    expect(node.data.label).toBe('Semantic title');
-  });
-
-  it.each(['user', 'agent'])(
-    'preserves unrelated %s labels without provenance',
-    async (source) => {
-      const { service, metadata, question } = fixture();
-      const node = question('Existing authored name', source);
-      metadata('ACP fallback');
-      await service.acceptAcpTitle('canvas-a', 'thread-a', 'ACP fallback');
-      await service.saveGenerated('canvas-a', 'thread-a', 'Generated');
-      expect(node.data.label).toBe('Existing authored name');
-      expect(
-        service.ownsQuestionLabel(
-          'canvas-a',
-          'thread-a',
-          'node-q',
-          node.data.label,
-          source,
-        ),
-      ).toBe(false);
-    },
-  );
-
-  it('does not infer ownership from ACP text equal to an unrelated agent label', async () => {
-    const { service, question } = fixture();
-    const node = question('ACP', 'agent');
-    await service.acceptAcpTitle('canvas-a', 'thread-a', 'ACP');
-    await service.saveGenerated('canvas-a', 'thread-a', 'Generated');
-    expect(node.data.label).toBe('ACP');
-  });
-
-  it('reuses pre-thread semantic auto labels without another provider call', async () => {
-    const { service, deps, question } = fixture();
-    question('Existing semantic label');
-    await service.initialize('canvas-a', 'thread-a', 'Prompt');
-    expect(deps.generate).not.toHaveBeenCalled();
-    expect(service.get('canvas-a', 'thread-a')).toEqual({
-      title: 'Existing semantic label',
+      title: 'Slow generated',
       source: 'generated',
     });
-  });
-
-  it.each(['acp', 'fallback'])(
-    'does not adopt copied %s auto text as generated, even after deduplication',
-    async (source) => {
-      const { service, deps, question, metadata } = fixture();
-      metadata('ACP fallback');
-      const node = question('Copied title (2)');
-      node.data.conversationTitleSource = source;
-      vi.mocked(deps.generate).mockResolvedValueOnce(undefined);
-      await service.initialize('canvas-a', 'thread-a', 'Later prompt');
-      expect(service.get('canvas-a', 'thread-a').source).toBe('acp');
-      expect(node.data.label).toBe('Copied title (2)');
-      const restarted = new ConversationTitleService(deps);
-      await Promise.all([
-        restarted.initialize('canvas-a', 'thread-a', 'Later prompt'),
-        restarted.generateQuestionLabel('canvas-a', 'thread-a', 'Node text'),
-      ]);
-      expect(deps.generate).toHaveBeenCalledTimes(2);
-      expect(deps.generate).toHaveBeenLastCalledWith('Original first prompt');
-      expect(node.data.label).toBe('Semantic title');
-    },
-  );
-
-  it('adopts a converted generated title from the thread without another naming request', async () => {
-    const { service, deps, question } = fixture();
-    await service.saveGenerated('canvas-a', 'thread-a', 'Saved generated');
-    const node = question('Stale cached title');
-    node.data.conversationTitleSource = 'generated';
-    await service.generateQuestionLabel('canvas-a', 'thread-a', 'Node text');
-    expect(node.data.label).toBe('Saved generated');
-    expect(node.data.labelSource).toBe('agent');
-    expect(deps.generate).not.toHaveBeenCalled();
-  });
-
-  it('upgrades a Question converted while panel generation is already in flight', async () => {
-    const { service, deps, question } = fixture();
-    let complete!: (title: string) => void;
-    vi.mocked(deps.generate).mockImplementationOnce(
-      () =>
-        new Promise<string>((resolve) => {
-          complete = resolve;
-        }),
-    );
-    const panelGeneration = service.initialize(
-      'canvas-a',
-      'thread-a',
-      'Prompt',
-    );
-    await vi.waitFor(() => expect(deps.generate).toHaveBeenCalledOnce());
-    const node = question('Copied ACP');
-    node.data.conversationTitleSource = 'acp';
-    const enrich = service.generateQuestionLabel(
-      'canvas-a',
-      'thread-a',
-      'Node text',
-    );
-    complete('Generated after conversion');
-    await Promise.all([panelGeneration, enrich]);
-    expect(node.data).toMatchObject({
-      label: 'Generated after conversion',
-      labelSource: 'agent',
+    expect(getRecord().hostMetadata).toEqual({
+      [CONVERSATION_TITLE_METADATA_KEY]: {
+        title: 'Slow generated',
+        source: 'generated',
+      },
     });
     expect(deps.generate).toHaveBeenCalledExactlyOnceWith(
       'Original first prompt',
     );
   });
 
-  it('handles synchronization failures from initialized generation', async () => {
-    const { service, deps, question } = fixture();
-    question();
-    vi.mocked(deps.execute).mockRejectedValueOnce(
-      new Error('storage unavailable'),
-    );
-    await service.initialize('canvas-a', 'thread-a', 'Prompt');
-    expect(deps.onError).toHaveBeenCalledOnce();
-    await service.saveGenerated('canvas-a', 'thread-a', 'Semantic title');
-    expect(deps.execute).toHaveBeenCalledTimes(2);
+  it('skips duplicate persisted ACP writes across restart and accepts changed titles', async () => {
+    const { deps, metadata, getRecord, notify } = fixture();
+    metadata('First ACP');
+    await notify('First ACP');
+    vi.mocked(deps.updateHostMetadata).mockClear();
+    const restarted = new ConversationTitleService(deps);
+    await notify('First ACP', restarted);
+    expect(deps.updateHostMetadata).not.toHaveBeenCalled();
+    metadata('Changed ACP');
+    await notify('Changed ACP', restarted);
+    expect(getRecord().hostMetadata).toEqual({
+      [CONVERSATION_TITLE_METADATA_KEY]: {
+        title: 'Changed ACP',
+        source: 'acp',
+      },
+    });
+    expect(deps.updateHostMetadata).toHaveBeenCalledOnce();
   });
 
   it('validates manual names and does not create or rename absent/cross-canvas threads', async () => {
-    const { service, deps } = fixture();
+    const { service, deps, notify } = fixture();
     expect(() =>
       service.setUserTitle('canvas-a', 'thread-a', 'x'.repeat(121)),
     ).toThrow('Invalid conversation title');
@@ -420,9 +467,74 @@ describe('generated-first conversation titles', () => {
     });
     expect(service.setUserTitle('canvas-b', 'thread-a', 'Name')).toBeNull();
     await service.initialize('canvas-a', 'missing', 'Prompt');
+    await service.initialize('canvas-b', 'thread-a', 'Generated');
+    await notify('ACP', service, 'canvas-b');
     expect(deps.generate).not.toHaveBeenCalled();
-    expect(deps.updateAnnotations).not.toHaveBeenCalled();
+    expect(deps.firstPrompt).not.toHaveBeenCalled();
+    expect(deps.updateHostMetadata).not.toHaveBeenCalled();
+    expect(service.query('canvas-a', ['thread-a']).titles['thread-a']).toEqual({
+      title: 'Original first prompt',
+      source: 'fallback',
+    });
+    expect(service.query('canvas-b', ['thread-a']).titles['thread-a']).toEqual({
+      title: null,
+      source: null,
+    });
     expect(effectiveConversationTitle()).toEqual({ title: null, source: null });
+  });
+
+  it('subscribes before replaying a cached ACP title and retains it after blank updates', async () => {
+    const { service, deps, metadata, getRecord } = fixture();
+    metadata('Cached ACP');
+    let finished = false;
+    deps.notifications = vi.fn(() => {
+      expect(deps.updateHostMetadata).not.toHaveBeenCalled();
+      return (async function* () {
+        expect(getRecord().hostMetadata).toEqual({
+          [CONVERSATION_TITLE_METADATA_KEY]: {
+            title: 'Cached ACP',
+            source: 'acp',
+          },
+        });
+        metadata('');
+        yield { sessionInfo: { title: '', updatedAt: null } };
+        finished = true;
+      })();
+    });
+    service.subscribe('canvas-a', 'thread-a');
+    await vi.waitFor(() => expect(finished).toBe(true));
+    expect(service.get('canvas-a', 'thread-a')).toEqual({
+      title: 'Cached ACP',
+      source: 'acp',
+    });
+    expect(deps.onError).not.toHaveBeenCalled();
+  });
+
+  it('continues after a subscriber write failure and respects a manual rename', async () => {
+    const { service, deps, getRecord } = fixture();
+    const error = new Error('storage unavailable');
+    vi.mocked(deps.updateHostMetadata).mockImplementationOnce(() => {
+      throw error;
+    });
+    let finished = false;
+    deps.notifications = vi.fn(async function* () {
+      yield { sessionInfo: { title: 'Failed ACP', updatedAt: null } };
+      yield { sessionInfo: { title: 'Recovered ACP', updatedAt: null } };
+      expect(service.get('canvas-a', 'thread-a')).toEqual({
+        title: 'Recovered ACP',
+        source: 'acp',
+      });
+      service.setUserTitle('canvas-a', 'thread-a', 'Manual');
+      yield { sessionInfo: { title: 'Late ACP', updatedAt: null } };
+      finished = true;
+    });
+    service.subscribe('canvas-a', 'thread-a');
+    await vi.waitFor(() => expect(finished).toBe(true));
+    expect(deps.onError).toHaveBeenCalledExactlyOnceWith(error);
+    expect(getRecord().hostMetadata).toEqual({
+      [CONVERSATION_TITLE_METADATA_KEY]: { title: 'Manual', source: 'user' },
+    });
+    expect(deps.generate).not.toHaveBeenCalled();
   });
 
   it('subscribes once per namespace and retains queued useful ACP after blanks', async () => {
@@ -450,6 +562,12 @@ describe('generated-first conversation titles', () => {
       expect(
         new ConversationTitleService(deps).get(canvas, 'thread-a'),
       ).toEqual({ title: `${canvas} last useful`, source: 'acp' });
+      expect(records.get(`${canvas}/thread-a`)?.hostMetadata).toEqual({
+        [CONVERSATION_TITLE_METADATA_KEY]: {
+          title: `${canvas} last useful`,
+          source: 'acp',
+        },
+      });
       expect(
         records.get(`${canvas}/thread-a`)?.state.metadata?.sessionInfo?.title,
       ).toBe('');

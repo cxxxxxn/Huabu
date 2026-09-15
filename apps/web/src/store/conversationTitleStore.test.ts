@@ -79,6 +79,63 @@ describe('conversation titles', () => {
     expect(current()).toEqual({ title: 'First prompt', source: 'fallback' });
   });
 
+  it.each([
+    ['# **Research plan**', 'Research plan'],
+    ['Intro\n## Specific topic', 'Specific topic'],
+    ['\n> - **Topic** and `code`', 'Topic and code'],
+    ['A'.repeat(80), 'A'.repeat(50)],
+  ])(
+    'seeds the same fallback that the server returns for %s',
+    async (prompt, expected) => {
+      seedConversationTitle('canvas', 'thread', prompt);
+      expect(current()).toEqual({ title: expected, source: 'fallback' });
+      query.mockResolvedValueOnce({
+        titles: { thread: { title: expected, source: 'fallback' } },
+      });
+      await refreshConversationTitles('canvas', ['thread']);
+      expect(current()).toEqual({ title: expected, source: 'fallback' });
+    },
+  );
+
+  it('flushes a rehydrated manual title when the durable thread has no title', async () => {
+    localStorage.setItem(
+      'huabu.conversationTitleDrafts',
+      JSON.stringify({
+        version: 1,
+        state: { pending: { [key]: 'Manual name' } },
+      }),
+    );
+    await useConversationTitleStore.persist.rehydrate();
+    query.mockResolvedValueOnce({
+      titles: { thread: { title: null, source: null } },
+    });
+    await refreshConversationTitles('canvas', ['thread']);
+    expect(save).toHaveBeenCalledExactlyOnceWith('canvas', 'thread', {
+      title: 'Manual name',
+    });
+    expect(current()).toEqual({ title: 'Manual name', source: 'user' });
+    expect(useConversationTitleStore.getState().pending).toEqual({});
+  });
+
+  it('keeps an untitled missing thread pending and retries when it becomes durable', async () => {
+    await renameConversationTitle('canvas', 'thread', 'Keep me', true);
+    query.mockResolvedValue({
+      titles: { thread: { title: null, source: null } },
+    });
+    save.mockRejectedValueOnce(
+      new ApiError(404, { code: 'thread_not_found' }, 'Not durable'),
+    );
+    await refreshConversationTitles('canvas', ['thread']);
+    expect(current().title).toBe('Keep me');
+    expect(needsConversationTitleRefresh('canvas', 'thread')).toBe(true);
+    expect(
+      useConversationTitleStore.getState().entries[key].error,
+    ).toBeUndefined();
+    await refreshConversationTitles('canvas', ['thread']);
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(useConversationTitleStore.getState().pending).toEqual({});
+  });
+
   it('batches all cold threads in chunks of at most 100 and dedupes overlapping requests', async () => {
     const result = deferred<QueryConversationTitlesResponse>();
     query.mockReturnValue(result.promise);

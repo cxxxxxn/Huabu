@@ -77,7 +77,7 @@ function threadRecord(threadId = THREAD_ID): ThreadRecord {
 }
 
 describe('Agenetes conversation stores on SQLite', () => {
-  it('preserves host title annotations through driver snapshots, restart, and rehome on SQLite', async () => {
+  it('preserves host title metadata through driver snapshots, restart, and rehome on SQLite', async () => {
     const opened = await openWithSpace();
     const namespace = canvasAcpNamespace(CANVAS_ID);
     let report!: (snapshot: AgentStateSnapshot) => void;
@@ -111,12 +111,11 @@ describe('Agenetes conversation stores on SQLite', () => {
       threadId: THREAD_ID,
       spec: {},
     });
-    instance.updateAnnotations(namespace, THREAD_ID, {
+    instance.updateHostMetadata(namespace, THREAD_ID, {
       otherFeature: { kept: true },
       huabuConversationTitle: {
-        user: 'Durable panel title',
-        acp: 'Last useful ACP',
-        fallback: 'First prompt',
+        title: 'Durable panel title',
+        source: 'user',
       },
     });
     report({
@@ -131,8 +130,8 @@ describe('Agenetes conversation stores on SQLite', () => {
     instance.close(THREAD_ID);
     const reopenedStorage = await opened.reopen();
     const restarted = mount();
-    expect(restarted.record(namespace, THREAD_ID)?.annotations).toEqual(
-      before.annotations,
+    expect(restarted.record(namespace, THREAD_ID)?.hostMetadata).toEqual(
+      before.hostMetadata,
     );
     expect(restarted.get(THREAD_ID)).toBeUndefined();
     const targetId = 'canvas-title-target';
@@ -150,7 +149,7 @@ describe('Agenetes conversation stores on SQLite', () => {
     );
     expect(restarted.record(namespace, THREAD_ID)).toBeUndefined();
     const moved = restarted.record(target, THREAD_ID)!;
-    expect(moved.annotations).toEqual(before.annotations);
+    expect(moved.hostMetadata).toEqual(before.hostMetadata);
     expect(effectiveConversationTitle(moved)).toEqual({
       title: 'Durable panel title',
       source: 'user',

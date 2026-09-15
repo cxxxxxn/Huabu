@@ -71,16 +71,14 @@ describe('conversation naming through canonical ProviderManager routing', () => 
     const onError = vi.fn();
     const service = new ConversationTitleService({
       readRecord: () => record,
-      updateAnnotations: (_canvas, _thread, patch) => {
+      updateHostMetadata: (_canvas, _thread, patch) => {
         record = {
           ...record,
-          annotations: { ...record.annotations, ...patch },
+          hostMetadata: { ...record.hostMetadata, ...patch },
         };
       },
       firstPrompt: () => 'Original first prompt',
-      resolveQuestion: async () => null,
       generate,
-      execute: vi.fn(),
       notifications: async function* () {},
       onError,
     });

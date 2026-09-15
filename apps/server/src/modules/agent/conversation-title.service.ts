@@ -1,9 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { z } from 'zod';
-
-import { setConversationTitleBodySchema } from '@huabu/shared';
+import {
+  conversationTitleSchema,
+  setConversationTitleBodySchema,
+} from '@huabu/shared';
 import {
   normalizeAcpConversationTitle,
   normalizeConversationTitle,
@@ -11,17 +12,12 @@ import {
 
 import { agenetes } from './agenetes/drivers.js';
 import { chatEnvelopeFromSubmission } from './agenetes/handle.js';
-import { agentThreadResolver } from './agent-thread-resolver.js';
 import { getLogger } from '../../utils/logger.js';
-import { executeOnServerAlreadyLocked } from '../canvas/canvas-executor.js';
-import { withCanvasMutex } from '../canvas/write-coordinator.js';
 import { coalesceInFlight } from '../preprocessing/coalesce.js';
 import { ProviderManager } from '../preprocessing/provider-manager.js';
 import { extractTitleFromText } from '../preprocessing/utils.js';
-import { space } from '../storage/index.js';
 import { canvasAcpNamespace } from '../workspace/paths.js';
 
-import type { AgentNodeTarget } from './agent-thread-resolver.js';
 import type { ThreadRecord } from '@agenetes/agenetes';
 import type { AgentMetadata } from '@agenetes/protocol';
 import type {
@@ -29,29 +25,20 @@ import type {
   QueryConversationTitlesResponse,
 } from '@huabu/shared';
 
-export const CONVERSATION_TITLE_ANNOTATION = 'huabuConversationTitle';
-const candidatesSchema = z.object({
-  user: z.string().optional(),
-  acp: z.string().optional(),
-  generated: z.string().optional(),
-  fallback: z.string().optional(),
-  lastSyncedNodeLabel: z
-    .object({ nodeId: z.string(), label: z.string() })
-    .optional(),
-});
-type Candidates = z.infer<typeof candidatesSchema>;
+export const CONVERSATION_TITLE_METADATA_KEY = 'huabuConversationTitle';
 
-function candidates(record: ThreadRecord): Candidates {
-  const parsed = candidatesSchema.safeParse(
-    record.annotations?.[CONVERSATION_TITLE_ANNOTATION],
+function storedTitle(record: ThreadRecord): ConversationTitle {
+  const parsed = conversationTitleSchema.safeParse(
+    record.hostMetadata?.[CONVERSATION_TITLE_METADATA_KEY],
   );
-  return parsed.success ? parsed.data : {};
+  return parsed.success ? parsed.data : { title: null, source: null };
 }
 
 function acpTitle(record: ThreadRecord): string | null {
+  const saved = storedTitle(record);
   return (
     normalizeAcpConversationTitle(record.state?.metadata?.sessionInfo?.title) ??
-    normalizeAcpConversationTitle(candidates(record).acp)
+    (saved.source === 'acp' ? normalizeAcpConversationTitle(saved.title) : null)
   );
 }
 
@@ -59,41 +46,29 @@ export function effectiveConversationTitle(
   record?: ThreadRecord,
 ): ConversationTitle {
   if (!record) return { title: null, source: null };
-  const saved = candidates(record);
-  const ordered = {
-    user: saved.user,
-    generated: saved.generated,
-    acp: acpTitle(record),
-    fallback: saved.fallback,
-  };
-  for (const source of ['user', 'generated', 'acp', 'fallback'] as const) {
-    const title = normalizeConversationTitle(ordered[source]);
-    if (title) return { title, source };
-  }
+  const saved = storedTitle(record);
+  const title =
+    saved.source === 'acp'
+      ? normalizeAcpConversationTitle(saved.title)
+      : normalizeConversationTitle(saved.title);
+  if (title && (saved.source === 'user' || saved.source === 'generated'))
+    return { title, source: saved.source };
+  const acp = acpTitle(record);
+  if (acp) return { title: acp, source: 'acp' };
+  if (title && saved.source === 'fallback')
+    return { title, source: 'fallback' };
   return { title: null, source: null };
-}
-
-interface QuestionTitleTarget extends AgentNodeTarget {
-  label?: unknown;
-  labelSource?: unknown;
-  conversationTitleSource?: unknown;
 }
 
 export interface ConversationTitleDependencies {
   readRecord: (canvasId: string, threadId: string) => ThreadRecord | undefined;
-  updateAnnotations: (
+  updateHostMetadata: (
     canvasId: string,
     threadId: string,
     patch: Record<string, unknown>,
   ) => void;
   firstPrompt: (canvasId: string, threadId: string) => string | undefined;
-  resolveQuestion: (
-    canvasId: string,
-    threadId: string,
-  ) => Promise<QuestionTitleTarget | null>;
   generate: (prompt: string) => Promise<string | undefined>;
-  /** Executes while the service holds the Canvas write mutex. */
-  execute: typeof executeOnServerAlreadyLocked;
   notifications: (
     canvasId: string,
     threadId: string,
@@ -105,8 +80,8 @@ const provider = new ProviderManager();
 const defaults: ConversationTitleDependencies = {
   readRecord: (canvasId, threadId) =>
     agenetes.record(canvasAcpNamespace(canvasId), threadId),
-  updateAnnotations: (canvasId, threadId, patch) => {
-    agenetes.updateAnnotations(canvasAcpNamespace(canvasId), threadId, patch);
+  updateHostMetadata: (canvasId, threadId, patch) => {
+    agenetes.updateHostMetadata(canvasAcpNamespace(canvasId), threadId, patch);
   },
   firstPrompt: (canvasId, threadId) => {
     for (const turn of agenetes.history(
@@ -119,27 +94,6 @@ const defaults: ConversationTitleDependencies = {
     }
     return undefined;
   },
-  resolveQuestion: async (canvasId, threadId) => {
-    const target = await agentThreadResolver.resolveAgentNode(
-      canvasId,
-      threadId,
-    );
-    if (!target) return null;
-    const handle = space(canvasId);
-    const node = (await handle.nodes.read(target.nodeId))?.record;
-    const canvas = await handle.read();
-    const structure = (
-      canvas?.state.nodes as
-        | Array<{ id: string; data?: { conversationTitleSource?: unknown } }>
-        | undefined
-    )?.find((item) => item.id === target.nodeId);
-    return {
-      ...target,
-      label: node?.label,
-      labelSource: node?.['labelSource'],
-      conversationTitleSource: structure?.data?.conversationTitleSource,
-    };
-  },
   generate: async (prompt) =>
     (
       await provider.generateContentMeta(prompt, {
@@ -148,7 +102,6 @@ const defaults: ConversationTitleDependencies = {
         needKeywords: false,
       })
     )?.label,
-  execute: executeOnServerAlreadyLocked,
   notifications: (canvasId, threadId) =>
     agenetes.notifications(threadId, canvasAcpNamespace(canvasId)),
   onError: (error) =>
@@ -158,7 +111,7 @@ const defaults: ConversationTitleDependencies = {
     ),
 };
 
-/** Host-owned panel names; never rewrites the driver's sessionInfo or node body. */
+/** Independent host-owned Chat names; never realizes a driver or reads/writes nodes. */
 export class ConversationTitleService {
   private readonly inFlight = new Map<string, Promise<void>>();
   private readonly subscriptions = new Map<string, symbol>();
@@ -166,10 +119,6 @@ export class ConversationTitleService {
   constructor(
     private readonly deps: ConversationTitleDependencies = defaults,
   ) {}
-
-  hasThread(canvasId: string, threadId: string): boolean {
-    return !!this.deps.readRecord(canvasId, threadId);
-  }
 
   get(canvasId: string, threadId: string): ConversationTitle {
     const record = this.deps.readRecord(canvasId, threadId);
@@ -201,7 +150,7 @@ export class ConversationTitleService {
     if (!parsed.success) throw new Error('Invalid conversation title');
     const user = normalizeConversationTitle(parsed.data.title);
     if (!user) throw new Error('Invalid conversation title');
-    if (!this.merge(canvasId, threadId, { user })) return null;
+    if (!this.writeTitle(canvasId, threadId, user, 'user')) return null;
     return this.get(canvasId, threadId);
   }
 
@@ -226,158 +175,40 @@ export class ConversationTitleService {
   ): Promise<void> {
     const record = this.deps.readRecord(canvasId, threadId);
     if (!record) return;
-    const saved = candidates(record);
-    if (saved.generated) {
-      await this.syncQuestionTitle(canvasId, threadId);
-      return;
-    }
-    if (saved.user) return;
+    const saved = effectiveConversationTitle(record);
+    if (saved.source === 'user' || saved.source === 'generated') return;
     const firstPrompt = this.deps.firstPrompt(canvasId, threadId) ?? prompt;
-    if (!saved.fallback) {
+    if (!saved.title) {
       const fallback = normalizeConversationTitle(
         extractTitleFromText(firstPrompt),
       );
-      if (fallback) this.merge(canvasId, threadId, { fallback });
+      if (fallback) this.writeTitle(canvasId, threadId, fallback, 'fallback');
     }
     if (!firstPrompt.trim()) return;
-    const question = await this.deps.resolveQuestion(canvasId, threadId);
-    // Reuse a semantic auto label produced before the durable thread existed.
-    if (
-      question?.labelSource === 'auto' &&
-      question.conversationTitleSource === undefined &&
-      normalizeConversationTitle(question.label) &&
-      normalizeConversationTitle(question.label) !==
-        normalizeConversationTitle(extractTitleFromText(firstPrompt))
-    ) {
-      await this.saveGenerated(canvasId, threadId, question.label);
-      return;
-    }
-    const current = this.deps.readRecord(canvasId, threadId);
-    if (!current) return;
-    const effective = effectiveConversationTitle(current);
-    if (effective.source === 'user' || effective.source === 'generated') return;
     const generated = await this.deps.generate(firstPrompt);
-    // merge reads the latest record after the await. Higher-priority names
-    // and unrelated annotations survive; get() always re-evaluates precedence.
-    await this.saveGenerated(canvasId, threadId, generated);
+    // Check the latest source after the await; a manual rename wins even if
+    // generation began earlier. Rejected titles are not retained as candidates.
+    this.saveGenerated(canvasId, threadId, generated);
   }
 
-  async saveGenerated(
+  private saveGenerated(
     canvasId: string,
     threadId: string,
     value: unknown,
-  ): Promise<void> {
+  ): void {
     const generated = normalizeConversationTitle(value);
-    const record = this.deps.readRecord(canvasId, threadId);
-    if (generated && record && !candidates(record).generated) {
-      this.merge(canvasId, threadId, { generated });
-    }
-    if (generated) await this.syncQuestionTitle(canvasId, threadId);
+    if (!generated) return;
+    this.writeTitle(canvasId, threadId, generated, 'generated');
   }
 
-  async acceptAcpTitle(
+  private acceptAcpTitle(
     canvasId: string,
     threadId: string,
     value: unknown,
-  ): Promise<void> {
+  ): void {
     const title = normalizeAcpConversationTitle(value);
     if (!title) return;
-    if (!this.merge(canvasId, threadId, { acp: title })) return;
-    await this.syncQuestionTitle(canvasId, threadId);
-  }
-
-  private questionTitle(canvasId: string, threadId: string): string | null {
-    const record = this.deps.readRecord(canvasId, threadId);
-    if (!record) return null;
-    const saved = candidates(record);
-    // A manual panel name is not a manual Question label.
-    return normalizeConversationTitle(saved.generated) ?? acpTitle(record);
-  }
-
-  /** Exact persisted provenance, not a guess based on an agent label's text. */
-  ownsQuestionLabel(
-    canvasId: string,
-    threadId: string,
-    nodeId: string,
-    label: unknown,
-    labelSource: unknown,
-  ): boolean {
-    const record = this.deps.readRecord(canvasId, threadId);
-    const synced = record && candidates(record).lastSyncedNodeLabel;
-    return (
-      labelSource === 'agent' &&
-      synced?.nodeId === nodeId &&
-      synced.label === label
-    );
-  }
-
-  /** Enrich and turn initialization share the same first-prompt generation. */
-  async generateQuestionLabel(
-    canvasId: string,
-    threadId: string,
-    prompt: string,
-  ): Promise<string | undefined> {
-    await this.initialize(canvasId, threadId, prompt);
-    const record = this.deps.readRecord(canvasId, threadId);
-    return record ? candidates(record).generated : undefined;
-  }
-
-  private async syncQuestionTitle(
-    canvasId: string,
-    threadId: string,
-  ): Promise<void> {
-    await withCanvasMutex(canvasId, async () => {
-      const target = await this.deps.resolveQuestion(canvasId, threadId);
-      const title = this.questionTitle(canvasId, threadId);
-      if (!target || !title) return;
-      const output = await this.deps.execute({
-        canvasId,
-        originator: { source: 'system' },
-        commands: [
-          {
-            type: 'MERGE_NODE_DATA',
-            patches: [
-              {
-                nodeId: target.nodeId,
-                patch: { label: title, labelSource: 'agent' },
-              },
-            ],
-          },
-        ],
-        guard: (nodes) => {
-          const node = nodes.find((item) => item.id === target.nodeId);
-          return (
-            node?.type === 'question' &&
-            node.data.threadId === threadId &&
-            node.data.labelSource !== 'user' &&
-            (node.data.labelSource !== 'agent' ||
-              this.ownsQuestionLabel(
-                canvasId,
-                threadId,
-                target.nodeId,
-                node.data.label,
-                node.data.labelSource,
-              )) &&
-            this.questionTitle(canvasId, threadId) === title
-          );
-        },
-      });
-      if (!output.results.some((result) => result.applied)) return;
-      // Record the actual persisted label (including name deduplication) before
-      // releasing the same mutex. Unrelated agent/user renames revoke ownership.
-      const committed = await this.deps.resolveQuestion(canvasId, threadId);
-      if (
-        committed?.nodeId === target.nodeId &&
-        typeof committed.label === 'string'
-      ) {
-        this.merge(canvasId, threadId, {
-          lastSyncedNodeLabel: {
-            nodeId: target.nodeId,
-            label: committed.label,
-          },
-        });
-      }
-    });
+    this.writeTitle(canvasId, threadId, title, 'acp');
   }
 
   /** Install at realization, before session bootstrap; notifications are persist-then-notify. */
@@ -394,7 +225,7 @@ export class ConversationTitleService {
         // Register before replaying persisted state so bootstrap updates are
         // buffered, including a blank update following a useful cached title.
         try {
-          await this.acceptAcpTitle(
+          this.acceptAcpTitle(
             canvasId,
             threadId,
             record ? acpTitle(record) : undefined,
@@ -404,11 +235,7 @@ export class ConversationTitleService {
         }
         for await (const meta of stream) {
           try {
-            await this.acceptAcpTitle(
-              canvasId,
-              threadId,
-              meta.sessionInfo?.title,
-            );
+            this.acceptAcpTitle(canvasId, threadId, meta.sessionInfo?.title);
           } catch (error) {
             this.deps.onError(error);
           }
@@ -422,21 +249,27 @@ export class ConversationTitleService {
     })();
   }
 
-  private merge(
+  /** Replace the current title only when its source permits the incoming update. */
+  private writeTitle(
     canvasId: string,
     threadId: string,
-    patch: Candidates,
+    title: string,
+    source: NonNullable<ConversationTitle['source']>,
   ): boolean {
     const record = this.deps.readRecord(canvasId, threadId);
     if (!record) return false;
-    const saved = candidates(record);
+    const current = effectiveConversationTitle(record);
     if (
-      Object.entries(patch).some(
-        ([key, value]) => saved[key as keyof Candidates] !== value,
-      )
-    ) {
-      this.deps.updateAnnotations(canvasId, threadId, {
-        [CONVERSATION_TITLE_ANNOTATION]: { ...saved, ...patch },
+      source !== 'user' &&
+      (current.source === 'user' ||
+        current.source === 'generated' ||
+        (source === 'fallback' && current.title !== null))
+    )
+      return false;
+    const saved = storedTitle(record);
+    if (saved.title !== title || saved.source !== source) {
+      this.deps.updateHostMetadata(canvasId, threadId, {
+        [CONVERSATION_TITLE_METADATA_KEY]: { title, source },
       });
     }
     return true;

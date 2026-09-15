@@ -9,16 +9,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { agenetes } from './agenetes/drivers.js';
 import {
-  CONVERSATION_TITLE_ANNOTATION,
+  CONVERSATION_TITLE_METADATA_KEY,
   ConversationTitleService,
 } from './conversation-title.service.js';
 import { executeOnServer } from '../canvas/canvas-executor.js';
+import { PreprocessDispatcher } from '../preprocessing/dispatcher.js';
 import { ProviderManager } from '../preprocessing/provider-manager.js';
 import { getCanvasStore } from '../storage/index.js';
 import { setWorkspacePath } from '../workspace.js';
 
 import type { ThreadRecord } from '@agenetes/agenetes';
-import type { ConversationTitle, LabelSource } from '@huabu/shared';
+import type { ConversationTitle } from '@huabu/shared';
 
 const canvasId = 'canvas-conversion';
 const threadId = 'thread-conversion';
@@ -37,9 +38,16 @@ afterEach(() => {
 });
 
 async function fixture(
-  source: ConversationTitle['source'] = 'acp',
-  labelSource: LabelSource = 'auto',
+  source: NonNullable<ConversationTitle['source']> = 'acp',
+  convertImmediately = true,
 ) {
+  const title = {
+    acp: 'ACP fallback',
+    generated: 'Generated title',
+    fallback: 'First user prompt',
+    user: 'Manual title',
+  }[source];
+  const labelSource = source === 'user' ? 'user' : 'agent';
   let record: ThreadRecord = {
     driverSchemaVersion: 1,
     spec: {
@@ -51,21 +59,25 @@ async function fixture(
     },
     state: {
       driverState: {},
-      metadata: { sessionInfo: { title: 'ACP fallback', updatedAt: null } },
+      metadata: {
+        sessionInfo: { title: source === 'acp' ? title : '', updatedAt: null },
+      },
     },
-    annotations: {
-      [CONVERSATION_TITLE_ANNOTATION]:
-        source === 'generated' ? { generated: 'Generated title' } : {},
+    hostMetadata: {
+      [CONVERSATION_TITLE_METADATA_KEY]: {
+        title,
+        source,
+      },
     },
   };
   vi.spyOn(agenetes, 'record').mockImplementation(() => record);
   vi.spyOn(agenetes, 'history').mockReturnValue({ turns: [] } as never);
-  vi.spyOn(agenetes, 'updateAnnotations').mockImplementation(
+  vi.spyOn(agenetes, 'updateHostMetadata').mockImplementation(
     (_namespace, _thread, patch) => {
       record = JSON.parse(
         JSON.stringify({
           ...record,
-          annotations: { ...record.annotations, ...patch },
+          hostMetadata: { ...record.hostMetadata, ...patch },
         }),
       ) as ThreadRecord;
       return record;
@@ -74,6 +86,21 @@ async function fixture(
   const generate = vi
     .spyOn(ProviderManager.prototype, 'generateContentMeta')
     .mockResolvedValue({ label: 'Generated title' });
+  const notifications = vi
+    .spyOn(agenetes, 'notifications')
+    .mockImplementation(async function* () {});
+  const notify = async (service: ConversationTitleService, title: string) => {
+    let finished = false;
+    notifications.mockImplementationOnce(async function* () {
+      record.state.metadata = {
+        sessionInfo: { title, updatedAt: null },
+      };
+      yield record.state.metadata;
+      finished = true;
+    });
+    service.subscribe(canvasId, threadId);
+    await vi.waitFor(() => expect(finished).toBe(true));
+  };
   const store = getCanvasStore(canvasId);
   store.write({
     canvasId,
@@ -91,90 +118,48 @@ async function fixture(
         type: 'CREATE_NODES',
         nodes: [
           {
-            id: 'node-existing-acp',
+            id: 'node-existing-title',
             nodeType: 'note',
             position: { x: 0, y: 0 },
-            data: { label: 'ACP fallback' },
-          },
-          {
-            id: 'node-existing-generated',
-            nodeType: 'note',
-            position: { x: 0, y: 100 },
-            data: { label: 'Generated title' },
-          },
-          {
-            id: 'node-q',
-            nodeType: 'question',
-            position: { x: 200, y: 0 },
-            data: {
-              threadId,
-              label:
-                source === 'generated' ? 'Generated title' : 'ACP fallback',
-              labelSource,
-              ...(source ? { conversationTitleSource: source } : {}),
-              content: 'First user prompt',
-              status: 'done',
-              viewed: true,
-            },
+            data: { label: title },
           },
         ],
       },
     ],
   });
-  return { store, generate, record: () => record };
-}
-
-describe('persisted Chat to Question title conversion', () => {
-  it('retries copied ACP after unavailable generation, coalesces Enrich/init, and records the deduplicated upgrade', async () => {
-    const { store, generate, record } = await fixture();
-    const copied = store.readNode('node-q')?.label;
-    expect(copied).not.toBe('ACP fallback');
-    expect(store.read()?.state.nodes).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: 'node-q',
-          data: expect.objectContaining({ conversationTitleSource: 'acp' }),
-        }),
-      ]),
-    );
-    generate.mockResolvedValueOnce(undefined);
-    await new ConversationTitleService().initialize(
+  const convert = async () => {
+    await executeOnServer({
       canvasId,
-      threadId,
-      'First user prompt',
-    );
-    expect(store.readNode('node-q')?.label).toBe(copied);
-    expect(
-      record().annotations?.[CONVERSATION_TITLE_ANNOTATION],
-    ).not.toHaveProperty('generated');
-    const restarted = new ConversationTitleService();
-    await Promise.all([
-      restarted.initialize(canvasId, threadId, 'First user prompt'),
-      restarted.generateQuestionLabel(canvasId, threadId, 'First user prompt'),
-    ]);
-    const committed = store.readNode('node-q');
-    expect(committed).toMatchObject({
+      originator: { source: 'ui' },
+      commands: [
+        {
+          type: 'CREATE_NODES',
+          nodes: [
+            {
+              id: 'node-q',
+              nodeType: 'question',
+              position: { x: 200, y: 0 },
+              data: {
+                threadId,
+                label: title,
+                labelSource,
+                content: 'First user prompt',
+                status: 'done',
+                viewed: true,
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const node = store.readNode('node-q');
+    const canvas = store.read();
+    expect(node).toMatchObject({
+      label: `${title} 1`,
+      labelSource,
       content: 'First user prompt',
-      labelSource: 'agent',
     });
-    expect(committed?.label).not.toBe(copied);
-    expect(committed?.label).not.toBe('Generated title');
-    expect(record().annotations?.[CONVERSATION_TITLE_ANNOTATION]).toMatchObject(
-      {
-        generated: 'Generated title',
-        lastSyncedNodeLabel: { nodeId: 'node-q', label: committed?.label },
-      },
-    );
-    await restarted.acceptAcpTitle(canvasId, threadId, 'Late ACP');
-    await restarted.generateQuestionLabel(canvasId, threadId, 'Later prompt');
-    expect(store.readNode('node-q')?.label).toBe(committed?.label);
-    expect(generate).toHaveBeenCalledTimes(2);
-    expect(generate).toHaveBeenLastCalledWith('First user prompt', {
-      needLabel: true,
-      needSummary: false,
-      needKeywords: false,
-    });
-    expect(store.read()?.state.nodes).toEqual(
+    expect(canvas?.state.nodes).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           id: 'node-q',
@@ -186,89 +171,167 @@ describe('persisted Chat to Question title conversion', () => {
         }),
       ]),
     );
+    return () => {
+      const reopened = getCanvasStore(canvasId);
+      expect(reopened.readNode('node-q')).toEqual(node);
+      expect(reopened.read()?.version).toBe(canvas?.version);
+      expect(reopened.read()).toEqual(canvas);
+    };
+  };
+  const checkUnchanged = convertImmediately ? await convert() : undefined;
+  const assertUnchanged = () => {
+    if (!checkUnchanged)
+      throw new Error('Question conversion has not been created');
+    checkUnchanged();
+  };
+  return {
+    store,
+    generate,
+    record: () => record,
+    convert,
+    assertUnchanged,
+    notify,
+  };
+}
+
+describe('persisted Chat to Question title conversion', () => {
+  it('keeps the canonical copied ACP label through retries, ACP metadata, generated and manual Chat titles, and restart', async () => {
+    const { generate, record, assertUnchanged, notify } = await fixture();
+    generate.mockResolvedValueOnce(undefined);
+    const service = new ConversationTitleService();
+    await service.initialize(canvasId, threadId, 'First user prompt');
+    assertUnchanged();
+    expect(record().hostMetadata?.[CONVERSATION_TITLE_METADATA_KEY]).toEqual({
+      title: 'ACP fallback',
+      source: 'acp',
+    });
+    await notify(service, 'Later ACP title');
+    expect(service.get(canvasId, threadId)).toEqual({
+      title: 'Later ACP title',
+      source: 'acp',
+    });
+    assertUnchanged();
+    const restarted = new ConversationTitleService();
+    await Promise.all([
+      restarted.initialize(canvasId, threadId, 'First user prompt'),
+      restarted.initialize(canvasId, threadId, 'First user prompt'),
+    ]);
+    expect(record().hostMetadata?.[CONVERSATION_TITLE_METADATA_KEY]).toEqual({
+      title: 'Generated title',
+      source: 'generated',
+    });
+    assertUnchanged();
+    await notify(restarted, 'Late ACP');
+    expect(restarted.get(canvasId, threadId)).toEqual({
+      title: 'Generated title',
+      source: 'generated',
+    });
+    assertUnchanged();
+    expect(restarted.setUserTitle(canvasId, threadId, 'Renamed Chat')).toEqual({
+      title: 'Renamed Chat',
+      source: 'user',
+    });
+    assertUnchanged();
+    const again = new ConversationTitleService();
+    await again.initialize(canvasId, threadId, 'Later prompt');
+    expect(again.get(canvasId, threadId)).toEqual({
+      title: 'Renamed Chat',
+      source: 'user',
+    });
+    assertUnchanged();
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(generate).toHaveBeenLastCalledWith('First user prompt', {
+      needLabel: true,
+      needSummary: false,
+      needKeywords: false,
+    });
   });
 
-  it('uses the persisted generated candidate without duplicate naming or suffix churn', async () => {
-    const { store, generate } = await fixture('generated');
-    await new ConversationTitleService().generateQuestionLabel(
-      canvasId,
-      threadId,
-      'First user prompt',
-    );
-    // Create and rename use different canonical collision suffix formats.
-    // Once adopted by title sync, repeated initialization must be stable.
-    const before = store.readNode('node-q')?.label;
+  it.each(['generated', 'fallback', 'user'] as const)(
+    'preserves the canonical copied %s label through later Chat titles and restart',
+    async (source) => {
+      const { generate, assertUnchanged, notify } = await fixture(source);
+      const service = new ConversationTitleService();
+      await service.initialize(canvasId, threadId, 'First user prompt');
+      generate.mockResolvedValue({ label: 'Later generated title' });
+      await service.initialize(canvasId, threadId, 'Later prompt');
+      expect(service.get(canvasId, threadId)).toEqual({
+        title: source === 'user' ? 'Manual title' : 'Generated title',
+        source: source === 'user' ? 'user' : 'generated',
+      });
+      assertUnchanged();
+      await notify(service, 'Later ACP title');
+      assertUnchanged();
+      service.setUserTitle(canvasId, threadId, 'Later manual Chat title');
+      assertUnchanged();
+      const restarted = new ConversationTitleService();
+      await restarted.initialize(canvasId, threadId, 'Later prompt');
+      expect(restarted.get(canvasId, threadId)).toEqual({
+        title: 'Later manual Chat title',
+        source: 'user',
+      });
+      assertUnchanged();
+      expect(generate).toHaveBeenCalledTimes(source === 'fallback' ? 1 : 0);
+    },
+  );
+
+  it('does not rename the created Question when pre-conversion generation finishes', async () => {
+    const { store, generate, convert } = await fixture('acp', false);
+    let complete!: (value: { label: string }) => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    generate.mockImplementationOnce(() => {
+      markStarted();
+      return new Promise((resolve) => {
+        complete = resolve;
+      });
+    });
+    const service = new ConversationTitleService();
+    const pending = service.initialize(canvasId, threadId, 'First user prompt');
+    await started;
+    expect(store.readNode('node-q')).toBeNull();
+    const assertUnchanged = await convert();
+    complete({ label: 'Generated title' });
+    await pending;
+    expect(service.get(canvasId, threadId)).toEqual({
+      title: 'Generated title',
+      source: 'generated',
+    });
+    assertUnchanged();
     await new ConversationTitleService().initialize(
       canvasId,
       threadId,
       'Later prompt',
     );
-    expect(store.readNode('node-q')).toMatchObject({
-      label: before,
-      labelSource: 'agent',
-    });
-    expect(generate).not.toHaveBeenCalled();
+    assertUnchanged();
+    expect(generate).toHaveBeenCalledOnce();
   });
 
-  it.each(['user', 'agent'] as const)(
-    'never lets conversion metadata override a later %s rename',
+  it.each(['acp', 'generated', 'fallback', 'user'] as const)(
+    'protects a copied %s title during ordinary Question preprocessing',
     async (source) => {
-      const { store } = await fixture();
-      await executeOnServer({
+      const { store, generate, assertUnchanged } = await fixture(source);
+      const node = store.readNode('node-q');
+      if (!node) throw new Error('Missing converted Question node');
+      const result = await new PreprocessDispatcher().preprocess({
         canvasId,
-        originator: { source: 'ui' },
-        commands: [
-          {
-            type: 'MERGE_NODE_DATA',
-            patches: [
-              {
-                nodeId: 'node-q',
-                patch: { label: 'Authored name', labelSource: source },
-              },
-            ],
-          },
-        ],
+        nodeId: 'node-q',
+        nodeType: 'question',
+        trigger: 'node_inserted',
+        snapshot: {
+          content: node.content,
+          title: node.label,
+          labelSource: node.labelSource,
+        },
       });
-      await new ConversationTitleService().initialize(
-        canvasId,
-        threadId,
-        'First user prompt',
-      );
-      expect(store.readNode('node-q')).toMatchObject({
-        label: 'Authored name',
-        labelSource: source,
-      });
+      expect(result.success).toBe(true);
+      expect(result.usedCapabilities).not.toContain('generate_label');
+      expect(result.patch).not.toHaveProperty('label');
+      expect(result.patch).not.toHaveProperty('labelSource');
+      expect(generate).not.toHaveBeenCalled();
+      assertUnchanged();
     },
   );
-
-  it('preserves a copied manual title', async () => {
-    const { store } = await fixture('user', 'user');
-    const before = store.readNode('node-q')?.label;
-    await new ConversationTitleService().saveGenerated(
-      canvasId,
-      threadId,
-      'Generated title',
-    );
-    expect(store.readNode('node-q')).toMatchObject({
-      label: before,
-      labelSource: 'user',
-    });
-  });
-
-  it('does not migrate legacy copied ACP agent labels without provenance', async () => {
-    const { store, record } = await fixture(null, 'agent');
-    const before = store.readNode('node-q')?.label;
-    await new ConversationTitleService().initialize(
-      canvasId,
-      threadId,
-      'First user prompt',
-    );
-    expect(store.readNode('node-q')).toMatchObject({
-      label: before,
-      labelSource: 'agent',
-    });
-    expect(
-      record().annotations?.[CONVERSATION_TITLE_ANNOTATION],
-    ).not.toHaveProperty('lastSyncedNodeLabel');
-  });
 });

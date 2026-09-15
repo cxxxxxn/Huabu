@@ -5,6 +5,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ApiError } from '@/api/_client';
 import {
   queryConversationTitles,
   setConversationTitle,
@@ -147,6 +148,30 @@ afterEach(async () => {
 });
 
 describe('useConversationTitles', () => {
+  it('bounds pending saves for absent untitled threads and retries on focus', async () => {
+    const key = conversationTitleKey('canvas', 'draft');
+    useConversationTitleStore.setState({ pending: { [key]: 'Manual draft' } });
+    query.mockResolvedValue({
+      titles: { draft: { title: null, source: null } },
+    });
+    vi.mocked(setConversationTitle).mockRejectedValue(
+      new ApiError(404, { code: 'thread_not_found' }, 'Not durable'),
+    );
+    await renderHook(workspaceWith(chat('draft')));
+    for (const delay of retryDelays) await advance(delay);
+    expect(setConversationTitle).toHaveBeenCalledTimes(6);
+    await advance(300000);
+    expect(setConversationTitle).toHaveBeenCalledTimes(6);
+    expect(getConversationTitle('canvas', 'draft').title).toBe('Manual draft');
+    vi.mocked(setConversationTitle).mockResolvedValue({
+      title: 'Manual draft',
+      source: 'user',
+    });
+    await focus();
+    expect(setConversationTitle).toHaveBeenCalledTimes(7);
+    expect(useConversationTitleStore.getState().pending).toEqual({});
+  });
+
   it('batches every open chat, including cold tabs, by canvas and excludes node targets', async () => {
     query.mockImplementation(async ({ canvasId, threadIds }) =>
       response(threadIds, 'generated', canvasId),
@@ -377,6 +402,107 @@ describe('useConversationTitles', () => {
       expect(vi.getTimerCount()).toBe(0);
     },
   );
+
+  it.each(['canvas', 'other-canvas'])(
+    'does not query settled unrelated chats in %s after another chat streams',
+    async (otherCanvas) => {
+      query.mockImplementation(async ({ threadIds }) =>
+        response(threadIds, 'generated'),
+      );
+      await renderHook(workspaceWith(chat('a'), chat('b', otherCanvas)));
+      await advance(200000);
+      query.mockClear();
+
+      await act(async () => refreshConversationTitleAfterStream('canvas', 'a'));
+      expect(query.mock.calls.map(([body]) => body)).toEqual([
+        { canvasId: 'canvas', threadIds: ['a'] },
+      ]);
+      await advance(200000);
+      expect(query).toHaveBeenCalledTimes(1);
+      expect(getConversationTitle(otherCanvas, 'b').source).toBe('generated');
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it('retries late generation after an epoch without reading a settled cold chat', async () => {
+    query.mockResolvedValue({
+      titles: {
+        a: { title: 'First prompt', source: 'fallback' },
+        b: { title: 'Settled cold chat', source: 'user' },
+      },
+    });
+    await renderHook(workspaceWith(chat('b'), chat('warm'), chat('a')));
+    await advance(200000);
+    query.mockClear();
+    const postStream = deferredResponse();
+    query
+      .mockReturnValueOnce(postStream.promise)
+      .mockResolvedValueOnce(response(['a']))
+      .mockResolvedValueOnce(response(['a'], 'generated', 'Late title'));
+
+    await act(async () => refreshConversationTitleAfterStream('canvas', 'a'));
+    expect(query.mock.calls.map(([body]) => body)).toEqual([
+      { canvasId: 'canvas', threadIds: ['a'] },
+    ]);
+    await act(async () => postStream.resolve(response(['a'])));
+    await advance(999);
+    expect(query).toHaveBeenCalledTimes(1);
+    await advance(1);
+    await advance(3000);
+    expect(getConversationTitle('canvas', 'a')).toEqual({
+      title: 'Late title a',
+      source: 'generated',
+    });
+    await advance(200000);
+    expect(query.mock.calls.map(([body]) => body)).toEqual(
+      Array.from({ length: 3 }, () => ({
+        canvasId: 'canvas',
+        threadIds: ['a'],
+      })),
+    );
+    expect(getConversationTitle('canvas', 'b').title).toBe('Settled cold chat');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('keeps pending 404 retries finite after an epoch without querying settled chats', async () => {
+    const key = conversationTitleKey('canvas', 'draft');
+    useConversationTitleStore.setState({ pending: { [key]: 'Manual draft' } });
+    query.mockResolvedValue({
+      titles: {
+        draft: { title: null, source: null },
+        settled: { title: 'Settled', source: 'generated' },
+      },
+    });
+    vi.mocked(setConversationTitle).mockRejectedValue(
+      new ApiError(404, { code: 'thread_not_found' }, 'Not durable'),
+    );
+    await renderHook(workspaceWith(chat('draft'), chat('settled')));
+    await advance(200000);
+    query.mockClear();
+    vi.mocked(setConversationTitle).mockClear();
+
+    await act(async () =>
+      refreshConversationTitleAfterStream('canvas', 'draft'),
+    );
+    // The stream path flushes first, then its query retries pending intent.
+    expect(setConversationTitle).toHaveBeenCalledTimes(2);
+    for (const delay of retryDelays) await advance(delay);
+    expect(setConversationTitle).toHaveBeenCalledTimes(7);
+    expect(query.mock.calls.map(([body]) => body)).toEqual(
+      Array.from({ length: 6 }, () => ({
+        canvasId: 'canvas',
+        threadIds: ['draft'],
+      })),
+    );
+    await advance(86400000);
+    expect(setConversationTitle).toHaveBeenCalledTimes(7);
+    expect(query).toHaveBeenCalledTimes(6);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(getConversationTitle('canvas', 'draft').title).toBe('Manual draft');
+    expect(useConversationTitleStore.getState().pending[key]).toBe(
+      'Manual draft',
+    );
+  });
 
   it('cancels the previous retry timer when a stream refresh starts a new window', async () => {
     await renderHook(workspaceWith(chat('pending')));

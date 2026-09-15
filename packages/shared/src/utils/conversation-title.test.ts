@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  extractTitleFromText,
   normalizeAcpConversationTitle,
   normalizeConversationTitle,
 } from './conversation-title.js';
@@ -12,6 +13,19 @@ const promptLikeTitle =
   'You are a helpful assistant collaborating with a user inside **Huabu**, an infinite visual Space. The user works on an i';
 
 describe('conversation title normalization', () => {
+  it.each([
+    ['', undefined],
+    [' \n\t ', undefined],
+    ['# **Research plan**', 'Research plan'],
+    ['Intro\n## Specific topic', 'Specific topic'],
+    ['\r\nFirst line\r\nSecond line', 'First line'],
+    ['> - **Topic** and `code`', 'Topic and code'],
+    ['[Link](https://example.com) and ![image](image.png)', 'Link and image'],
+    ['A'.repeat(80), 'A'.repeat(50)],
+  ])('extracts the shared fallback from %j', (input, expected) => {
+    expect(extractTitleFromText(input as string)).toBe(expected);
+  });
+
   it('preserves host/manual normalization and truncation semantics', () => {
     expect(normalizeConversationTitle(' \n A  useful\t title ')).toBe(
       'A useful title',

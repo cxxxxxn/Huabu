@@ -5,6 +5,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 import {
+  extractTitleFromText,
   normalizeAcpConversationTitle,
   normalizeConversationTitle,
 } from '@huabu/shared/conversation-title';
@@ -128,7 +129,7 @@ export function seedConversationTitle(
   prompt: string,
 ) {
   const key = conversationTitleKey(canvasId, threadId);
-  const title = prompt.trim().split(/\r?\n/, 1)[0]?.trim().slice(0, 120);
+  const title = normalizeConversationTitle(extractTitleFromText(prompt));
   if (title && !entry(key).value.title)
     patch(key, { value: { title, source: 'fallback' } });
 }
@@ -202,7 +203,9 @@ export async function refreshConversationTitles(
                 error: current.failedTitle ? current.error : undefined,
               });
             }
-            if (entry(key).durable)
+            // An empty title does not imply that the durable thread is absent.
+            // Attempt pending intent; 404 retains it for the bounded retry path.
+            if (useConversationTitleStore.getState().pending[key])
               await flushPendingConversationTitle(canvasId, threadId);
           }),
         );
@@ -381,10 +384,10 @@ export function needsConversationTitleRefresh(
   const key = conversationTitleKey(canvasId, threadId);
   const current = entry(key);
   return (
+    !!useConversationTitleStore.getState().pending[key] ||
     !!current.error ||
     current.value.source === 'fallback' ||
     current.value.source === 'acp' ||
-    (!!current.durable && !current.value.title) ||
-    (!!current.durable && !!useConversationTitleStore.getState().pending[key])
+    (!!current.durable && !current.value.title)
   );
 }

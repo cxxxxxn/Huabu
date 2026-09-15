@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 
 import {
   needsConversationTitleRefresh,
@@ -21,11 +21,10 @@ export function useConversationTitles(workspace: CanvasPreviewWorkspace) {
       .sort(),
   );
   const epoch = useConversationTitleStore((state) => state.refreshEpoch);
-  useEffect(() => {
-    const addresses = JSON.parse(targets) as [string, string][];
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const refresh = async (unresolvedOnly: boolean) => {
+  const hydration = useRef<Promise<void>>(Promise.resolve());
+  const refresh = useCallback(
+    async (unresolvedOnly: boolean) => {
+      const addresses = JSON.parse(targets) as [string, string][];
       const batches = new Map<string, string[]>();
       for (const [canvasId, threadId] of addresses) {
         if (
@@ -42,26 +41,38 @@ export function useConversationTitles(workspace: CanvasPreviewWorkspace) {
           refreshConversationTitles(canvasId, ids),
         ),
       );
+    },
+    [targets],
+  );
+
+  useEffect(() => {
+    hydration.current = refresh(false);
+    const onFocus = () => {
+      void refresh(false);
     };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [refresh]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     // Generation can outlive the answer stream. Retry only unresolved titles,
-    // for a finite window; focus/reopen and later turns start a fresh window.
+    // for a finite window; target changes and later turns start a fresh window.
+    // Stream refresh already queries its thread; an epoch only restarts delays.
     const delays = [1000, 3000, 10000, 30000, 60000];
     const run = async (attempt: number) => {
-      await refresh(attempt > 0);
+      if (attempt === 0) await hydration.current;
+      else await refresh(true);
       if (!cancelled && attempt < delays.length)
         timer = setTimeout(() => {
           void run(attempt + 1);
         }, delays[attempt]);
     };
     void run(0);
-    const onFocus = () => {
-      void refresh(false);
-    };
-    window.addEventListener('focus', onFocus);
     return () => {
       cancelled = true;
       clearTimeout(timer);
-      window.removeEventListener('focus', onFocus);
     };
-  }, [targets, epoch]);
+  }, [refresh, epoch]);
 }
