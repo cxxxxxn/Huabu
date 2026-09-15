@@ -31,6 +31,7 @@ import { cn } from '@/components/Common/cn.ts';
 import { Tooltip } from '@/components/Common/Tooltip.tsx';
 import { createQuestionNodeAndCompose } from '@/components/Nodes/question/questionCompose.ts';
 import { localMarkRect } from '@/config/nodeTakeover.ts';
+import { useMultiSelectModifierHeld } from '@/hooks/useMultiSelectModifier.ts';
 import useCanvasStore from '@/store/canvasStore.ts';
 import { useConnectPortStore } from '@/store/connectPortStore.ts';
 import {
@@ -544,9 +545,9 @@ function CollapsedPortDots({
 interface NodeConnectionHandlesProps {
   /** Id of the node these handles belong to. */
   nodeId: string;
-  /** Whether the parent node is currently hovered (mouse-only). */
+  /** Whether the pointer is currently over the node. */
   hovered: boolean;
-  /** Whether the node is the unique selected node (touch/pen mode). */
+  /** Whether the node is the unique selected node. */
   selected: boolean;
   /** True for touch / pen input; otherwise we treat as mouse. */
   isNotMouse: boolean;
@@ -557,6 +558,26 @@ interface NodeConnectionHandlesProps {
    * drop placeholder and inviting a connection the gesture cannot start.
    */
   dragging: boolean;
+}
+
+export function shouldExposeConnectionPorts({
+  selected,
+  connecting,
+  hovered,
+  dragging,
+  multiSelectModifierHeld,
+}: {
+  selected: boolean;
+  connecting: boolean;
+  hovered: boolean;
+  dragging: boolean;
+  multiSelectModifierHeld: boolean;
+}): boolean {
+  return (
+    (selected || (connecting && hovered)) &&
+    !dragging &&
+    !multiSelectModifierHeld
+  );
 }
 
 export const NodeConnectionHandles = memo(
@@ -600,9 +621,8 @@ export const NodeConnectionHandles = memo(
     const inverseZoom = zoom > 0 ? 1 / zoom : 1;
     const dotSize = baseHandleSize * inverseZoom;
     const dotBorderWidth = 2.5 * inverseZoom;
-    // While a connection drag is in progress, promote every exposed dot
-    // from its idle hollow state to a filled + glowing state so the user
-    // gets a strong "drop it here" affordance on valid endpoints.
+    // A connection drag temporarily exposes the hovered target node's dots;
+    // the source port remains pinned separately below.
     const connecting = useConnection((c) => c.inProgress);
     const fromHandle = useConnection((c) => c.fromHandle);
 
@@ -611,15 +631,27 @@ export const NodeConnectionHandles = memo(
     // port the pointer is actually aiming at grows and reveals the `+`,
     // so the idle state stays four quiet dots instead of four buttons.
     const [hotSide, setHotSide] = useState<Position | null>(null);
-    const exposed = !dragging && (isNotMouse ? selected : hovered);
+    // While the multi-select modifier (Ctrl / Cmd) is held the user is
+    // reaching for another node, so keep this node's ports quiet: the
+    // edge-endpoint handles stay mounted (they always map below), only the
+    // outward-reaching `+` dots that would occlude the neighbour are hidden.
+    const multiSelectModifierHeld = useMultiSelectModifierHeld();
+    const exposed = shouldExposeConnectionPorts({
+      selected,
+      connecting,
+      hovered,
+      dragging,
+      multiSelectModifierHeld,
+    });
     const hotHandleSize = isNotMouse ? 22 : 20;
 
     const pinnedPosition = pinnedSide ? SIDE_POSITION[pinnedSide] : null;
 
     // Pressing a port starts a connection immediately (the canvas sets
     // `connectionDragThreshold` to 0), so without this the port would
-    // visibly collapse the moment it is clicked. Ports on *other* nodes stay
-    // plain dots during a drag, where they mean "drop here", not "add".
+    // visibly collapse the moment it is clicked. The hovered target node's
+    // ports stay plain dots during a drag, where they mean "drop here", not
+    // "add".
     const originSide =
       connecting && fromHandle?.nodeId === nodeId
         ? sideFromHandleId(fromHandle.id)

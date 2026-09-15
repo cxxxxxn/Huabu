@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+import { resolve } from 'node:path';
+
 import {
   AgentTeamError,
   getAgentTeamRegistry,
@@ -11,12 +13,14 @@ import {
 import {
   agentTeamMemberDetailQuerySchema,
   agentTeamProfileActionParamsSchema,
-  createAgentProfileBodySchema,
+  createAgentTeamProfileBodySchema,
+  createId,
   patchAgentProfileBodySchema,
   updateAgentTeamMemberConfigsBodySchema,
 } from '@huabu/shared';
 
-import { isLoopbackRequest } from '../security/peer.js';
+import { getDataDir } from '../../data-dir.js';
+import { isOwnerRequest } from '../security/owner.js';
 
 import type {
   AgentProfileParams,
@@ -25,7 +29,7 @@ import type {
   AgentTeamMemberDetailView,
   AgentTeamSettingsState,
   ApiResult,
-  CreateAgentProfileBody,
+  CreateAgentTeamProfileBody,
   PatchAgentProfileBody,
   UpdateAgentTeamMemberConfigsBody,
 } from '@huabu/shared';
@@ -44,8 +48,30 @@ export type AgentTeamSettingsRegistry = Pick<
   | 'updateMemberConfigs'
 >;
 
+function workspaceSegment(value: string): string {
+  const segment = value
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return segment || 'agent';
+}
+
+export function defaultAgentTeamWorkingDir(input: {
+  root: string;
+  memberName: string;
+  harness: string;
+  profileId: string;
+}): string {
+  return resolve(
+    input.root,
+    workspaceSegment(input.memberName),
+    workspaceSegment(input.harness),
+    workspaceSegment(input.profileId),
+  );
+}
+
 function denyRemote(request: FastifyRequest, reply: FastifyReply): boolean {
-  if (isLoopbackRequest(request)) return false;
+  if (isOwnerRequest(request)) return false;
   reply.status(403).send({
     message: 'Forbidden: Agent Team Settings are only available on localhost',
     code: 'loopback_required',
@@ -121,6 +147,8 @@ function firstIssueMessage(
 export function createAgentTeamRoutes(
   getRegistry: () => AgentTeamSettingsRegistry | null,
   getLocalMachine: () => string,
+  getDefaultWorkspaceRoot: () => string = () =>
+    resolve(getDataDir(), 'agent-team', 'workspaces'),
 ): FastifyPluginAsync {
   return async (app) => {
     const readState = (registry: AgentTeamSettingsRegistry) =>
@@ -191,11 +219,11 @@ export function createAgentTeamRoutes(
     });
 
     app.post<{
-      Body: CreateAgentProfileBody;
+      Body: CreateAgentTeamProfileBody;
       Reply: ApiResult<AgentProfileView>;
     }>('/settings/profiles', async (request, reply) => {
       if (denyRemote(request, reply)) return;
-      const parsed = createAgentProfileBodySchema.safeParse(request.body);
+      const parsed = createAgentTeamProfileBodySchema.safeParse(request.body);
       if (!parsed.success) {
         return reply.status(400).send({
           message: firstIssueMessage(parsed, 'Invalid Agent Profile'),
@@ -211,11 +239,34 @@ export function createAgentTeamRoutes(
       const registry = requireRegistry(reply, getRegistry);
       if (!registry) return;
       try {
+        const profileId = createId('profile');
+        const workingDirPath =
+          parsed.data.workingDirectory.kind === 'custom'
+            ? parsed.data.workingDirectory.path
+            : (() => {
+                if (parsed.data.agentletId !== getLocalMachine()) {
+                  throw new AgentTeamError(
+                    'invalid_working_directory',
+                    'Default working directories require the local Agentlet',
+                  );
+                }
+                const detail = registry.getMemberDetail(
+                  parsed.data.agentletId,
+                  parsed.data.launch.manifestPath,
+                );
+                return defaultAgentTeamWorkingDir({
+                  root: getDefaultWorkspaceRoot(),
+                  memberName: detail.member.name,
+                  harness: parsed.data.launch.harness,
+                  profileId,
+                });
+              })();
         return registry.createProfile({
+          id: profileId,
           launchKind: 'agent-team-manifest',
           alias: parsed.data.alias,
           agentletId: parsed.data.agentletId,
-          workingDirPath: parsed.data.workingDirPath,
+          workingDirPath,
           manifestPath: parsed.data.launch.manifestPath,
           harness: parsed.data.launch.harness,
           ...(parsed.data.customData === undefined

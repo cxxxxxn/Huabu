@@ -14,9 +14,13 @@ export type PreviewData = {
 export interface NodePreviewContentProps {
   /** Canvas node id, when bound to a real node. */
   id?: string;
+  /** Runtime identity used to restore this Preview target's scroll offset. */
+  scrollViewKey?: string;
   type: string;
   data: Record<string, unknown>;
   readOnly?: boolean;
+  focusRequestNonce?: number;
+  onFocusRequestHandled?: (nonce: number) => void;
   onContentChange?: (newContent: string) => void;
   onDataChange?: (patch: Record<string, unknown>) => void;
 }
@@ -46,7 +50,7 @@ export const NodePreviewContent = (props: NodePreviewContentProps) => {
 
   return (
     <div className="flex h-full flex-col">
-      <AiSummaryBanner summary={summary} keywords={keywords} />
+      <AiSummaryBanner key={id} summary={summary} keywords={keywords} />
       <div className="relative min-h-0 flex-1">
         <PreviewComponent id={id} data={data} {...rest} />
       </div>

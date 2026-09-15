@@ -9,7 +9,8 @@ import fastify from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import webRoutes from './web.route.js';
-import { createCanvas, getCanvasStore } from '../storage/index.js';
+import { createCanvas } from '../storage/compatibility/canvas.js';
+import { getCanvasStore } from '../storage/index.js';
 import { setWorkspacePath } from '../workspace.js';
 
 let tmp: string;
@@ -56,6 +57,68 @@ describe('GET /api/web/page', () => {
         kind: 'html',
         embeddable: true,
         snapshot: true,
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('routes Interactive Views through the restricted renderer endpoint', async () => {
+    const canvasId = 'c-view';
+    const nodeId = 'node-view';
+    createCanvas(canvasId);
+    const store = getCanvasStore(canvasId);
+    const current = store.read();
+    if (!current) throw new Error('Canvas was not created');
+    store.write({
+      ...current,
+      state: {
+        nodes: [
+          {
+            id: nodeId,
+            type: 'web',
+            position: { x: 0, y: 0 },
+            data: {
+              interactiveView: {
+                protocolVersion: 1,
+                ownerThreadId: 'thread-owner',
+                state: {
+                  schema: {
+                    type: 'object',
+                    properties: {},
+                    additionalProperties: false,
+                  },
+                  value: {},
+                },
+                bindings: [],
+                actions: [],
+              },
+            },
+          },
+        ],
+        edges: [],
+      },
+    });
+    store.writeNode(nodeId, {
+      nodeId,
+      type: 'web',
+      label: 'Interactive View',
+      content: '',
+      src: 'view.html',
+    });
+
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/web/page?canvasId=${canvasId}&nodeId=${nodeId}`,
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        src: '/api/interactive-views/c-view/node-view/renderer',
+        kind: 'html',
+        embeddable: true,
       });
     } finally {
       await app.close();

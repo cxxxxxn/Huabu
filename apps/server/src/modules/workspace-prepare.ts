@@ -11,7 +11,10 @@
 
 import { mkdirSync } from 'node:fs';
 
-import { ensureWorldCanvasOnDisk } from './workspace/disk/world-canvas.js';
+import {
+  ensureWorkspaceManifestOnDisk,
+  ensureWorldCanvasOnDisk,
+} from './storage/index.js';
 import { migrateLegacyAcpSessions } from './workspace/migrations/migrate-acp-sessions.js';
 import {
   migrateLegacyAgenetesThreads,
@@ -31,6 +34,12 @@ import { renderExternalAgentSystemPreamble } from '../prompt/external-agent/syst
  */
 export function prepareWorkspaceOnDisk(workspacePath: string): void {
   mkdirSync(workspacePath, { recursive: true });
+  // Adopt Home folders created by older Huabu versions before any other
+  // migration runs. Managed and free mode therefore share one identity path.
+  // Only the manifest is written here: this runs inside the isolated
+  // preparation child, and registry membership is the Server process's call
+  // so the durable index keeps exactly one writer.
+  ensureWorkspaceManifestOnDisk(workspacePath);
   // Demo-stage rename: canvas.json -> space.json, .memory/canvas.md ->
   // .memory/space.md, setting/.huabu.md -> setting/user.md. Runs first so
   // later readers / migrations see the new names. DELETE-ME later.
@@ -40,7 +49,8 @@ export function prepareWorkspaceOnDisk(workspacePath: string): void {
   migrateLegacyChatThreads(workspacePath);
   // Second hop (M6.9 row 2): fold legacy `.history/chat/*.turns.jsonl` turns
   // into the Agenetes two-tier log (`chat_v2/`). MUST run AFTER the pi-ai
-  // `.json` -> `.turns.jsonl` hop above.
+  // `.json` -> `.turns.jsonl` hop above, which resolves every coexisting pair
+  // before this hop folds the turn logs.
   migrateLegacyChatTurns(workspacePath);
   // Convert the strict workload/state boundary before any writer opens the
   // namespace. Keeps the original v1 file as `.agenetes-v1.bak`.

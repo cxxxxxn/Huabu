@@ -27,6 +27,7 @@ import {
   type TurnStartLogEntry,
 } from './event-log.js';
 import { createTranscriptFolder } from './fold.js';
+import { copyHostMetadata } from './host-metadata.js';
 import { materializeHistory } from './materialize-history.js';
 import { ThreadNotificationBus } from './notifications.js';
 import {
@@ -75,13 +76,42 @@ export interface Agenetes {
    * can read it independent of handle liveness (I9.4).
    */
   create(spec: WorkloadSpec): AgentHandle;
-  /**
-   * Realise a fresh target thread from a durable source thread. The host
-   * supplies the complete target spec; Agenetes performs no field-level
-   * merge. The target receives the source record and folded turns but
-   * starts with an empty target state.
-   */
+  /** Fork source turns with fresh driver state and deep-copied host metadata. */
   fork(source: ThreadIdentity, targetSpec: WorkloadSpec): AgentHandle;
+  /**
+   * The destructive counterpart to {@link Agenetes.fork}: relocate a
+   * durable thread's complete conversation ownership — its thread record,
+   * Tier-1 event log, and Tier-2 turn log — from `source` to the namespace
+   * and host-owned spec context in `targetSpec`, preserving `threadId`,
+   * driver kind, workload type, and driver state unchanged (I9.4 / I9.8).
+   * Unlike `fork`, this MUTATES the source: on success the source record
+   * and both source logs no longer exist and the target is the sole
+   * durable owner of the thread's history.
+   *
+   * Preconditions (both checked before any write): `source` has no live
+   * handle (the host must have closed/never spawned it), and the target
+   * `(namespace, threadId)` holds no thread record and no Tier-1/Tier-2 log
+   * — a rehome never overwrites an existing target.
+   *
+   * Durable ordering: the target Tier-1 log, then the target Tier-2 log,
+   * then the target thread record are written FIRST — the target record
+   * write is the destination visibility point, the first moment `record` /
+   * `records` observe the thread under `targetSpec.namespace`. Only once
+   * the target is completely durable are the source record and then the
+   * source logs removed, so a reader never observes the thread missing
+   * from both sides at once.
+   *
+   * On a determinate failure at any step, `rehome` restores the source to
+   * its pre-call snapshot and removes every target record/log it wrote,
+   * then re-throws the original error — the source is left unchanged
+   * from the caller's perspective. If that restoration itself fails, the
+   * unresolved outcome is reported as a distinct
+   * `rehome_unknown_outcome` {@link AgenetesError}, which wraps the
+   * original failure and the rollback failure; a caller must treat this as
+   * "unknown, do not assume the source is intact" rather than a normal
+   * determinate failure.
+   */
+  rehome(source: ThreadIdentity, targetSpec: WorkloadSpec): void;
   /**
    * Pure lookup of the live handle for `threadId` — **never spawns**
    * (I9.3). A missing handle is a precondition failure (e.g. a control
@@ -98,14 +128,30 @@ export interface Agenetes {
   /** Enumerate a namespace's persisted thread records (I9.4). */
   records(namespace: Namespace): ThreadRecord[];
   /**
+   * Synchronously shallow-merge host metadata keys into an existing record,
+   * without spawning or changing spec/state. Values must be JSON-compatible;
+   * null is a stored value, not deletion. Throws `thread_not_found` when absent
+   * or `invalid_host_metadata` for a non-JSON patch. Does not emit driver metadata.
+   */
+  updateHostMetadata(
+    namespace: Namespace,
+    threadId: string,
+    patch: Record<string, unknown>,
+  ): ThreadRecord;
+  /**
    * The notification surface (I9.7): subscribe to a thread's driver-agnostic
    * `AgentMetadata` as it changes. The instance persists each up-reported
    * snapshot into the {@link ThreadStore} FIRST, then re-emits its
    * `metadata` here (persist-then-notify), so a `record` read after a
-   * notification always observes the latest state. The stream ends when the
-   * thread's handle is `close`d or the consumer breaks out of the loop.
+   * notification always observes the latest state. With a namespace, only
+   * that namespace's reports are delivered (identity is namespace.name).
+   * Omitting it retains the global per-thread stream. The stream ends when
+   * its matching handle is `close`d or the consumer breaks out of the loop.
    */
-  notifications(threadId: string): AsyncIterable<AgentMetadata>;
+  notifications(
+    threadId: string,
+    namespace?: Namespace,
+  ): AsyncIterable<AgentMetadata>;
   /**
    * Read lightweight metadata about the two-tier conversation log without
    * loading its events or folded turns.
@@ -352,6 +398,14 @@ export function createAgenetesInstance(
         ...record.state,
         driverState: driver.validateState(record.state.driverState),
       },
+      ...(record.hostMetadata !== undefined
+        ? {
+            hostMetadata: copyHostMetadata(
+              record.hostMetadata,
+              'invalid_persisted_record',
+            ),
+          }
+        : {}),
     };
   };
 
@@ -380,15 +434,21 @@ export function createAgenetesInstance(
   ): void => {
     const unsub = handle.onState?.((snapshot: AgentStateSnapshot) => {
       threadStore.upsert(spec.namespace, spec.threadId, {
+        ...threadStore.get(spec.namespace, spec.threadId),
         driverSchemaVersion: driver.schemaVersion,
         spec,
         state: snapshot,
       });
       if (snapshot.metadata !== undefined) {
+        bus.publish(spec.threadId, snapshot.metadata, spec.namespace.name);
         bus.publish(spec.threadId, snapshot.metadata);
       }
     });
-    if (unsub) unsubscribers.set(spec.threadId, unsub);
+    // Register cleanup even for silent handles, whose scoped streams must end.
+    unsubscribers.set(spec.threadId, () => {
+      unsub?.();
+      bus.closeThread(spec.threadId, spec.namespace.name);
+    });
   };
 
   // Wrap a handle so every `run()` transparently feeds the two-tier
@@ -481,8 +541,10 @@ export function createAgenetesInstance(
     driver: MountedAgentDriver,
     context: AgentCreateContext,
     initialState: AgentStateSnapshot,
+    hostMetadata?: Record<string, unknown>,
   ): AgentHandle => {
     let handle: AgentHandle;
+    let needsUpReport = false;
     if (targetSpec.workloadType === 'Job') {
       const raw = driver.create(targetSpec, context);
       handle =
@@ -498,18 +560,24 @@ export function createAgenetesInstance(
           targetSpec.threadId,
         ),
       );
-      if (!wasLive) wireUpReport(targetSpec, driver, handle);
+      needsUpReport = !wasLive;
     }
 
     const isTransientJob =
       targetSpec.workloadType === 'Job' && !targetSpec.threadId;
     if (!isTransientJob) {
+      const latest = threadStore.get(targetSpec.namespace, targetSpec.threadId);
       threadStore.upsert(targetSpec.namespace, targetSpec.threadId, {
+        ...(hostMetadata !== undefined ? { hostMetadata } : {}),
+        ...latest,
         driverSchemaVersion: driver.schemaVersion,
         spec: targetSpec,
-        state: initialState,
+        state: latest?.state ?? initialState,
       });
     }
+    // Persist the initial record before subscribing: onState may immediately
+    // report a newer snapshot, which must not be overwritten by initialization.
+    if (needsUpReport) wireUpReport(targetSpec, driver, handle);
     return handle;
   };
 
@@ -601,7 +669,166 @@ export function createAgenetesInstance(
           },
         },
         { driverState: target.driver.initialState() },
+        sourceRecord.hostMetadata !== undefined
+          ? copyHostMetadata(
+              sourceRecord.hostMetadata,
+              'invalid_persisted_record',
+            )
+          : undefined,
       );
+    },
+    rehome(source: ThreadIdentity, rawTargetSpec: WorkloadSpec): void {
+      if (runtime.get(source.threadId) !== undefined) {
+        throw new AgenetesError(
+          'rehome_conflict',
+          `cannot rehome thread '${source.namespace.name}/${source.threadId}' with a live handle`,
+        );
+      }
+      const sourceRecord = threadStore.get(source.namespace, source.threadId);
+      if (!sourceRecord) {
+        throw new AgenetesError(
+          'invalid_workload',
+          `cannot rehome missing source thread '${source.namespace.name}/${source.threadId}'`,
+        );
+      }
+      const validatedSource = validateRecord(sourceRecord);
+      const target = validateSpec(rawTargetSpec);
+      const targetSpec = target.spec;
+      if (targetSpec.threadId !== source.threadId) {
+        throw new AgenetesError(
+          'invalid_workload',
+          'rehome target threadId must equal source threadId',
+        );
+      }
+      if (targetSpec.namespace.name === source.namespace.name) {
+        throw new AgenetesError(
+          'invalid_workload',
+          'rehome target namespace must differ from source',
+        );
+      }
+      if (targetSpec.kind !== validatedSource.spec.kind) {
+        throw new AgenetesError(
+          'invalid_workload',
+          `rehome target driver kind must match source '${validatedSource.spec.kind}'`,
+        );
+      }
+      if (targetSpec.workloadType !== validatedSource.spec.workloadType) {
+        throw new AgenetesError(
+          'invalid_workload',
+          `rehome target workload type must match source '${validatedSource.spec.workloadType}'`,
+        );
+      }
+      const targetHasRecord =
+        threadStore.get(targetSpec.namespace, targetSpec.threadId) !==
+        undefined;
+      const targetHasTurns =
+        turnStore.list(targetSpec.namespace, targetSpec.threadId).length > 0;
+      const targetHasEvents =
+        eventLog.readRecords(targetSpec.namespace, targetSpec.threadId).length >
+        0;
+      if (targetHasRecord || targetHasTurns || targetHasEvents) {
+        throw new AgenetesError(
+          'rehome_conflict',
+          `rehome target thread already exists '${targetSpec.namespace.name}/${targetSpec.threadId}'`,
+        );
+      }
+
+      // Snapshot the complete source BEFORE any write, so a determinate
+      // failure at any later step can restore it byte-for-byte regardless
+      // of which step failed.
+      const sourceEvents = eventLog.readRecords(
+        source.namespace,
+        source.threadId,
+      );
+      const sourceTurns = turnStore.list(source.namespace, source.threadId);
+      const targetRecord: ThreadRecord = {
+        ...validatedSource,
+        spec: targetSpec,
+      };
+
+      // Each step's compensation is pushed ONLY once the step itself
+      // durably succeeds, so a mid-sequence failure unwinds exactly the
+      // completed prefix — never more, never less.
+      const undo: Array<() => void> = [];
+      const step = (write: () => void, compensate: () => void): void => {
+        write();
+        undo.push(compensate);
+      };
+
+      try {
+        // Target Tier-1 log, then target Tier-2 log, then the target
+        // thread record LAST — the record write is the destination
+        // visibility point (I9.4): the first moment a reader can observe
+        // the thread under `targetSpec.namespace`.
+        step(
+          () =>
+            eventLog.replace(
+              targetSpec.namespace,
+              targetSpec.threadId,
+              sourceEvents,
+            ),
+          () => eventLog.delete(targetSpec.namespace, targetSpec.threadId),
+        );
+        step(
+          () =>
+            turnStore.replace(
+              targetSpec.namespace,
+              targetSpec.threadId,
+              sourceTurns,
+            ),
+          () => turnStore.delete(targetSpec.namespace, targetSpec.threadId),
+        );
+        step(
+          () =>
+            threadStore.upsert(
+              targetSpec.namespace,
+              targetSpec.threadId,
+              targetRecord,
+            ),
+          () => threadStore.delete(targetSpec.namespace, targetSpec.threadId),
+        );
+        // Only once the target is completely durable: remove the source
+        // record (its own visibility point) before its now-orphaned logs.
+        step(
+          () => threadStore.delete(source.namespace, source.threadId),
+          () =>
+            threadStore.upsert(source.namespace, source.threadId, sourceRecord),
+        );
+        step(
+          () => eventLog.delete(source.namespace, source.threadId),
+          () =>
+            eventLog.replace(source.namespace, source.threadId, sourceEvents),
+        );
+        step(
+          () => turnStore.delete(source.namespace, source.threadId),
+          () =>
+            turnStore.replace(source.namespace, source.threadId, sourceTurns),
+        );
+      } catch (error) {
+        // Unwind the completed prefix in reverse (LIFO) order, restoring
+        // the source snapshot and removing every target record/log this
+        // call wrote. Each store primitive either durably succeeds or
+        // throws with no partial effect, so a compensation failure here
+        // means the true state is genuinely unknown, not just "source
+        // unchanged" — that becomes its own distinct error rather than a
+        // silently swallowed best-effort cleanup.
+        const rollbackErrors: unknown[] = [];
+        for (const compensate of undo.reverse()) {
+          try {
+            compensate();
+          } catch (rollbackError) {
+            rollbackErrors.push(rollbackError);
+          }
+        }
+        if (rollbackErrors.length > 0) {
+          throw new AgenetesError(
+            'rehome_unknown_outcome',
+            `rehome for '${source.namespace.name}/${source.threadId}' failed and rollback could not fully restore the source; the outcome is unknown and requires manual recovery`,
+            { cause: error, rollbackErrors },
+          );
+        }
+        throw error;
+      }
     },
     get(threadId: string): AgentHandle | undefined {
       return runtime.get(threadId);
@@ -624,8 +851,35 @@ export function createAgenetesInstance(
     records(namespace: Namespace): ThreadRecord[] {
       return threadStore.list(namespace).map(validateRecord);
     },
-    notifications(threadId: string): AsyncIterable<AgentMetadata> {
-      return bus.subscribe(threadId);
+    updateHostMetadata(namespace, threadId, patch): ThreadRecord {
+      const record = threadStore.get(namespace, threadId);
+      if (!record) {
+        throw new AgenetesError(
+          'thread_not_found',
+          `cannot update host metadata for missing thread '${namespace.name}/${threadId}'`,
+          { namespace: namespace.name, threadId },
+        );
+      }
+      const hostMetadata = copyHostMetadata(
+        {
+          ...record.hostMetadata,
+          ...copyHostMetadata(patch, 'invalid_host_metadata'),
+        },
+        'invalid_host_metadata',
+      );
+      const updated = { ...record, hostMetadata };
+      // Both writers read/merge/write synchronously; no async mutex is needed.
+      threadStore.upsert(namespace, threadId, updated);
+      return {
+        ...updated,
+        hostMetadata: copyHostMetadata(hostMetadata, 'invalid_host_metadata'),
+      };
+    },
+    notifications(
+      threadId: string,
+      namespace?: Namespace,
+    ): AsyncIterable<AgentMetadata> {
+      return bus.subscribe(threadId, namespace?.name);
     },
     logMetadata(namespace: Namespace, threadId: string): ThreadLogMetadata {
       return {

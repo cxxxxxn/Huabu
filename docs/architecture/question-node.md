@@ -38,17 +38,19 @@ Like sketch nodes, a question node has two independent relationships with AI:
 
 `QuestionNodeData` ([node.ts](../../packages/shared/src/types/canvas/node.ts)):
 
-| Field             | Persisted | Notes                                                                                                                                |
-| ----------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `content`         | sidecar   | The question text; stored in `nodes/<safeLabel>.md` body like text/note (`TEXT_BEARING_NODE_TYPES`), stripped from the structure PUT |
-| `status`          | ✅        | Optional sparse status: absent means `idle`; non-default values are `running` / `done` / `error`                                     |
-| `threadId`        | ✅        | Owns one chat thread; minted on first compose                                                                                        |
-| `agentBinding`    | ✅        | Internal or external agent, locked on first send                                                                                     |
-| `agentIcon`       | ✅        | External Agent's bind-time avatar fallback; current Profile icon wins while that Profile still exists                                |
-| `agentMode`       | ✅        | `ask` (default) / `operate` for the internal agent                                                                                   |
-| `errorMessage`    | ✅        | Set on `status === 'error'`                                                                                                          |
-| `viewed`          | ✅        | Drives unread terminal-state attention on the Agent avatar                                                                           |
-| `responseSummary` | reserved  | Teaser field; not yet written by the runner                                                                                          |
+| Field                  | Persisted | Notes                                                                                                                                |
+| ---------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `content`              | sidecar   | The question text; stored in `nodes/<safeLabel>.md` body like text/note (`TEXT_BEARING_NODE_TYPES`), stripped from the structure PUT |
+| `status`               | ✅        | Optional sparse status: absent means `idle`; non-default values are `running` / `done` / `error`                                     |
+| `threadId`             | ✅        | Owns one chat thread; minted on first compose                                                                                        |
+| `agentBinding`         | ✅        | Internal or external agent, locked on first send                                                                                     |
+| `agentBindingPolicy`   | ✅        | Optional `selectable` / `fixed`; absent means selectable, while service-created Agent Nodes use fixed before first send              |
+| `agentIcon`            | ✅        | External Agent's bind-time avatar fallback; current Profile icon wins while that Profile still exists                                |
+| `agentLaunchOverrides` | ✅        | Optional bounded cwd and additional-initial-preamble overrides for a service-created external Agent Node                             |
+| `agentMode`            | ✅        | `operate` (default) / `ask` for the internal agent                                                                                   |
+| `errorMessage`         | ✅        | Set on `status === 'error'`                                                                                                          |
+| `viewed`               | ✅        | Drives unread terminal-state attention on the Agent avatar                                                                           |
+| `responseSummary`      | reserved  | Teaser field; not yet written by the runner                                                                                          |
 
 Not persisted: the in-flight `AbortController` (module-level in `useAgentStream`).
 Question nodes are content nodes: their `content` runs through preprocessing's
@@ -57,14 +59,21 @@ Question nodes are content nodes: their `content` runs through preprocessing's
 visible to agents (`type: 'question'` in `get_space_outline`). See
 [node-preprocessing.md](./node-preprocessing.md) for the profile.
 
+Question naming is owned by the canonical node label. The Canvas node, its Preview tab, and its chat header all read that label; existing visual overflow handling is unchanged. Ordinary `generate_label` preprocessing can name an unprotected Question from its content but cannot overwrite a non-empty `user` or `agent` label. Chat titles are independent host metadata (`ThreadRecord.hostMetadata.huabuConversationTitle`, written through `Agenetes.updateHostMetadata`), not a continuing source for Question labels. Late Chat title generation, ACP updates, and panel renames never rename a Question or change its first prompt, status, or transcript. Panel-only conversations persist names on the thread instead of creating hidden nodes; see [Preview Workspace](./preview-workspace.md#2-persisted-model).
+
 ---
 
 ## 3. Node lifecycle
 
+Saving a panel Chat as a Question uses [saveChatAsQuestion](../../apps/web/src/components/Panels/ChatPanel/saveChatAsQuestion.ts) to copy the current title once into `data.label` through canonical node creation. A current manual title (`source: 'user'`) becomes `labelSource: 'user'`; any nonmanual copied title, including an ACP, generated, or fallback title, becomes `labelSource: 'agent'`, not `auto`, so ordinary preprocessing cannot replace it. Without a current title, the helper preserves the supplied node data and existing node-creation fallback; it invents no title. Conversion stores no separate title-source field and does not recover a hidden automatic title after manual naming. Thereafter naming uses only the node label and the normal node rename path, with no ongoing Chat-title-to-Question synchronization.
+
 Created like any node via `CREATE_NODES` ([resolveAddNodes.ts](../../apps/web/src/handler/canvasCommand/resolvers/resolveAddNodes.ts)) with `nodeType: 'question'` and empty `content`. Missing `status` is the idle state, and nothing fires automatically. From there:
 
 - **Idle** → double-click opens compose (§5).
+- An idle node with `agentBindingPolicy: fixed` opens compose with its persisted binding and a read-only Agent selector; ordinary nodes with an absent or `selectable` policy retain the existing pre-send picker.
 - After sending: **running → done / error**.
+- For fixed Agent Nodes, `AgentThreadService` resolves the persisted binding, writes first content and `status` / `errorMessage` through the server Canvas executor, and applies launch overrides before the first ACP realization. The Web client writes only `viewed`; selectable Question Nodes retain the existing client-authored lifecycle.
+- Selectable Question Node lifecycle patches are optimistically reflected in the active Canvas and persisted through the canonical Canvas executor. Loading never infers `done` merely from `threadId` plus authored content because a persisted conversation may terminate in `error`; legacy nodes with an unknown status stay neutral but remain reopenable.
 - Running uses the bound Agent identity with a flowing information ring; an external Agent avatar body rotates while the built-in Huabu logo remains still.
 - A live unresolved ACP permission request temporarily overrides every other badge state, stops working motion, and shows a static warning ring with a shield satellite; resolving or cancelling the request restores the underlying run state.
 - Done, error, and conflict attention styling appears only while `viewed === false`; opening the finished thread marks it viewed and returns the avatar to a quiet neutral ring.
@@ -98,13 +107,7 @@ user message + assistant reply across all turns, deliberately skipping tool
 calls / results. Only question nodes carry a `threadId`, so threads not anchored
 to a node are out of search scope.
 
-Activating a `conversation` result row
-([CanvasSearchResults.tsx](../../apps/web/src/components/Panels/CanvasLayerPanel/CanvasSearchResults.tsx))
-focuses the node on the canvas **and** opens its thread in the chat panel
-(`openQuestionThread` + `requestOpenRightPanel`), then highlights the query and
-scrolls the matched message into view inside the thread — the chat scroller is
-tagged `data-chat-thread-root` so the shared highlight / `scheduleScrollToMatch`
-helpers can target it, mirroring how preview-body matches are handled.
+Activating a `conversation` result row ([CanvasSearchResults.tsx](../../apps/web/src/components/Panels/CanvasLayerPanel/CanvasSearchResults.tsx)) focuses the node on the canvas **and** opens its Question target through `openPreviewNode`, then highlights the query and scrolls the matched message into view inside the mounted tab — the chat scroller is tagged `data-chat-thread-root` so the shared highlight / `scheduleScrollToMatch` helpers can target it, mirroring how preview-body matches are handled.
 
 ---
 
@@ -112,11 +115,9 @@ helpers can target it, mirroring how preview-body matches are handled.
 
 ### 5.1 Trigger
 
-Double-click the node → `openInCompose()` ([QuestionNode.tsx](../../apps/web/src/components/Nodes/question/QuestionNode.tsx)).
-Creating a question through the toolbar placement flow or the connected-node
-picker also mints the thread and opens compose immediately:
+Double-click the node → `openInCompose()` ([QuestionNode.tsx](../../apps/web/src/components/Nodes/question/QuestionNode.tsx)). Creating a question through the toolbar placement flow or the connected-node picker also mints the thread and opens compose immediately. [`questionCompose.ts`](../../apps/web/src/components/Nodes/question/questionCompose.ts) opens the Question's Preview Workspace node tab and directs the input-focus request to that thread.
 
-- mints a `threadId` if missing, opens the chat panel in **compose mode**
+- mints a `threadId` if missing, opens the chat panel in **compose mode**, and defaults the built-in Huabu Agent to `operate`
 - inherits the canvas's last-used agent binding; user can switch agent
 - user types the question, hits send → first send writes `content` back to the node
 
@@ -141,20 +142,20 @@ As the canvas zooms out, a question node's agent mark **takes over** as the node
 
 All questions run through `/api/agent` ([agent.ts](../../apps/web/src/api/agent.ts) → [intent](../../apps/server/src/modules/canvas/node-neighbourhood.ts)). On first send `useAgentStream` ([useAgentStream.ts](../../apps/web/src/hooks/useAgentStream.ts)) locks `agentBinding` + `agentMode` onto the node:
 
-- **internal**: built-in agent, `agentMode` = `ask` (default) / `operate`
+- **internal**: built-in Huabu Agent, `agentMode` = `operate` (default) / `ask`
 - **external**: ACP agent resolved server-side from `profileId`
 
 `anchorNodeId` is sent so the server attaches spatial context (§5.3).
 
 ### 5.3 Spatial context (server-side)
 
-Resolved entirely on the server — no spatial geometry crosses the wire. `renderNodeNeighbourhoodMarkdown(canvasId, anchorNodeId)` ([node-neighbourhood.ts](../../apps/server/src/modules/canvas/node-neighbourhood.ts)) walks inside-out (frame → grandframe → canvas) and serialises a priority-tiered neighbourhood into the agent's preamble:
+Resolved entirely on the server — no spatial geometry crosses the wire. `renderNodeNeighbourhoodMarkdown(canvasId, anchorNodeId)` ([node-neighbourhood.ts](../../apps/server/src/modules/canvas/node-neighbourhood.ts)) serialises a bounded, priority-tiered neighbourhood into the agent's preamble:
 
-| Priority | Source                       | Detail          | Why                   |
-| -------- | ---------------------------- | --------------- | --------------------- |
-| P0       | edges touching the node      | full snippet    | explicit user intent  |
-| P1       | same-frame siblings          | summary + label | topically related     |
-| P2       | distance-sorted nearby nodes | label + snippet | proximity ≈ relevance |
+| Priority | Source                                              | Inclusion rule                              | Why                                  |
+| -------- | --------------------------------------------------- | ------------------------------------------- | ------------------------------------ |
+| P0       | nodes connected directly to the anchor              | always, regardless of distance              | explicit user intent                 |
+| P1       | the direct containing Frame and its direct siblings | always, regardless of distance              | preserves the anchor's local context |
+| P2       | other distance-sorted spatial neighbours            | at most 400 px edge-to-edge from the anchor | bounds prompt token consumption      |
 
 The LLM gets natural-language topology; for exact coordinates it calls
 `get_space_outline` / `inspect_nodes` on demand.
@@ -169,28 +170,34 @@ idle ──double-click──▶ compose (no status change)
                                   └─ error event ─▶ error (errorMessage set)
 ```
 
-Conversation replay: `openQuestionThread` ([chatStore.ts](../../apps/web/src/store/chatStore.ts)) re-opens a running/finished thread read-only; the node is the single source of truth for the agent mode. An unresolved permission renders one actionable tray above ChatInput while its original MessageList position remains a passive history record; opening that blocked conversation scrolls MessageList to the end. Without a pending permission, a previously viewed Question opens at the conversation bottom, while an unread Question aligns its final user message with the top of the list so the unseen answer begins below it.
+Conversation replay: `openPreviewNode` activates the Question's semantic target, and [`PreviewRenderer.tsx`](../../apps/web/src/components/Panels/PreviewWorkspace/PreviewRenderer.tsx) resolves the live node into a required `ChatSession`. The node is the single source of truth for agent mode. An unresolved permission renders one actionable tray above ChatInput while its original MessageList position remains a passive history record. Messages, loading, drafts, binding, settings, and pending attachments are keyed by the session's thread, so two Question tabs can remain mounted without sharing presentation state.
+
+Before the first send, the thread's binding, mode, and built-in settings remain in the persisted Chat compose cache so an idle Question survives reload. Once the first send locks binding and mode onto the Question node, their cached mirrors are removed; on replay and after refresh, the Chat panel synchronously restores the binding from the conversation owner before rendering agent settings or dispatching a follow-up turn. Built-in settings remain cached until the first server event confirms that the durable thread now owns them. Conversation history and settings for an established thread remain server-owned.
 
 ### 5.5 World presentation
 
-A World `nodeRef` may present a source question in the same ChatPanel without loading the source Canvas. `AgentConversationView` separates the World presentation anchor from the source conversation owner. History, reconnect, turns, lifecycle, tools, binding/mode, and change records use the source `{ canvasId, nodeId, threadId }`; World selection is omitted and the source question is the request anchor. The reference never mints a thread, and a source question without `threadId` is surfaced as an integrity error.
+A World `nodeRef` may present a source question in its own Preview Workspace tab without loading the source Canvas. `AgentConversationView` separates the World presentation anchor from the source conversation owner. History, reconnect, turns, lifecycle, tools, binding/mode, and change records use the source `{ canvasId, nodeId, threadId }`; World selection is omitted and the source question is the request anchor. The reference never mints a thread, and a source question without `threadId` is surfaced as an integrity error. Opening the owner Space passes a one-shot router intent that opens the source Question tab after its Canvas loads.
 
 ---
 
 ## 6. Code entry points
 
-| Concern             | File                                                                                                                                                                                                                                                                                                                                                          |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Component + toolbar | [QuestionNode.tsx](../../apps/web/src/components/Nodes/question/QuestionNode.tsx)                                                                                                                                                                                                                                                                             |
-| Agent status mark   | [QuestionTakeoverMark.tsx](../../apps/web/src/components/Nodes/question/QuestionTakeoverMark.tsx) renders the readable corner badge and the zoomed-out collapsed mark in one component; zoom morph via [NodeTakeoverLayer.tsx](../../apps/web/src/components/Nodes/NodeTakeoverLayer.tsx) + [useNodeTakeover.ts](../../apps/web/src/hooks/useNodeTakeover.ts) |
-| Compose / replay    | [chatStore.ts](../../apps/web/src/store/chatStore.ts) `openQuestionCompose` / `openQuestionThread`                                                                                                                                                                                                                                                            |
-| Cross-Canvas owner  | [conversationOwner.ts](../../apps/web/src/store/conversationOwner.ts) resolves presentation/owner addresses and routes headless lifecycle mutations                                                                                                                                                                                                           |
-| Open scroll target  | [MessageList.tsx](../../apps/web/src/components/Messages/MessageList.tsx) + [messageListScroll.ts](../../apps/web/src/components/Messages/messageListScroll.ts)                                                                                                                                                                                               |
-| Send + state writes | [useAgentStream.ts](../../apps/web/src/hooks/useAgentStream.ts)                                                                                                                                                                                                                                                                                               |
-| Create path         | [resolveAddNodes.ts](../../apps/web/src/handler/canvasCommand/resolvers/resolveAddNodes.ts)                                                                                                                                                                                                                                                                   |
-| Dispatch API        | [agent.ts](../../apps/web/src/api/agent.ts) `streamMessage`                                                                                                                                                                                                                                                                                                   |
-| Spatial context     | [node-neighbourhood.ts](../../apps/server/src/modules/canvas/node-neighbourhood.ts)                                                                                                                                                                                                                                                                           |
-| Shared types        | [node.ts](../../packages/shared/src/types/canvas/node.ts) `QuestionNodeData` · [acp.ts](../../packages/shared/src/types/api/acp.ts) `AgentBinding`                                                                                                                                                                                                            |
+| Concern              | File                                                                                                                                                                                                                                                                                                                                                             |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Component + toolbar  | [QuestionNode.tsx](../../apps/web/src/components/Nodes/question/QuestionNode.tsx)                                                                                                                                                                                                                                                                                |
+| Agent status mark    | [QuestionTakeoverMark.tsx](../../apps/web/src/components/Nodes/question/QuestionTakeoverMark.tsx) renders the readable corner badge and the zoomed-out collapsed mark in one component; zoom morph via [NodeTakeoverLayer.tsx](../../apps/web/src/components/Nodes/NodeTakeoverLayer.tsx) + [useNodeTakeover.ts](../../apps/web/src/hooks/useNodeTakeover.ts)    |
+| Compose / replay     | [questionCompose.ts](../../apps/web/src/components/Nodes/question/questionCompose.ts) and [PreviewRenderer.tsx](../../apps/web/src/components/Panels/PreviewWorkspace/PreviewRenderer.tsx) open the node target and resolve its renderer-local session                                                                                                           |
+| Cross-Canvas owner   | [conversationOwner.ts](../../apps/web/src/store/conversationOwner.ts) resolves presentation/owner addresses and routes headless lifecycle mutations                                                                                                                                                                                                              |
+| Server-side creation | [agent-node.service.ts](../../apps/server/src/modules/agent/agent-node.service.ts) validates a selectable external Profile and anchor, then creates the fixed-binding Question Node and lineage edge through the canonical Canvas executor                                                                                                                       |
+| Fixed-thread lookup  | [agent-thread-resolver.ts](../../apps/server/src/modules/agent/agent-thread-resolver.ts) is the thin Canvas-scan boundary for resolving a fixed Agent Node by thread; a Workspace-global DB index will replace only its storage lookup after issue #60                                                                                                           |
+| Server invocation    | [agent-thread.service.ts](../../apps/server/src/modules/agent/agent-thread.service.ts) resolves fixed identity for UI and RFS, owns shared lease/stop/dispatch, and wraps runs with [agent-node-lifecycle.ts](../../apps/server/src/modules/agent/agent-node-lifecycle.ts) first-content, running, done, and error patches through the canonical Canvas executor |
+| RFS Agent access     | [rfs.route.ts](../../apps/server/src/modules/remote_fs/rfs.route.ts) creates visible Agents through `POST /agent` and submits later turns through `POST /agent/:threadId/prompt`; optional parent edges are best effort                                                                                                                                          |
+| Open scroll target   | [MessageList.tsx](../../apps/web/src/components/Messages/MessageList.tsx) + [messageListScroll.ts](../../apps/web/src/components/Messages/messageListScroll.ts)                                                                                                                                                                                                  |
+| Send + state writes  | [useAgentStream.ts](../../apps/web/src/hooks/useAgentStream.ts) owns selectable-node lifecycle and client `viewed` state; it does not write fixed-node content, status, or errors                                                                                                                                                                                |
+| Create path          | [resolveAddNodes.ts](../../apps/web/src/handler/canvasCommand/resolvers/resolveAddNodes.ts)                                                                                                                                                                                                                                                                      |
+| Dispatch API         | [agent.ts](../../apps/web/src/api/agent.ts) `streamMessage`                                                                                                                                                                                                                                                                                                      |
+| Spatial context      | [node-neighbourhood.ts](../../apps/server/src/modules/canvas/node-neighbourhood.ts)                                                                                                                                                                                                                                                                              |
+| Shared types         | [node.ts](../../packages/shared/src/types/canvas/node.ts) `QuestionNodeData` · [acp.ts](../../packages/shared/src/types/api/acp.ts) `AgentBinding`                                                                                                                                                                                                               |
 
 ---
 

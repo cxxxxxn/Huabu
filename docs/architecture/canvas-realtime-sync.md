@@ -16,6 +16,8 @@ Two channels cooperate:
   staleness fingerprint) attributed to a `threadId`, rendered as a Keep/Revert
   card above the chat input.
 
+Space Preview does not open a target Canvas sync stream. It reads bounded snapshots through `GET /:canvasId/preview-scene`, shares them by target in a tab-local cache, and revalidates on a ten-second freshness interval and window focus. A target mutation therefore appears after revalidation rather than through the host Canvas SSE channel; see [space-preview.md](./space-preview.md).
+
 `version` (monotonic per canvas) is the concurrency primitive; a **dirty-node**
 filter guarantees an incoming agent write never clobbers a node the user is
 mid-editing.
@@ -77,12 +79,6 @@ batch — there is no per-caller broadcast flag. This unifies all writers:
   broadcast.
 - ACP / headless writers hit `POST /:canvasId/execute`, which calls the same
   `executeOnServer`.
-- Sketch recognition is now a normal server-applied writer too: it runs the
-  agent through `executeOnServer` under a synthetic per-recognition `threadId`,
-  so the mutation is broadcast + produces change records like any other agent
-  batch. The on-canvas sketch overlay drives Keep / Revert / Preview off those
-  records (same as the chat `ChangeReviewCard`) — there is no longer a
-  client-side apply carve-out.
 - There is **no per-client echo filter** yet: correctness relies on the single
   apply path + id-keyed `applyDeltas`. A `clientId` filter is only needed once
   user hand-edits also broadcast (deferred — see the plan).
@@ -95,13 +91,15 @@ debounced-but-unsaved plus in-flight PUTs):
 
 ```
 INSERT_NODE (new id)     → always apply (fresh ids never collide)
-REPLACE_NODE / DELETE_NODE on a dirty id → SKIP (keep the human's unsaved edit)
+REPLACE_NODE changing content / DELETE_NODE on a dirty id → SKIP (keep the human's unsaved edit)
+REPLACE_NODE changing only non-content fields on a dirty id → apply while preserving local content fields
 otherwise                → apply
 ```
 
 - Resolution is deterministic **local-first**: a skipped node keeps the human's
   value, and its post-effects (preprocessing / fit) are skipped too. `version`
   still advances to `toVersion` so the next autosave doesn't 409.
+- Coarse `REPLACE_NODE` deltas include the server's full node even when only a lifecycle field such as Question `status` or `viewed` changed. Markdown-sidecar fields are compared by value, including nested `keywords` and `provenance` metadata, rather than object identity or object property order after JSON transport. When the remote delta leaves every markdown-sidecar field unchanged, the applier overlays the locally pending content fields onto the incoming node and applies the remaining update. This avoids treating the initiating tab's own lifecycle broadcast as an edit conflict without allowing stale server content to overwrite the local edit.
 - **Baseline rebase (no false conflict):** for a skipped `REPLACE_NODE`, the
   applier adopts the agent's just-written revision as that node's content-CAS
   baseline (`nodeContentQueue.seedBaselines` on the delta's `next`) **without**
@@ -114,6 +112,7 @@ otherwise                → apply
   `loadCanvas` — but **only when there are no dirty nodes**. With local dirty
   state a blind `loadCanvas` would lose the edit, so the tab defers to autosave's
   409 path (existing sticky "modified elsewhere" toast + Reload) instead.
+- Structure-save acknowledgements reconcile monotonically with Canvas Sync: a delayed HTTP success cannot lower the local version, and a delayed 409 whose reported server version has already arrived over SSE is retried against that fresh baseline instead of opening the global conflict state. If the 409 arrives first, the client records its server version; a later SSE update that reaches that version clears the warning and schedules the latest structure for retry.
 - **Scope:** content only. Same-node _structure_ conflicts (geometry / parent)
   stay coarse — there is no per-node structure-dirty tracking yet.
 
@@ -144,10 +143,7 @@ generic operation — no per-command inverse logic:
   regenerating `label` / `summary`, a re-measure) therefore never falsely block
   revert. Structural (create/delete/connect/…) records are existence-based.
 
-Records are persisted per thread in a mutable sidecar
-(`<threadId>.changes.json`, coalesced on read) and reach the frontend two ways:
-`load()` on thread open, and `replaceFromBroadcast()` (the broadcast carries the
-thread's full coalesced list, so the client replaces rather than appends).
+Records are persisted per thread in a mutable sidecar (`<threadId>.changes.json`, coalesced on read) and reach the frontend two ways: `load()` on thread open, and `replaceFromBroadcast()` (the broadcast carries the thread's full coalesced list, so the client replaces rather than appends). The global Settings → General preference **Automatically accept Agent Space changes** suppresses computation and persistence of new records for successful Agent batches when enabled; existing records remain available, and Canvas delta broadcast and current-session undo snapshots are unchanged.
 
 The [ChangeReviewCard](../../apps/web/src/components/Panels/ChatPanel/ChangeReviewCard.tsx)
 above the chat input renders the thread's records with per-item and bulk
@@ -179,13 +175,10 @@ To attach a canvas change to the right conversation's card, the initiating
   [`space-execute.ts`](../../apps/server/src/modules/remote_fs/space-execute.ts))
   reads it and sets `originator.threadId` + `computeChanges`. This is
   **best-effort**: a missing/malformed header applies the write unattributed. The
-  header is distinct from `/agent`'s `X-Huabu-Thread-Id` (which continues an
+  header is distinct from the thread ID in `/agent/:threadId/prompt` (which continues an
   internal built-in-agent turn — a different thread space).
 
-`executeOnServer` computes review records only when `computeChanges` is set
-(i.e. thread-attributed batches), so untagged writers pay no cost. When a
-`threadId` is present the batch's records are folded into the thread's coalesced
-sidecar and that full list is broadcast as `changes`.
+`executeOnServer` computes review records only when `computeChanges` is set (i.e. thread-attributed batches) and the global Agent Change Review configuration does not auto-accept Agent writes, so untagged and auto-accepted writers pay no extraction cost. When a `threadId` is present and explicit review is enabled, the batch's records are folded into the thread's coalesced sidecar and that full list is broadcast as `changes`.
 
 ## Preprocessing cost dedup
 
@@ -214,22 +207,15 @@ Broadcast applies take **one** undo snapshot per batch (via
   geometry but keeps its **live** `data` (thread binding, answer) — that payload
   is system-driven, so rewinding a move must not wipe it.
 
-## Known reliability gaps
+## Stream reliability
 
-Consistent with the sibling `external.route.ts`, and acceptable for the
-single-process, `127.0.0.1` desktop topology — but tracked:
+The sync route subscribes before reading the initial Canvas version, buffers updates committed during that read, sends the snapshot first, and then flushes the buffered updates. This closes the snapshot/subscribe loss window while preserving snapshot-before-update ordering.
 
-- **No SSE heartbeat.** The stream sends `: ok` once on connect and then only on
-  updates; there is no periodic ping. Behind an idle-timeout proxy the
-  connection could be dropped.
-- **No client auto-reconnect.** `canvasSyncStore.connect()` uses `fetch` +
-  `readTypedSSEStream` (not native `EventSource`), so a dropped stream is not
-  re-established until the canvas is switched / reloaded. Reconnect would piggy-
-  back on the existing snapshot-on-connect reconcile to heal the gap.
-- **Revert-route TOCTOU.** The revert handler reads the record and removes it
-  outside the per-canvas mutex (only `applyDeltasOnServer` is inside), so two
-  concurrent reverts of the same change could double-apply. Negligible on
-  single-user desktop; folded away by P3's unified write path.
+The server emits a heartbeat comment every 15 seconds. `canvasSyncStore.connect()` treats non-OK responses, malformed events, network errors, and unexpected EOF as failures and reconnects with exponential backoff capped at 10 seconds. An intentional Canvas switch or disconnect aborts the current request and pending delay, while every successful event resets the backoff. The reconnect snapshot/version handshake remains the convergence mechanism.
+
+## Known reliability gap
+
+- **Revert-route TOCTOU.** The revert handler reads the record and removes it outside the per-canvas mutex (only `applyDeltasOnServer` is inside), so two concurrent reverts of the same change could double-apply. Negligible on single-user desktop; folded away by P3's unified write path.
 
 ## Code entry points
 

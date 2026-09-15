@@ -19,6 +19,8 @@ The main process validates every bridged mutation before touching `safeStorage`,
 
 The `pi-ai` credential adapter preserves the `CredentialStore.modify` contract during concurrent OAuth refresh: a returned credential replaces the stored value, while `undefined` leaves the current value unchanged because another locked caller may already have refreshed it. Credential removal is performed only through `delete`; treating a no-op `modify` as deletion would erase a freshly rotated Copilot credential when several requests observe expiry together.
 
+OAuth API errors expose the deepest message in an `Error.cause` chain so a persistence rejection remains actionable after `pi-ai` wraps it. The response includes only the selected message, never the error object or stack. In Settings, a device code remains visible and copyable while polling, and the provider verification page opens only after an explicit user action.
+
 The source workflows `pnpm dev` and `pnpm dev:desktop` run the server as an external development process, so they use the standalone backend rather than Electron `safeStorage`. They require a stable `HUABU_SECRET_KEY` when the Settings UI persists credentials or when an encrypted credential file already exists.
 
 For standalone deployments, the encrypted primary backend wins over the environment fallback. Writes target only the primary backend, and the application never writes to `.env`. The one deliberate `process.env` mutation is at startup: `initializeSecretStore()` reads `HUABU_SECRET_KEY` once, parses it into the in-memory `EncryptedFileSecretStore` master key, then deletes `process.env.HUABU_SECRET_KEY` so the raw key can never be inherited by a forked child process (the agentlet daemon and the external agents it spawns). This is defense in depth alongside the agentlet transport's `HUABU_` namespace strip — see [`agent-reachback.md`](./agent-reachback.md) ("Environment injection and isolation"). A `.env` file is merely one way `dotenv` can populate `process.env` during startup.
@@ -44,6 +46,8 @@ Key resolution reads the secret store only; there is no caller-supplied or on-di
 Every mutation constructs a new encrypted snapshot, atomically replaces the file, reads it back, authenticates and decrypts every entry, and only then publishes the new in-memory snapshot. A wrong key, malformed file, modified ciphertext, or authentication failure aborts startup or rejects the write.
 
 The standalone server may run without `HUABU_SECRET_KEY` when it has no encrypted file. This environment-only mode supports headless and container deployments but deliberately rejects Settings writes. If an encrypted file exists without a key, startup fails with an actionable error instead of silently discarding credentials.
+
+The deployment readiness endpoint exposes only whether the selected backend is writable and the stable `secret-key-required` reason for environment-only mode. Settings uses that capability to disable API-key and OAuth mutations before they fail; backend kind, key material, credential values, and environment fallbacks remain private. See [`deployment-security.md`](./deployment-security.md).
 
 ## Code entry points
 

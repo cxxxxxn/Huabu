@@ -3,10 +3,7 @@
 
 import { fitPortals, getDescendantIds } from '@huabu/shared/canvas-engine';
 
-import {
-  isWorldCanvasId,
-  listCanvasDirEntries,
-} from '../storage/canvas-dirs.js';
+import { getStructuredStore, isWorldCanvasId } from '../storage/index.js';
 
 import type { CanvasCommand } from '@huabu/shared';
 import type { NestableNode } from '@huabu/shared/canvas-engine';
@@ -24,6 +21,22 @@ function storedNodes(nodes: readonly unknown[]): StoredNode[] {
   );
 }
 
+/**
+ * Every ordinary Space in the active Workspace, by id.
+ *
+ * The World's Portals point at Spaces, so the rules below need to know which
+ * of those targets still exist. Read through the catalogue rather than a
+ * directory listing: the answer is the same on every backend, and the World is
+ * the one place in the product that asks it.
+ *
+ * The checks that consume this set take it as an argument, so the rules
+ * themselves stay pure and testable without a live backend.
+ */
+export async function readLiveSpaceIds(): Promise<ReadonlySet<string>> {
+  const summaries = await getStructuredStore().spaces().list();
+  return new Set(summaries.map((summary) => summary.canvasId));
+}
+
 export class WorldPortalMutationError extends Error {
   constructor(message: string) {
     super(message);
@@ -33,6 +46,14 @@ export class WorldPortalMutationError extends Error {
 
 function portalTarget(node: StoredNode): string | null {
   return node.type === 'canvasRef' &&
+    typeof node.data?.targetCanvasId === 'string' &&
+    node.data.targetCanvasId.length > 0
+    ? node.data.targetCanvasId
+    : null;
+}
+
+function previewTarget(node: StoredNode): string | null {
+  return node.type === 'spacePreview' &&
     typeof node.data?.targetCanvasId === 'string' &&
     node.data.targetCanvasId.length > 0
     ? node.data.targetCanvasId
@@ -122,10 +143,12 @@ export function assertWorldPortalTopologyAllowed(
   canvasId: string,
   previousNodesInput: readonly unknown[],
   nextNodesInput: readonly unknown[],
+  liveCanvasIds: ReadonlySet<string>,
 ): void {
   const previousNodes = storedNodes(previousNodesInput);
   const nextNodes = storedNodes(nextNodesInput);
   const nextPortals = nextNodes.filter((node) => node.type === 'canvasRef');
+  const nextPreviews = nextNodes.filter((node) => node.type === 'spacePreview');
   const nextNodeRefs = nextNodes.filter(
     (node) => node.type === 'nodeRef' || node.type === 'frameRef',
   );
@@ -244,6 +267,22 @@ export function assertWorldPortalTopologyAllowed(
 
   const seenTargets = new Set<string>();
 
+  for (const preview of nextPreviews) {
+    const target = previewTarget(preview);
+    if (!target || seenTargets.has(target)) {
+      throw new WorldPortalMutationError(
+        'World Space previews require one unique targetCanvasId',
+      );
+    }
+    seenTargets.add(target);
+    const previous = previousById.get(preview.id);
+    if (!previous || previewTarget(previous) !== target) {
+      throw new WorldPortalMutationError(
+        'World Space previews may only be created by reconciliation',
+      );
+    }
+  }
+
   for (const portal of nextPortals) {
     const target = portalTarget(portal);
     if (!target) {
@@ -283,9 +322,6 @@ export function assertWorldPortalTopologyAllowed(
     }
   }
 
-  const liveCanvasIds = new Set(
-    listCanvasDirEntries().map((entry) => entry.id),
-  );
   for (const previous of previousNodes) {
     const previousNodeRef = nodeRefTarget(previous);
     if (previousNodeRef) {
@@ -318,9 +354,25 @@ export function assertWorldPortalTopologyAllowed(
         'A canonical Portal cannot change node type',
       );
     }
+
     if (liveCanvasIds.has(target) && !next) {
       throw new WorldPortalMutationError(
         'A live canonical Portal cannot be deleted',
+      );
+    }
+  }
+  for (const previous of previousNodes) {
+    const target = previewTarget(previous);
+    if (!target) continue;
+    const next = nextById.get(previous.id);
+    if (next && next.type !== 'spacePreview') {
+      throw new WorldPortalMutationError(
+        'A canonical Space preview cannot change node type',
+      );
+    }
+    if (liveCanvasIds.has(target) && !next) {
+      throw new WorldPortalMutationError(
+        'A live canonical Space preview cannot be deleted',
       );
     }
   }
@@ -331,22 +383,39 @@ export function assertWorldPortalResultAllowed(
   canvasId: string,
   previousNodesInput: readonly unknown[],
   nextNodesInput: readonly unknown[],
+  liveCanvasIds: ReadonlySet<string>,
 ): void {
   if (!isWorldCanvasId(canvasId)) return;
 
-  const liveCanvasIds = new Set(
-    listCanvasDirEntries().map((entry) => entry.id),
-  );
   const nextById = new Map(
     storedNodes(nextNodesInput).map((node) => [node.id, node]),
+  );
+  const nextPreviewTargets = new Set(
+    storedNodes(nextNodesInput)
+      .map(previewTarget)
+      .filter((target): target is string => target !== null),
   );
   for (const previous of storedNodes(previousNodesInput)) {
     const target = portalTarget(previous);
     if (!target || !liveCanvasIds.has(target)) continue;
     const next = nextById.get(previous.id);
-    if (!next || portalTarget(next) !== target) {
+    if (
+      (!next ||
+        (portalTarget(next) !== target && previewTarget(next) !== target)) &&
+      !nextPreviewTargets.has(target)
+    ) {
       throw new WorldPortalMutationError(
         'A live canonical Portal cannot be deleted or repointed',
+      );
+    }
+  }
+  for (const previous of storedNodes(previousNodesInput)) {
+    const target = previewTarget(previous);
+    if (!target || !liveCanvasIds.has(target)) continue;
+    const next = nextById.get(previous.id);
+    if (!next || previewTarget(next) !== target) {
+      throw new WorldPortalMutationError(
+        'A live canonical Space preview cannot be deleted or repointed',
       );
     }
   }
@@ -358,6 +427,7 @@ export function assertWorldPortalMutationsAllowed(
   commands: readonly CanvasCommand[],
   nodes: readonly StoredNode[],
   source: 'ui' | 'agent' | 'system',
+  liveCanvasIds: ReadonlySet<string>,
 ): void {
   if (source === 'system') return;
 
@@ -379,12 +449,17 @@ export function assertWorldPortalMutationsAllowed(
 
   if (!isWorldCanvasId(canvasId)) return;
 
-  const liveCanvasIds = new Set(
-    listCanvasDirEntries().map((entry) => entry.id),
-  );
   const byId = new Map(nodes.map((node) => [node.id, node]));
 
   for (const command of commands) {
+    if (
+      command.type === 'CREATE_NODES' &&
+      command.nodes.some((node) => node.nodeType === 'spacePreview')
+    ) {
+      throw new WorldPortalMutationError(
+        'World Space previews are created by reconciliation',
+      );
+    }
     if (command.type === 'DELETE_NODES') {
       const deletedIds = new Set(command.nodeIds as string[]);
       for (const nodeId of command.nodeIds) {
@@ -421,6 +496,19 @@ export function assertWorldPortalMutationsAllowed(
           'A live canonical Portal cannot be deleted',
         );
       }
+      const deletesLivePreview = [...deletedIds].some((nodeId) => {
+        const node = byId.get(nodeId);
+        return (
+          node?.type === 'spacePreview' &&
+          typeof node.data?.targetCanvasId === 'string' &&
+          liveCanvasIds.has(node.data.targetCanvasId)
+        );
+      });
+      if (deletesLivePreview) {
+        throw new WorldPortalMutationError(
+          'A live canonical Space preview cannot be deleted',
+        );
+      }
     }
 
     if (command.type === 'MERGE_NODE_DATA') {
@@ -447,12 +535,25 @@ export function assertWorldPortalMutationsAllowed(
           'A canonical Portal cannot be repointed',
         );
       }
+      const repointsPreview = command.patches.some((entry) => {
+        const node = byId.get(entry.nodeId);
+        return (
+          node?.type === 'spacePreview' &&
+          'targetCanvasId' in (entry.patch ?? {})
+        );
+      });
+      if (repointsPreview) {
+        throw new WorldPortalMutationError(
+          'A canonical Space preview cannot be repointed',
+        );
+      }
     }
 
     if (command.type === 'DISSOLVE_FRAME') {
       const target = byId.get(command.frameId);
       if (
         target?.type === 'canvasRef' ||
+        target?.type === 'spacePreview' ||
         target?.type === 'nodeRef' ||
         target?.type === 'frameRef'
       ) {
@@ -466,6 +567,7 @@ export function assertWorldPortalMutationsAllowed(
       const target = byId.get(command.nodeId);
       if (
         target?.type === 'canvasRef' ||
+        target?.type === 'spacePreview' ||
         target?.type === 'nodeRef' ||
         target?.type === 'frameRef'
       ) {

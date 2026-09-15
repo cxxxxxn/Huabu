@@ -14,10 +14,17 @@
 const enc = encodeURIComponent;
 
 export const routes = {
+  // ── Deployment ────────────────────────────────────────────────────
+  deploymentReadiness: '/deployment/readiness',
+
   // ── Workspace ─────────────────────────────────────────────────────
   workspace: '/workspace',
   workspacePickFolder: '/workspace/pick-folder',
   workspaceValidatePath: '/workspace/validate-path',
+  workspaces: '/workspaces',
+  workspaceById: (workspaceId: string) => `/workspaces/${enc(workspaceId)}`,
+  workspaceActivate: (workspaceId: string) =>
+    `/workspaces/${enc(workspaceId)}/activate`,
 
   // ── LLM ───────────────────────────────────────────────────────────
   llmConfig: '/llm/config',
@@ -47,7 +54,11 @@ export const routes = {
   canvasImport: '/canvas/import',
   canvas: (canvasId: string) => `/canvas/${enc(canvasId)}`,
   canvasExecute: (canvasId: string) => `/canvas/${enc(canvasId)}/execute`,
+  canvasMoveSelection: (canvasId: string) =>
+    `/canvas/${enc(canvasId)}/move-selection`,
   canvasReferences: (canvasId: string) => `/canvas/${enc(canvasId)}/references`,
+  canvasPreviewScene: (canvasId: string) =>
+    `/canvas/${enc(canvasId)}/preview-scene`,
   canvasExport: (canvasId: string) => `/canvas/${enc(canvasId)}/export`,
   canvasNode: (canvasId: string, nodeId: string) =>
     `/canvas/${enc(canvasId)}/nodes/${enc(nodeId)}`,
@@ -90,13 +101,21 @@ export const routes = {
   webPage: (canvasId: string, nodeId: string) =>
     `/web/page?canvasId=${enc(canvasId)}&nodeId=${enc(nodeId)}`,
 
-  // ── Intent ────────────────────────────────────────────────────────
-  intentRecognizeStream: '/intent/recognize-stream',
-  intentRecognizeSketch: '/intent/recognize-sketch',
-  intentEpisode: '/intent/episode',
+  // ── Interactive Views ────────────────────────────────────────────
+  interactiveView: (canvasId: string, nodeId: string) =>
+    `/interactive-views/${enc(canvasId)}/${enc(nodeId)}`,
+  interactiveViewRuntime: (canvasId: string, nodeId: string) =>
+    `/interactive-views/${enc(canvasId)}/${enc(nodeId)}/runtime`,
+  interactiveViewState: (canvasId: string, nodeId: string) =>
+    `/interactive-views/${enc(canvasId)}/${enc(nodeId)}/state`,
+  interactiveViewAction: (canvasId: string, nodeId: string, actionId: string) =>
+    `/interactive-views/${enc(canvasId)}/${enc(nodeId)}/actions/${enc(actionId)}`,
 
   // ── Agent ─────────────────────────────────────────────────────────
   agent: '/agent',
+  conversationTitles: '/agent/threads/titles/query',
+  conversationTitle: (threadId: string, canvasId: string) =>
+    `/agent/threads/${enc(threadId)}/title?canvasId=${enc(canvasId)}`,
   agentHistory: (threadId: string, canvasId?: string) => {
     const params = canvasId ? `?canvasId=${enc(canvasId)}` : '';
     return `/agent/history/${enc(threadId)}${params}`;
@@ -114,6 +133,7 @@ export const routes = {
     const params = canvasId ? `?canvasId=${enc(canvasId)}` : '';
     return `/agent/context-tokens/${enc(threadId)}${params}`;
   },
+  agentChangeReviewConfig: '/agent-change-review/config',
 
   // ── ACP (external agent bridge) ───────────────────────────────────
   acpAgentCli: '/acp/agent-cli',
@@ -124,12 +144,6 @@ export const routes = {
   acpAgentlet: '/acp/agentlet',
   acpAgentletRestart: '/acp/agentlet/restart',
   acpRuntimeConfig: '/acp/runtime-config',
-  acpThreadSession: (threadId: string) =>
-    `/acp/threads/${enc(threadId)}/session`,
-  acpThreadCommands: (threadId: string, canvasId?: string) => {
-    const params = canvasId ? `?canvasId=${enc(canvasId)}` : '';
-    return `/acp/threads/${enc(threadId)}/commands${params}`;
-  },
   acpThreadCachedMeta: (
     threadId: string,
     canvasId?: string,

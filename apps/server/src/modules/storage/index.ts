@@ -18,26 +18,52 @@
 
 export {
   CanvasStore,
-  createCanvas,
-  deleteCanvas,
   forgetCanvasStore,
   getCanvasStore,
-  listCanvases,
-  listCanvasSummaries,
   resetStorageCache,
 } from './compatibility/canvas.js';
 export type { RenameResult, RenameSelfResult } from './compatibility/canvas.js';
 
+/**
+ * World identity, answered for whichever backend is configured.
+ *
+ * These used to come straight from the Disk directory index. They are on the
+ * composition root now because the World is a Space like any other and every
+ * backend has one — the index is just how Disk finds it.
+ */
 export {
   getWorldCanvasId,
   isWorldCanvasId,
   requireWorldCanvasId,
-} from '../workspace/disk/canvas-dirs.js';
+} from './storage.js';
+
+/**
+ * Materialization-tier capabilities, re-exported so consumers that need a
+ * real Space directory reach them through the facade rather than naming a
+ * backend (§12.5.4).
+ *
+ * Each is Disk-shaped by nature, not by accident: releasing directory handles
+ * exists so Windows can rename a Space folder, and the World bootstrap writes
+ * one. A profile that does not materialize Spaces has nothing for either to
+ * do, which is the gate that keeps them off the portable surface.
+ */
 export {
-  withCanvasMutex,
-  updateNode,
-  applyNodeUpdate,
-} from '../canvas/write-coordinator.js';
+  registerSpaceDirHandleOwner,
+  withSpaceDirHandlesReleased,
+} from './backends/disk/space-dir-handles.js';
+export type { SpaceDirHandleOwner } from './backends/disk/space-dir-handles.js';
+export { ensureWorldCanvasOnDisk } from './backends/disk/world-canvas.js';
+/**
+ * Workspace adoption, split out from the repository on purpose: the isolated
+ * preparation child creates the manifest as part of the blocking filesystem
+ * work it exists to contain, while registry membership stays a Server-process
+ * decision with exactly one writer.
+ */
+export {
+  ensureWorkspaceManifestOnDisk,
+  workspaceIdentityOnDisk,
+} from './backends/disk/workspace-repository.js';
+export { withCanvasMutex, updateNode } from '../canvas/write-coordinator.js';
 export type {
   UpdateNodeOptions,
   UpdateNodeOutcome,
@@ -52,23 +78,68 @@ export type {
 // ─── Storage ports and composition ─────────────────────────────────────────
 
 export {
-  canvasBlobs,
+  activateWorkspace,
+  adoptWorkspaceDirectory,
+  closeStorage,
+  composeStorage,
+  createNamedWorkspace,
+  createSpace,
   createStorage,
+  deleteSpace,
   getBlobStore,
   getStorage,
   getStructuredStore,
+  getWorkspaceRepository,
+  hasWorkspaceRegistry,
   initStorage,
+  materializesWorkspaces,
   setStorageForTesting,
+  space,
+  stageSpaceImport,
   storageHealth,
+  workspaceAtDirectory,
+  workspaceDirectory,
 } from './storage.js';
-export type { Storage } from './storage.js';
+export type {
+  Space,
+  SpaceDeleteOutcome,
+  SqliteSpaceTree,
+  Storage,
+} from './storage.js';
+export type { SqliteSpaceSubstrate } from './backends/sqlite/space-extension.js';
+export type { DiskSpaceTree } from './backends/disk/space-tree.js';
+export type { DiskSpaceImport } from './backends/disk/space-import.js';
 export {
   parseStorageProfile,
   StorageProfileError,
   validateStorageProfile,
 } from './profile.js';
+export {
+  describeUnavailableCapabilities,
+  STORAGE_CAPABILITIES,
+  unavailableCapabilities,
+  unavailableCapabilityMessage,
+} from './capabilities.js';
+/**
+ * Capability questions are asked of the profile in force, never of one the
+ * caller assembled — so the bound accessor is what leaves the module and
+ * `hasStorageCapability` stays inside it.
+ */
+export { storageServes } from './storage.js';
+export type { StorageCapability } from './capabilities.js';
 export type { StorageProfile } from './profile.js';
-export { BlobNameError, normalizeBlobName } from './ports/blob.js';
+export {
+  assertValidNamespace,
+  SpaceNamespaceError,
+} from './ports/namespace.js';
+export {
+  BlobNameError,
+  normalizeBlobName,
+  SPACE_GUIDE_BLOB_NAMES,
+  SPACE_GUIDE_SKILL_NAME,
+  SPACE_MEMORY_BLOB_NAME,
+  spaceBlobAreas,
+} from './ports/blob.js';
 export type {
   BlobBackendKind,
   BlobInfo,
@@ -76,21 +147,42 @@ export type {
   BlobRange,
   BlobRead,
   BlobScope,
-  BlobScopeRef,
   BlobStore,
+  SpaceBlobs,
 } from './ports/blob.js';
 export type { StorageHealth } from './ports/common.js';
 export type {
-  CanvasChangeRepository,
-  CanvasDeltaRepository,
-  CanvasEventRepository,
-  CanvasIntentRepository,
-  LegacyNodeStore,
+  WorkspaceHandle,
+  WorkspaceRepository,
+} from './ports/workspace.js';
+export type {
   NewCanvasEvent,
-  NodeWriteResult,
+  NodeDeleteResult,
+  NodePutInput,
+  NodePutResult,
+  NodeSnapshot,
+  NodeStreamOptions,
+  SpaceBeginDeleteResult,
+  SpaceChanges,
+  SpaceCreateInput,
+  SpaceCreateResult,
+  SpaceDeleteFinishResult,
+  SpaceDeleteInput,
+  SpaceDeleteSession,
+  SpaceEvents,
   SpaceHandle,
+  SpaceNodeMutation,
+  SpaceNodes,
+  SpaceRenameInput,
+  SpaceRenameResult,
   SpaceRepository,
+  SpaceSubstrate,
+  SpaceTaskRuns,
+  SpaceTasks,
+  SpaceWriteInput,
   SpaceWriteResult,
   StructuredBackendKind,
   StructuredStore,
+  TaskRunCompletionResult,
+  TaskRunUpdate,
 } from './ports/structured.js';

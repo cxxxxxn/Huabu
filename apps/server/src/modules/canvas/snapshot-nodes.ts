@@ -56,7 +56,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { initWasm, Resvg } from '@resvg/resvg-wasm';
-import { getStroke } from 'perfect-freehand';
+import getStrokeImport from 'perfect-freehand';
 
 import {
   SPACE_SNAPSHOT_DEFAULT_PIXELS,
@@ -68,14 +68,23 @@ import {
 import { getSketchRenderedSize } from '@huabu/shared/canvas-engine';
 
 import { RASTERIZABLE_IMAGE_EXT_MIME } from '../../utils/mime.js';
-import { canvasBlobs, getCanvasStore } from '../storage/index.js';
+import { space } from '../storage/index.js';
 
+import type { Space } from '../storage/index.js';
 import type {
   SketchNodeData,
   SnapshotNodesQueryParams,
   SpatialNode,
 } from '@huabu/shared';
 import type { CanvasNode } from '@huabu/shared/canvas-engine';
+
+type GetStroke = (typeof getStrokeImport)['default'];
+
+const getStroke = (
+  typeof getStrokeImport === 'function'
+    ? getStrokeImport
+    : (getStrokeImport as { default: GetStroke }).default
+) as GetStroke;
 
 export type SnapshotNodesArgs = SnapshotNodesQueryParams & {
   canvasId: string;
@@ -120,8 +129,7 @@ const DEFAULT_STROKE_SIZE = SKETCH_OPTIONS.size;
 const DEFAULT_STROKE_COLOR = 'black';
 
 // ─── Cluster rendering knobs ───────────────────────────────────────────────
-// Padding around the cluster bbox (flow-space units). Mirrors
-// apps/web/src/handler/sketch/sketchToImage.ts DEFAULT_PADDING.
+// Padding around the cluster bbox (flow-space units).
 const CLUSTER_PADDING = 16;
 // Max PNG dimension. Clusters larger than this are scaled to fit.
 // Kept at 1280 because:
@@ -136,8 +144,7 @@ const CLUSTER_PADDING = 16;
 //   3. 1280 still leaves enough resolution for `gpt-image-1` to use
 //      the cluster as a reference image without visible blur.
 const CLUSTER_MAX_PIXELS = SPACE_SNAPSHOT_DEFAULT_PIXELS;
-// Edge-to-edge clustering threshold (flow-space px). Mirrors
-// apps/web/src/handler/sketch/sketchClustering.ts CLUSTER_DISTANCE_THRESHOLD.
+// Edge-to-edge clustering threshold (flow-space px).
 const CLUSTER_DISTANCE_THRESHOLD = 200;
 
 // ─── Node `data` access (loose, defensive) ─────────────────────────────────
@@ -398,14 +405,14 @@ const IMAGE_EXT_MIME = RASTERIZABLE_IMAGE_EXT_MIME;
  * Returns `null` when the node has no sidecar or the key is
  * missing/blank.
  */
-function readSidecarString(
-  store: ReturnType<typeof getCanvasStore>,
+async function readSidecarString(
+  handle: Space,
   nodeId: string,
   key: 'src',
-): string | null {
-  const sidecar = store.readNode(nodeId);
-  if (!sidecar) return null;
-  const value = sidecar[key];
+): Promise<string | null> {
+  const record = (await handle.nodes.read(nodeId))?.record;
+  if (!record) return null;
+  const value = record[key];
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
@@ -434,17 +441,17 @@ export interface ContextImage {
  * this image.
  */
 async function loadContextImage(
-  store: ReturnType<typeof getCanvasStore>,
+  handle: Space,
   node: CanvasNode,
 ): Promise<ContextImage | null> {
-  const src = readSidecarString(store, node.id, 'src');
+  const src = await readSidecarString(handle, node.id, 'src');
   if (!src) return null;
   const ext = path.extname(src).toLowerCase();
   const mimeType = IMAGE_EXT_MIME[ext];
   if (!mimeType) return null;
   const { width, height } = nodeBoxSize(node);
   if (width <= 0 || height <= 0) return null;
-  const bytes = await canvasBlobs(store.canvasId).read(src);
+  const bytes = await handle.artifacts.read(src);
   if (!bytes) return null;
   return { node, resolvedSrc: src, bytes, mimeType, width, height };
 }
@@ -789,15 +796,15 @@ async function resampleImageBytes(
  * so repeated calls with the same parameters are O(1) cache hits.
  */
 async function maybeResizeImageArtifact(
-  store: ReturnType<typeof getCanvasStore>,
+  handle: Space,
   src: string,
   maxEdge: number,
 ): Promise<{ src: string; width: number; height: number } | null> {
-  const blobs = canvasBlobs(store.canvasId);
+  const artifacts = handle.artifacts;
   const ext = path.extname(src).toLowerCase();
   const mimeType = IMAGE_EXT_MIME[ext];
   if (!mimeType) return null;
-  const bytes = await blobs.read(src);
+  const bytes = await artifacts.read(src);
   if (!bytes) return null;
   const dims = readImageDimensions(bytes, mimeType);
   if (!dims) return null;
@@ -809,7 +816,7 @@ async function maybeResizeImageArtifact(
   const originalStem = path.basename(src, path.extname(src));
   const id = `${originalStem}-resized-${maxEdge}`;
   const filename = `${id}.png`;
-  const cachedBytes = await blobs.read(filename);
+  const cachedBytes = await artifacts.read(filename);
   if (cachedBytes) {
     // Re-derive dimensions from the cached blob so the result is
     // accurate without paying for another resvg pass.
@@ -830,7 +837,7 @@ async function maybeResizeImageArtifact(
     dims.height,
     maxEdge,
   );
-  await blobs.put(filename, resized.png);
+  await artifacts.put(filename, resized.png);
   return { src: filename, width: resized.width, height: resized.height };
 }
 
@@ -854,8 +861,8 @@ export async function snapshotNodesToArtifacts(
     Math.min(SPACE_SNAPSHOT_MAX_PIXELS, args.maxPixels ?? CLUSTER_MAX_PIXELS),
   );
 
-  const store = getCanvasStore(args.canvasId);
-  const canvas = store.read();
+  const handle = space(args.canvasId);
+  const canvas = await handle.read();
   if (!canvas) {
     throw new SnapshotNodeError(
       `Canvas ${args.canvasId} not found`,
@@ -968,7 +975,7 @@ export async function snapshotNodesToArtifacts(
     // resvg downscale, instead of building a full composite SVG.
     if (cluster.length === 1 && cluster[0].type === 'image') {
       const entry = cluster[0];
-      const src = readSidecarString(store, entry.node.id, 'src');
+      const src = await readSidecarString(handle, entry.node.id, 'src');
       if (!src) {
         if (entry.fromFrame) continue;
         throw new SnapshotNodeError(
@@ -976,7 +983,7 @@ export async function snapshotNodesToArtifacts(
           'invalid_snapshot_request',
         );
       }
-      const resized = await maybeResizeImageArtifact(store, src, maxEdge);
+      const resized = await maybeResizeImageArtifact(handle, src, maxEdge);
       if (resized) {
         results.push({
           src: resized.src,
@@ -1006,7 +1013,7 @@ export async function snapshotNodesToArtifacts(
 
     const contextImages: ContextImage[] = [];
     for (const entry of imageEntries) {
-      const loaded = await loadContextImage(store, entry.node);
+      const loaded = await loadContextImage(handle, entry.node);
       if (loaded) {
         contextImages.push(loaded);
         continue;
@@ -1019,7 +1026,7 @@ export async function snapshotNodesToArtifacts(
       // (the strokes will still render; losing one backdrop is
       // preferable to failing the whole batch).
       if (entry.fromFrame) continue;
-      const src = readSidecarString(store, entry.node.id, 'src');
+      const src = await readSidecarString(handle, entry.node.id, 'src');
       if (!src) {
         throw new SnapshotNodeError(
           `Node ${entry.node.id} (image) has no src — nothing to return. The artifact may have been deleted, or the node's markdown sidecar (nodes/<label>.md) is missing its \`src:\` frontmatter entry.`,
@@ -1054,10 +1061,10 @@ export async function snapshotNodesToArtifacts(
         ? `sketch-raster-${fingerprint}`
         : `sketch-raster-${fingerprint}-${maxEdge}`;
     const filename = `${id}.png`;
-    const existing = await canvasBlobs(store.canvasId).head(filename);
+    const existing = await handle.artifacts.head(filename);
     if (!existing) {
       const png = await renderClusterPng(built.svg, built.width);
-      await canvasBlobs(store.canvasId).put(filename, png);
+      await handle.artifacts.put(filename, png);
     }
     results.push({
       src: filename,

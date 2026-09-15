@@ -55,8 +55,17 @@ import {
   handleSnapshotNodes,
   type SnapshotNodesArgs,
 } from './handlers/snapshot-node.js';
+import {
+  handleCompleteTaskRun,
+  handleCreateTask,
+  handleStartTaskRun,
+  type CompleteTaskRunArgs,
+  type CreateTaskArgs,
+  type StartTaskRunArgs,
+} from './handlers/task.js';
 import { handleWebSearch, type WebSearchArgs } from './handlers/web-search.js';
 import { resolveWorldReadCanvasId } from '../../canvas/world-target-access.js';
+import { acquireWorkspaceOperationLease } from '../../workspace.js';
 
 import type { AgentToolResult } from '@earendil-works/pi-agent-core';
 import type { NodeOrigin } from '@huabu/shared';
@@ -69,8 +78,7 @@ import type { NodeOrigin } from '@huabu/shared';
  *   exposed.
  * - `origin` is forwarded to `canvas_commands` only; other handlers
  *   ignore it. It controls the `NodeOrigin` stamp on AI-generated
- *   nodes (defaults to `'ai-operate'` when unset; the sketch
- *   pipeline overrides it to `'sketch-recognized'`).
+ *   nodes (defaults to `'ai-operate'` when unset).
  */
 export interface ExecuteContext {
   canvasId?: string;
@@ -112,10 +120,10 @@ export async function executeTool(
   };
   const withCanvasId = <T>(value: Record<string, unknown>, toolName: string) =>
     ({ ...value, canvasId: requireCanvasId(toolName) }) as unknown as T;
-  const withReadCanvasId = <T>(
+  const withReadCanvasId = async <T>(
     value: Record<string, unknown>,
     toolName: string,
-  ): T => {
+  ): Promise<T> => {
     const ownerCanvasId = requireCanvasId(toolName);
     const requested = value.targetCanvasId;
     if (requested !== undefined && typeof requested !== 'string') {
@@ -124,8 +132,21 @@ export async function executeTool(
     const { targetCanvasId: _targetCanvasId, ...toolArgs } = value;
     return {
       ...toolArgs,
-      canvasId: resolveWorldReadCanvasId(ownerCanvasId, requested),
+      canvasId: await resolveWorldReadCanvasId(ownerCanvasId, requested),
     } as unknown as T;
+  };
+  const withStableWorkspace = async <T>(
+    operation: () => T | Promise<T>,
+  ): Promise<T> => {
+    // Cross-Space read authorization and the handler that consumes it are one
+    // operation. The resolver cannot release the Workspace before the handler
+    // runs without reopening a switch window between the check and the read.
+    const lease = acquireWorkspaceOperationLease();
+    try {
+      return await operation();
+    } finally {
+      lease.release();
+    }
   };
 
   switch (name) {
@@ -133,36 +154,53 @@ export async function executeTool(
       return handleWebSearch(args as WebSearchArgs);
 
     case 'get_space_outline':
-      return handleGetCanvasOutline(
-        withReadCanvasId<GetCanvasOutlineArgs>(args, 'get_space_outline'),
+      return withStableWorkspace(async () =>
+        handleGetCanvasOutline(
+          await withReadCanvasId<GetCanvasOutlineArgs>(
+            args,
+            'get_space_outline',
+          ),
+        ),
       );
 
     case 'inspect_nodes':
-      return handleInspectNodes(
-        withReadCanvasId<InspectNodesArgs>(args, 'inspect_nodes'),
+      return withStableWorkspace(async () =>
+        handleInspectNodes(
+          await withReadCanvasId<InspectNodesArgs>(args, 'inspect_nodes'),
+        ),
       );
 
     case 'inspect_edges':
-      return handleInspectEdges(
-        withReadCanvasId<InspectEdgesArgs>(args, 'inspect_edges'),
+      return withStableWorkspace(async () =>
+        handleInspectEdges(
+          await withReadCanvasId<InspectEdgesArgs>(args, 'inspect_edges'),
+        ),
       );
 
     case 'grep':
-      return handleGrep(withReadCanvasId<GrepArgs>(args, 'grep'));
+      return withStableWorkspace(async () =>
+        handleGrep(await withReadCanvasId<GrepArgs>(args, 'grep')),
+      );
 
     case 'find':
-      return handleFind(withReadCanvasId<FindArgs>(args, 'find'));
+      return withStableWorkspace(async () =>
+        handleFind(await withReadCanvasId<FindArgs>(args, 'find')),
+      );
 
     case 'ls':
-      return handleLs(withReadCanvasId<LsArgs>(args, 'ls'));
+      return withStableWorkspace(async () =>
+        handleLs(await withReadCanvasId<LsArgs>(args, 'ls')),
+      );
 
     case 'read': {
       const ownerCanvasId = requireCanvasId('read');
-      const readArgs = withReadCanvasId<ReadArgs>(args, 'read');
-      return handleRead(
-        readArgs,
-        readArgs.canvasId === ownerCanvasId ? context?.readSet : undefined,
-      );
+      return withStableWorkspace(async () => {
+        const readArgs = await withReadCanvasId<ReadArgs>(args, 'read');
+        return handleRead(
+          readArgs,
+          readArgs.canvasId === ownerCanvasId ? context?.readSet : undefined,
+        );
+      });
     }
 
     case 'space_commands':
@@ -170,6 +208,21 @@ export async function executeTool(
         withCanvasId<CanvasCommandsArgs>(args, 'space_commands'),
         context?.origin,
         { threadId: context?.threadId, readSet: context?.readSet },
+      );
+
+    case 'create_task':
+      return handleCreateTask(
+        withCanvasId<CreateTaskArgs>(args, 'create_task'),
+      );
+
+    case 'start_task_run':
+      return handleStartTaskRun(
+        withCanvasId<StartTaskRunArgs>(args, 'start_task_run'),
+      );
+
+    case 'complete_task_run':
+      return handleCompleteTaskRun(
+        withCanvasId<CompleteTaskRunArgs>(args, 'complete_task_run'),
       );
 
     case 'fs_write':

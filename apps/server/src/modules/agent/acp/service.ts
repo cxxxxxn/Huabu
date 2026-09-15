@@ -26,27 +26,30 @@ import {
 } from '@agenetes/agentlet-host';
 
 import { renderExternalAgentInputs } from './preprocessor.js';
-import { ensureProfileCacheSubscription } from './profile-cache-port.js';
+import { getProfileSessionPreferences } from './profile-session-preferences.js';
 import { getProfile as getLegacyProfile } from './profile-store.js';
 import { buildReachbackEnv } from './reachback-env.js';
 import { renderExternalAgentSystemPreamble } from '../../../prompt/external-agent/system-preamble.js';
-import { canvasAcpNamespace } from '../../storage/paths.js';
+import { canvasAcpNamespace } from '../../workspace/paths.js';
 import {
-  agenetes,
   EXTERNAL_DRIVER_KIND,
   type AcpHandle,
   type AcpWorkloadSpec,
 } from '../agenetes/drivers.js';
 import { createChatSubmission } from '../agenetes/handle.js';
 import { dumpAssembledPrompt } from '../conversation/prompt/debug-prompt.js';
+import { conversationTitleService } from '../conversation-title.service.js';
 
+import type { HuabuSubmission } from '../agenetes/handle.js';
 import type { ChatEnvelope } from '../conversation/envelope.js';
 import type { AcpBindingRecipe, AcpTurnOverlay } from '@agenetes/acp-driver';
 import type { AgentProfileSnapshot } from '@agenetes/agent-team';
-import type { AgentStreamEvent } from '@huabu/shared';
+import type { AgentLaunchOverrides, AgentStreamEvent } from '@huabu/shared';
 import type { FastifyBaseLogger } from 'fastify';
 
 export interface RunAcpAgentOptions {
+  /** Canonically realized handle shared by message and control paths. */
+  handle: AcpHandle;
   /**
    * External binding for the active thread. `profileId` references a
    * user-configured spawn recipe (see `./profile-store.ts`); the
@@ -70,6 +73,8 @@ export interface RunAcpAgentOptions {
    * any fs/* request from a session opened without a canvasId.
    */
   canvasId?: string;
+  /** Trusted upstream Question ownership; node labels are not Chat titles. */
+  questionOwned?: boolean;
   /**
    * This turn's structured envelope — the single source of truth shared
    * with the built-in path. The preprocessor reads the user's text,
@@ -77,6 +82,8 @@ export interface RunAcpAgentOptions {
    * drift from what the built-in serializer renders.
    */
   envelope: ChatEnvelope;
+  /** Pre-rendered durable submission for non-chat host events. */
+  submission?: HuabuSubmission;
   /**
    * Mutable per-turn ACP overlay. We accumulate tool extensions
    * (keyed by `toolCallId`) and the turn's plan here; the route folds
@@ -112,6 +119,8 @@ export interface RunAcpAgentOptions {
     mode: string;
     logger: FastifyBaseLogger;
   };
+  /** Called after Agenetes has synchronously persisted this turn's start. */
+  onTurnStarted?: () => void;
 }
 
 /**
@@ -166,29 +175,43 @@ export function resolveProfileSnapshot(
   };
 }
 
-export async function* runAcpAgent(
-  opts: RunAcpAgentOptions,
-): AsyncGenerator<AgentStreamEvent, void> {
-  const { binding, threadId, overlay, signal, logger } = opts;
-  const canvasId = opts.canvasId ?? '';
-  const rendered = await renderExternalAgentInputs({
-    envelope: opts.envelope,
-    agentAlias: binding.alias,
-    canvasId: canvasId || null,
-    logger,
-  });
-  const submission = createChatSubmission(opts.envelope, rendered);
+function applyWorkingDirectoryOverride(
+  recipe: AcpBindingRecipe | null,
+  workingDirPath: string | undefined,
+): AcpBindingRecipe | null {
+  if (!recipe || !workingDirPath) return recipe;
+  return {
+    ...recipe,
+    cwd: workingDirPath,
+    ...(recipe.agentTeam && 'workingDirPath' in recipe.agentTeam
+      ? {
+          agentTeam: {
+            ...recipe.agentTeam,
+            workingDirPath,
+          },
+        }
+      : {}),
+  };
+}
 
-  // Bake this thread's WorkloadSpec (I9.6). The ACP handle self-resolves
-  // (opens or reuses) its live session per turn from these fields — L1 no
-  // longer opens the session out-of-band. We deliberately do NOT set `cwd`
-  // when the caller omitted it, so the handle derives it from the bound
-  // profile's recipe.
+export interface BuildAcpWorkloadSpecOptions {
+  binding: { alias: string; profileId: string };
+  threadId: string;
+  canvasId?: string;
+  cwd?: string;
+  launchOverrides?: AgentLaunchOverrides;
+  spacePrompt?: string;
+}
+
+export function buildAcpWorkloadSpec(
+  opts: BuildAcpWorkloadSpecOptions,
+): AcpWorkloadSpec {
+  const { binding, threadId } = opts;
+  const canvasId = opts.canvasId ?? '';
   const profile = resolveProfileSnapshot(binding.profileId);
   let agentletId: string;
   let cwd: string | undefined;
   let recipe: AcpBindingRecipe | null;
-  const env = buildReachbackEnv(threadId, canvasId);
   if (profile) {
     agentletId = profile.agentletId;
     cwd = profile.workingDirPath;
@@ -216,20 +239,49 @@ export async function* runAcpAgent(
     recipe = resolveBindingRecipe(binding.profileId);
   }
 
-  const spec: AcpWorkloadSpec = {
+  const workingDirPath = opts.launchOverrides?.workingDirPath;
+  cwd = workingDirPath ?? cwd;
+  recipe = applyWorkingDirectoryOverride(recipe, workingDirPath);
+
+  return {
     threadId,
     kind: EXTERNAL_DRIVER_KIND,
     workloadType: 'Deployment' as const,
     namespace: canvasAcpNamespace(canvasId),
     spec: {
-      initialPreamble: [renderExternalAgentSystemPreamble()],
+      initialPreamble: [
+        renderExternalAgentSystemPreamble(),
+        ...(opts.spacePrompt ? [opts.spacePrompt] : []),
+        ...(opts.launchOverrides?.additionalInitialPreamble
+          ? [opts.launchOverrides.additionalInitialPreamble]
+          : []),
+      ],
+      initialPreferences: getProfileSessionPreferences(binding.profileId),
       binding,
       agentletId,
       ...(cwd !== undefined && { cwd }),
       recipe,
-      env,
+      env: buildReachbackEnv(threadId, canvasId),
     },
   };
+}
+
+export async function* runAcpAgent(
+  opts: RunAcpAgentOptions,
+): AsyncGenerator<AgentStreamEvent, void> {
+  const { binding, overlay, signal, logger, handle } = opts;
+  const canvasId = opts.canvasId ?? '';
+  const submission =
+    opts.submission ??
+    createChatSubmission(
+      opts.envelope,
+      await renderExternalAgentInputs({
+        envelope: opts.envelope,
+        agentAlias: binding.alias,
+        canvasId: canvasId || null,
+        logger,
+      }),
+    );
 
   // Optional developer aid: dump the exact text payload handed to ACP
   // `session/prompt` (the serialized prompt, NOT pi-ai messages — the
@@ -254,19 +306,21 @@ export async function* runAcpAgent(
       }
     : undefined;
 
-  // Get-or-create the long-lived ACP handle for this thread (I9.3) and
-  // drive one turn. The handle self-resolves its session inside `run`, so
-  // session-open failures surface on the generator's first `next()`.
-  // Static DriverMap construction guarantees that `external` is ACP.
-  const handle = agenetes.create(spec) as AcpHandle;
-  // Fold this thread's up-reported metadata into the L1 profile cache
-  // (I9.7). Idempotent per thread — subscribing before `run()` so the
-  // handle's initial state up-report is captured.
-  ensureProfileCacheSubscription(threadId, binding.profileId);
-  yield* handle.run(submission, {
+  // The shared realization service has already created the complete durable
+  // workload and subscribed its metadata before either message or control
+  // dispatch reaches this point.
+  if (canvasId && !opts.questionOwned)
+    void conversationTitleService.initialize(
+      canvasId,
+      opts.threadId,
+      opts.envelope.user.text,
+    );
+  const iterator = handle.run(submission, {
     overlay,
     signal,
     logger,
     onPrepared,
   });
+  opts.onTurnStarted?.();
+  yield* iterator;
 }

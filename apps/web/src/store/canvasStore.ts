@@ -14,6 +14,7 @@ import {
   type Connection,
   type ReactFlowInstance,
 } from '@xyflow/react';
+import deepEqual from 'fast-deep-equal';
 import { create, type StateCreator } from 'zustand';
 
 import {
@@ -29,7 +30,6 @@ import {
   applyDeltas,
   applySharedPostEffectsFromWriteResult,
   executeCanvasCommands,
-  computeFrameFit,
   FRAME_POINTER_CAPTURE_MARGIN,
   getAbsolutePosition as getFrameAbsolutePosition,
   getFrameSizing,
@@ -38,10 +38,12 @@ import {
   wouldAutoFrame,
   readFrameGridConfig,
   resolveFrameTrackCount,
-  solveStructuredFrameLayout,
   describeStructuredDropZone,
   getNodeSize,
+  moveNodeIntoContainer as projectNodeIntoFrame,
+  moveNodeOutOfFrame as projectNodeOutOfFrame,
   normalizeTreeOrder,
+  projectAffectedFrameGeometry,
   type AlignDirection,
   type Delta,
   type ExecutorOptions,
@@ -59,15 +61,22 @@ import {
   type UiResolverState,
 } from '@/handler/canvasCommand/uiIntent';
 import {
+  compensateDetachedDragPosition,
+  mergeLiveDragGeometry,
+} from '@/handler/liveDragGeometry';
+import { projectStructuredTargetGeometry } from '@/handler/projectStructuredTargetGeometry';
+import {
   applySnap,
   beginSnapSession,
   clearDragDecisions,
   consumeLastDragDecisions,
   consumeLastDragReparentBypass,
+  consumeLastNestedFrameEntryAllowed,
   endSnapSession,
   getResizeContext,
   getResizeSnappedRect,
   isReparentBypassed,
+  isNestedFrameEntryAllowed,
   isSnapSessionActive,
   isSnapSessionDragEndCommit,
   isSnapSessionResizeEndCommit,
@@ -77,24 +86,6 @@ import {
 import { i18n } from '@/i18n';
 
 import { canvasHistoryManager } from './canvasHistoryManager';
-import { measureMissingAutoHeights } from './canvasStore/height/measureMissingAutoHeights';
-import { createIntentActionWindow } from './canvasStore/intentActionWindow';
-import { normalizeNodeHeights } from './canvasStore/load/normalizeNodeHeights';
-import { reconcileQuestionStatus } from './canvasStore/load/reconcileQuestionStatus';
-import { shouldBackfillNodeLabel } from './canvasStore/load/shouldBackfillNodeLabel';
-import { warmupNodeHeights } from './canvasStore/load/warmupNodeHeights';
-import { createCanvasEventBuffer } from './canvasStore/save/eventBuffer';
-import { NODE_CONTENT_KEYS } from './canvasStore/save/nodeContentFields';
-import { createNodeContentQueue } from './canvasStore/save/nodeContentQueue';
-import { createPreprocessQueue } from './canvasStore/save/preprocessQueue';
-import { shouldScheduleStructureSave } from './canvasStore/save/structureDirtyDetector';
-import { createStructureScheduler } from './canvasStore/save/structureScheduler';
-import { createUnloadFlush } from './canvasStore/save/unloadFlush';
-import { createResizePreviewController } from './canvasStore/slices/resizePreview';
-import { useChatStore } from './chatStore';
-import { useGesturePreviewStore } from './gesturePreviewStore';
-import { useToolStore } from './toolStore';
-import { useWorkspaceStore } from './workspaceStore';
 import {
   ApiError,
   getCanvas,
@@ -105,6 +96,32 @@ import {
 import { agentApi } from '../api/agent';
 import { cloneArtifactToCanvas, resolveArtifactUrl } from '../api/artifact';
 import { CanvasConflictError } from '../api/canvas';
+import { measureMissingAutoHeights } from './canvasStore/height/measureMissingAutoHeights';
+import { normalizeNodeHeights } from './canvasStore/load/normalizeNodeHeights';
+import { reconcileQuestionStatus } from './canvasStore/load/reconcileQuestionStatus';
+import { shouldBackfillNodeLabel } from './canvasStore/load/shouldBackfillNodeLabel';
+import { warmupNodeHeights } from './canvasStore/load/warmupNodeHeights';
+import { createCanvasEventBuffer } from './canvasStore/save/eventBuffer';
+import { NODE_CONTENT_KEYS } from './canvasStore/save/nodeContentFields';
+import { createNodeContentQueue } from './canvasStore/save/nodeContentQueue';
+import { createPreprocessQueue } from './canvasStore/save/preprocessQueue';
+import { shouldScheduleStructureSave } from './canvasStore/save/structureDirtyDetector';
+import {
+  isCoveredCanvasVersionConflict,
+  reconcileCanvasVersion,
+} from './canvasStore/save/structureSaveReconciliation';
+import { createStructureScheduler } from './canvasStore/save/structureScheduler';
+import { createUnloadFlush } from './canvasStore/save/unloadFlush';
+import { createResizePreviewController } from './canvasStore/slices/resizePreview';
+import { useChatStore } from './chatStore';
+import { useGesturePreviewStore } from './gesturePreviewStore';
+import {
+  selectActiveNodeId,
+  selectIsNodeOpen,
+  usePreviewWorkspaceStore,
+} from './previewWorkspace/store';
+import { useToolStore } from './toolStore';
+import { useWorkspaceStore } from './workspaceStore';
 import { toast, dismissToast } from '../components/Common/Toast';
 import { seedNoteFixedHeight } from '../components/Nodes/note/autoHeight';
 import { getNoteFixedHeight } from '../components/Nodes/note/heightMemory';
@@ -130,15 +147,12 @@ import type {
   CanvasNodeMeasuredHeightUpdate,
   CanvasNodeType,
   CanvasViewport,
-  IntentContext,
   Point,
   PortalNodePinUpdate,
   RecentAction,
-  WireCanvasNode,
   WireSelectionNode,
   ResolvedWorldReference,
 } from '@huabu/shared';
-import type { StructuredReflowEntry } from '@huabu/shared/canvas-engine';
 
 const AUTOSAVE_DEBOUNCE_MS = 1000;
 const PREPROCESS_DEBOUNCE_MS = 1000;
@@ -416,9 +430,9 @@ function stripNodeContentForStructurePut(nodes: readonly Node[]): Node[] {
 // from persisted topology (see `apps/server/src/modules/agent/
 // node-neighbourhood.ts`); the web bundle only sends `anchorNodeId`.
 //
-// Existing UI-side proximity queries (sketch clustering, frame
-// drop targets) call shared geometry helpers directly with their own
-// React Flow nodes — no central cache is needed.
+// Existing UI-side proximity queries (frame drop targets) call shared
+// geometry helpers directly with their own React Flow nodes — no central
+// cache is needed.
 
 type RFState = {
   nodes: Node[];
@@ -443,15 +457,22 @@ type RFState = {
   refreshWorldReferences: () => Promise<void>;
   isSaving: boolean;
   pendingSave: boolean;
+  moveSelectionDialogOpen: boolean;
+  setMoveSelectionDialogOpen: (open: boolean) => void;
 
   /**
    * True when the server has rejected a save with `CANVAS_VERSION_CONFLICT`
    * (another tab / device / agent advanced the canvas behind our back).
    * While set, `saveCanvas` short-circuits so we don't pile up failing
-   * autosaves on top of stale state. Cleared by `loadCanvas` once the
-   * client is re-synced to the latest server snapshot.
+   * autosaves on top of stale state. Cleared by `loadCanvas` or when Canvas
+   * Sync reaches the server version reported by the conflict.
    */
   versionConflict: boolean;
+  /**
+   * Server version reported by the rejected structure PUT. Canvas Sync clears
+   * the conflict and retries once an incoming update reaches this version.
+   */
+  versionConflictServerVersion: number | null;
 
   /**
    * Apply a partial state update without triggering autosave or the
@@ -480,22 +501,6 @@ type RFState = {
    * panel would load an empty conversation. Runtime-only, never persisted.
    */
   pendingForkThreadIds: Record<string, true>;
-
-  expandedNodeId: string | null;
-  expandMode: 'replace' | 'split';
-  /**
-   * Monotonic counter bumped on every `openExpanded` call —
-   * including when the user re-triggers expansion on the
-   * currently-expanded node. Preview components subscribe to this
-   * tick so they can re-focus their editable surface when the user
-   * double-clicks the same node a second time (the
-   * `expandedNodeId` itself doesn't change in that case, so a
-   * value-based subscriber would never re-fire).
-   */
-  expandedNodeFocusTick: number;
-  openExpanded: (nodeId: string) => void;
-  closeExpanded: () => void;
-  setExpandMode: (mode: 'replace' | 'split') => void;
 
   pendingInlineEditNodeId: string | null;
   consumeInlineEditRequest: (nodeId: string) => void;
@@ -919,15 +924,6 @@ type RFState = {
    * (`get_canvas_outline`, `inspect_nodes`, `inspect_edges`, `read`).
    */
   getAgentChatContext: () => AgentChatContext;
-  /**
-   * Build the rich context consumed by the intent recogniser.
-   *
-   * Carries the full canvas snapshot (nodes + edges), the recent
-   * action ring buffer, the user selection, and (when available) a
-   * viewport screenshot — the recogniser is a one-shot LLM call and
-   * cannot pull data through tools.
-   */
-  getIntentContext: () => IntentContext;
 
   /**
    * Force-flush any buffered behavioural events to the server.
@@ -1075,23 +1071,6 @@ export function settleNodePreprocess(nodeId: string): void {
   if (node) preprocessQueue.schedule(node);
 }
 
-// ─── Action-history ring ──────────────────────────────────────────────────
-//
-// The short, in-memory action trail (cap 10, no timestamps) that
-// rides on agent / intent request bodies. Deliberately kept OUTSIDE
-// the Zustand store: no React component subscribes to it, but a
-// store-resident field would force `dispatchUiIntent` to fire a
-// *second* `set({ actionHistory })` right after `executeCommands`
-// already committed nodes/edges. That second commit makes every
-// remaining store subscriber re-run its selector for a value none of
-// them care about — wasted work on every UI click.
-//
-// The full server-bound action log still flows through `canvasEvents`
-// (see above); this window is read exactly once per intent request
-// via `getIntentContext`. See `intentActionWindow.ts` for the
-// memory-pipeline cleanup path that will eventually delete it.
-const intentActionWindow = createIntentActionWindow();
-
 /**
  * Module-scoped resize-preview controller. Owns the rAF handle and
  * the free-frame child snapshot used during resize gestures; the
@@ -1131,6 +1110,7 @@ if (typeof window !== 'undefined') {
         if (s.versionConflict) return false;
         return s.isSaving || s.pendingSave;
       },
+      flushPreviewWorkspace: () => usePreviewWorkspaceStore.getState().flush(),
     }),
   );
 }
@@ -1307,7 +1287,11 @@ const useCanvasStore = create<RFState>()(
     pinnedSourceNodeIds: {},
     isSaving: false,
     pendingSave: false,
+    moveSelectionDialogOpen: false,
+    setMoveSelectionDialogOpen: (open) =>
+      set({ moveSelectionDialogOpen: open }),
     versionConflict: false,
+    versionConflictServerVersion: null,
 
     refreshWorldReferences: async () => {
       const generation = ++worldReferenceRefreshGeneration;
@@ -1409,48 +1393,6 @@ const useCanvasStore = create<RFState>()(
     },
 
     pendingForkThreadIds: {},
-
-    expandedNodeId: null,
-    expandMode: 'split',
-    expandedNodeFocusTick: 0,
-    openExpanded: (nodeId) => {
-      // Switching straight from one expanded node to another does not fire
-      // `closeExpanded`, so settle the outgoing authored node here to
-      // commit its auto-derived label (the `.md` filename). See
-      // `docs/architecture/node-preprocessing.md` §4 (Triggers & state).
-      const prev = get().expandedNodeId;
-      if (prev && prev !== nodeId) {
-        const prevNode = get().nodes.find((n) => n.id === prev);
-        if (prevNode?.type === 'note' || prevNode?.type === 'text') {
-          settleNodePreprocess(prev);
-        }
-      }
-      get().dispatchUiIntent({ type: 'EXPAND_NODE', nodeId });
-      // Bump the focus tick AFTER the intent resolves so any
-      // already-mounted preview re-focuses its editor on a
-      // repeat double-click. On the first expansion the tick is
-      // bumped before the preview mounts, but the preview's
-      // first-render effect compares against a sentinel ref and
-      // still triggers focus.
-      set((s) => ({ expandedNodeFocusTick: s.expandedNodeFocusTick + 1 }));
-    },
-    closeExpanded: () => {
-      // Exit-edit "settle" for editor-authored nodes: a `note` (and a
-      // `text` edited in the panel) is authored in the expanded editor, so
-      // closing it (X / Esc / back) is the real "done editing" boundary at
-      // which the auto-derived label (the `.md` filename) should be
-      // committed — never on every keystroke pause. See
-      // `docs/architecture/node-preprocessing.md` §4 (Triggers & state).
-      const { expandedNodeId, nodes } = get();
-      if (expandedNodeId) {
-        const node = nodes.find((n) => n.id === expandedNodeId);
-        if (node?.type === 'note' || node?.type === 'text') {
-          settleNodePreprocess(expandedNodeId);
-        }
-      }
-      set({ expandedNodeId: null });
-    },
-    setExpandMode: (mode) => set({ expandMode: mode }),
 
     pendingInlineEditNodeId: null,
     consumeInlineEditRequest: (nodeId) => {
@@ -1581,6 +1523,8 @@ const useCanvasStore = create<RFState>()(
         setNodes: (nodes) => set({ nodes }),
         triggerPreprocessing: preprocessQueue.schedule,
         forgetNodeContent: nodeContentQueue.forgetNode,
+        validatePreviewNodes: (liveNodeIds) =>
+          usePreviewWorkspaceStore.getState().validate(liveNodeIds),
       });
     },
 
@@ -1599,6 +1543,28 @@ const useCanvasStore = create<RFState>()(
      *      the legacy full-state snapshot boundary.
      */
     applyDeltasFromAgent: (deltas, toVersion, pendingEffects) => {
+      const reconcileIncomingVersion = (): void => {
+        const current = get();
+        const reconciled = reconcileCanvasVersion(
+          current.version,
+          toVersion,
+          current.versionConflictServerVersion,
+        );
+        get()._setStateNoAutosave({
+          version: reconciled.version,
+          ...(reconciled.conflictResolved
+            ? {
+                versionConflict: false,
+                versionConflictServerVersion: null,
+              }
+            : {}),
+        });
+        if (reconciled.conflictResolved) {
+          dismissVersionConflictToast();
+          structureScheduler.schedule();
+        }
+      };
+
       // Never let an incoming agent write clobber a
       // node the user is mid-editing. Skip REPLACE/DELETE deltas that
       // target a node with un-persisted local content edits (INSERT is a
@@ -1607,20 +1573,57 @@ const useCanvasStore = create<RFState>()(
       const dirty = new Set(nodeContentQueue.pendingNodeIds());
       const skippedNodeIds: string[] = [];
       const skippedRemoteNodes: Node[] = [];
+      const preservedPendingNodeIds = new Set<string>();
+      const localNodesById = new Map(
+        get().nodes.map((node) => [node.id, node]),
+      );
       const safeDeltas =
         dirty.size === 0
           ? deltas
-          : deltas.filter((d) => {
+          : deltas.flatMap((d): Delta[] => {
               if (d.type === 'REPLACE_NODE' && dirty.has(d.next.id)) {
+                const prevData = (d.prev.data ?? {}) as Record<string, unknown>;
+                const nextData = (d.next.data ?? {}) as Record<string, unknown>;
+                // JSON transport gives unchanged keywords/provenance separate
+                // object identities; compare their values, not references.
+                const changesPendingContent = [...NODE_CONTENT_KEYS].some(
+                  (key) => !deepEqual(prevData[key], nextData[key]),
+                );
+                if (!changesPendingContent) {
+                  // Coarse REPLACE_NODE deltas carry the server's full node,
+                  // including stale content fields. A lifecycle-only update
+                  // (for example Question running/done/viewed) is safe to
+                  // apply while preserving every locally pending content
+                  // field; otherwise applying `next` would erase the edit.
+                  const local = localNodesById.get(d.next.id);
+                  if (local) {
+                    const localData = (local.data ?? {}) as Record<
+                      string,
+                      unknown
+                    >;
+                    const mergedData = { ...nextData };
+                    for (const key of NODE_CONTENT_KEYS) {
+                      if (key in localData) mergedData[key] = localData[key];
+                      else delete mergedData[key];
+                    }
+                    preservedPendingNodeIds.add(d.next.id);
+                    return [
+                      {
+                        ...d,
+                        next: { ...d.next, data: mergedData },
+                      },
+                    ];
+                  }
+                }
                 skippedNodeIds.push(d.next.id);
                 skippedRemoteNodes.push(d.next as unknown as Node);
-                return false;
+                return [];
               }
               if (d.type === 'DELETE_NODE' && dirty.has(d.node.id)) {
                 skippedNodeIds.push(d.node.id);
-                return false;
+                return [];
               }
-              return true;
+              return [d];
             });
 
       // Local-first rebase for a node the user is mid-editing: we keep their
@@ -1639,9 +1642,7 @@ const useCanvasStore = create<RFState>()(
         // Nothing to apply locally (empty batch, or every row protected).
         // Still reconcile the version so the next local edit's autosave
         // doesn't 409 against our stale view of server state.
-        if (get().version !== toVersion) {
-          get()._setStateNoAutosave({ version: toVersion });
-        }
+        reconcileIncomingVersion();
         return skippedNodeIds;
       }
 
@@ -1691,9 +1692,9 @@ const useCanvasStore = create<RFState>()(
       get()._setStateNoAutosave({
         nodes: orderedNodes as Node[],
         edges: applied.edges as Edge[],
-        version: toVersion,
         ...(isPortalPinMutation ? { canUndo: false, canRedo: false } : {}),
       });
+      reconcileIncomingVersion();
 
       // Re-seed the content-CAS baseline for the nodes this agent write
       // actually applied. Skipped mid-edit nodes had their baseline adopted
@@ -1702,7 +1703,9 @@ const useCanvasStore = create<RFState>()(
       {
         const skippedSet = new Set(skippedNodeIds);
         nodeContentQueue.seedBaselines(
-          (applied.nodes as Node[]).filter((n) => !skippedSet.has(n.id)),
+          (applied.nodes as Node[]).filter(
+            (n) => !skippedSet.has(n.id) && !preservedPendingNodeIds.has(n.id),
+          ),
         );
       }
 
@@ -1734,6 +1737,8 @@ const useCanvasStore = create<RFState>()(
         setNodes: (nodes) => get()._setStateNoAutosave({ nodes }),
         triggerPreprocessing: preprocessQueue.schedule,
         forgetNodeContent: nodeContentQueue.forgetNode,
+        validatePreviewNodes: (liveNodeIds) =>
+          usePreviewWorkspaceStore.getState().validate(liveNodeIds),
       });
 
       return skippedNodeIds;
@@ -1784,16 +1789,12 @@ const useCanvasStore = create<RFState>()(
         const node = get().nodes.find(({ id }) => id === editNodeId);
         if (node?.type === 'note') {
           // Inline the settle-previous + expand + focus-tick sequence
-          // instead of calling `openExpanded(node.id)` on purpose:
-          // `openExpanded` re-enters `dispatchUiIntent` with an
-          // `EXPAND_NODE` intent, which would (a) recurse through the
-          // resolver in the middle of this `ADD_NODES` dispatch, and
-          // (b) record an `EXPAND_NODE` gesture in the recent-action
-          // window / event buffer that the user never performed —
-          // polluting the context handed to the agent. Opening the
-          // editor here is a silent side effect of creation, so it must
-          // not emit its own intent event.
-          const previousId = get().expandedNodeId;
+          // Opening the editor here is a silent side effect of creation,
+          // so it updates workspace presentation without emitting another
+          // user-intent event.
+          const previousId = selectActiveNodeId(
+            usePreviewWorkspaceStore.getState(),
+          );
           if (previousId && previousId !== node.id) {
             const previousNode = get().nodes.find(
               ({ id }) => id === previousId,
@@ -1805,18 +1806,19 @@ const useCanvasStore = create<RFState>()(
               settleNodePreprocess(previousId);
             }
           }
-          set((state) => ({
-            expandedNodeId: node.id,
-            expandedNodeFocusTick: state.expandedNodeFocusTick + 1,
-          }));
+          const previewTabId = usePreviewWorkspaceStore
+            .getState()
+            .openPreviewTarget({
+              kind: 'node',
+              canvasId: get().canvasId,
+              nodeId: node.id,
+            });
+          if (previewTabId) {
+            usePreviewWorkspaceStore.getState().requestNodeFocus(previewTabId);
+          }
         } else if (node?.type === 'text') {
           set({ pendingInlineEditNodeId: node.id });
         }
-      }
-      // Apply UI-only state mutations (e.g. expand-overlay toggle) that
-      // bypass the command pipeline.
-      if (execution.expandedNodeId !== undefined) {
-        set({ expandedNodeId: execution.expandedNodeId });
       }
       // Push trace from intent resolution to the module-scoped
       // window and mirror into the server-bound event buffer. Both
@@ -1833,7 +1835,6 @@ const useCanvasStore = create<RFState>()(
       const isTransientPreview =
         intent.type === 'RESIZE_NODE' && intent.preview === true;
       if (!isTransientPreview && execution.trace.length > 0) {
-        intentActionWindow.pushMany(execution.trace);
         canvasEvents.bufferMany(get().canvasId, execution.trace);
       }
     },
@@ -1923,46 +1924,25 @@ const useCanvasStore = create<RFState>()(
       return { selectedNodes };
     },
 
-    getIntentContext: (): IntentContext => {
-      const { nodes, edges } = get();
-      const buildSelectedDetail = makeBuildSelectedDetail(nodes);
-
-      // Wire shape: raw canvas state only. The server enriches into
-      // `AgentNodeOutline` (with `filename`, `preview`,
-      // `parentFrame.label`) before any prompt rendering.
-      return {
-        nodes: nodes.map((n): WireCanvasNode => {
-          const size = getNodeSize(n);
-          const data = n.data as Record<string, unknown> | undefined;
-          const node: WireCanvasNode = {
-            id: n.id,
-            type: (n.type ?? 'note') as CanvasNodeType,
-            position: { x: n.position.x, y: n.position.y },
-            size: { width: size.width, height: size.height },
-          };
-          const label = data?.label as string | undefined;
-          if (label) node.label = label;
-          const content = data?.content as string | undefined;
-          if (content) node.content = content;
-          const src = data?.src as string | undefined;
-          if (src) node.src = src;
-          if (n.parentId) node.parentId = n.parentId;
-          return node;
-        }),
-        edges: edges.map((e) => ({ source: e.source, target: e.target })),
-        recentActions: intentActionWindow.snapshot(),
-        selectedNodes: nodes.filter((n) => n.selected).map(buildSelectedDetail),
-      };
-    },
-
     loadCanvas: async (canvasId, options) => {
-      set({ isLoading: true, canvasNotFound: false, versionConflict: false });
+      set({
+        isLoading: true,
+        canvasNotFound: false,
+        versionConflict: false,
+        versionConflictServerVersion: null,
+      });
       // Clear any stale "modified elsewhere" toast before we fetch a
       // fresh baseline — the warning is bound to the old version we're
       // about to replace.
       dismissVersionConflictToast();
       try {
         const targetId = canvasId ?? get().canvasId;
+        const chatThreadId = useChatStore
+          .getState()
+          .ensureCanvasThread(targetId);
+        usePreviewWorkspaceStore
+          .getState()
+          .loadForCanvas(targetId, { chatThreadId });
         canvasHistoryManager.activate(targetId, options?.resetHistory);
         if (canvasId) {
           set({ canvasId: targetId });
@@ -1992,13 +1972,9 @@ const useCanvasStore = create<RFState>()(
           // strips it from persisted topology for good.
           viewport?: CanvasViewport;
         };
-        // Repair question nodes whose execution status drifted to a
-        // stale non-terminal value (most often `idle`) while they
-        // actually completed a run — the `status: 'done'` autosave can
-        // be silently dropped by a 409 when the agent edits the canvas
-        // mid-conversation. Nodes that own a `threadId` always have a
-        // persisted conversation, so a stale status is demoted to
-        // `done` here, restoring the badge + reopen affordance.
+        // Remove obsolete question auto-run state without guessing a
+        // terminal outcome. A node can own a persisted conversation whose
+        // last turn failed, so thread/content presence must never imply done.
         // Normalize tree order on load: persisted topology is not
         // guaranteed to list every parent frame ahead of its children
         // (older writes, or a delta-authored save), and a child ahead of
@@ -2105,17 +2081,6 @@ const useCanvasStore = create<RFState>()(
         // catch a concurrent (cross-tab / cross-device / agent) write.
         nodeContentQueue.seedBaselines(warmedNodes);
 
-        // If the user left a question-replay open on this canvas in a
-        // previous session and that question node has since been
-        // deleted, drop the now-dangling pointer in chatStore so the
-        // panel doesn't end up stuck on a foreign thread.
-        useChatStore
-          .getState()
-          .validateQuestionReplay(
-            targetId,
-            new Set(warmedNodes.map((n) => n.id)),
-          );
-
         // Backfill: any node with an empty label gets re-queued so the
         // server can regenerate one. The server's preprocessing
         // dispatcher decides per node profile whether there's any
@@ -2143,6 +2108,7 @@ const useCanvasStore = create<RFState>()(
         isLoading: true,
         canvasNotFound: false,
         versionConflict: false,
+        versionConflictServerVersion: null,
       });
       // Same rationale as `loadCanvas`: the persistent conflict toast
       // is bound to the outgoing canvas; clear it so it doesn't bleed
@@ -2162,16 +2128,11 @@ const useCanvasStore = create<RFState>()(
       // canvas's restore effect either applies its own saved viewport
       // or, for older canvases without one, runs a one-shot fitView.
       set({
-        expandedNodeId: null,
         pendingInlineEditNodeId: null,
         collapsedFrameIds: new Set(),
         canvasNotFound: false,
         viewport: null,
       });
-      // The intent action window lives outside the store; clear it
-      // alongside the in-store reset so the new canvas doesn't
-      // inherit the previous canvas's recent-action trail.
-      intentActionWindow.clear();
       useToolStore.getState().resetForCanvasSwitch();
       useGesturePreviewStore.getState().resetCanvasScopedTransients();
       // Load the new canvas
@@ -2179,10 +2140,9 @@ const useCanvasStore = create<RFState>()(
     },
 
     saveCanvas: async (options) => {
-      // Once the server has rejected a save with a version mismatch, our
-      // local `version` is permanently stale until the user reloads. Skip
-      // further attempts so we don't generate a 409 on every autosave tick
-      // (and don't clobber the surfaced toast with more failures).
+      // Pause structure saves after an unresolved version mismatch so we do
+      // not pile up 409s. Canvas Sync automatically clears this gate and
+      // retries once it reaches the server version reported by the conflict.
       if (get().versionConflict) return;
 
       const { isSaving } = get();
@@ -2228,11 +2188,36 @@ const useCanvasStore = create<RFState>()(
           },
           { keepalive: options?.keepalive },
         );
-        set({ version: response.version });
+        const reconciled = reconcileCanvasVersion(
+          get().version,
+          response.version,
+          get().versionConflictServerVersion,
+        );
+        set({
+          version: reconciled.version,
+          ...(reconciled.conflictResolved
+            ? {
+                versionConflict: false,
+                versionConflictServerVersion: null,
+              }
+            : {}),
+        });
+        if (reconciled.conflictResolved) {
+          dismissVersionConflictToast();
+        }
         saveSucceeded = true;
       } catch (error) {
         if (error instanceof CanvasConflictError) {
           if (error.code === 'CANVAS_VERSION_CONFLICT') {
+            if (
+              isCoveredCanvasVersionConflict(get().version, error.serverVersion)
+            ) {
+              // Canvas Sync already delivered the winning write. Retry the
+              // latest local structure against that fresh baseline instead
+              // of turning this delayed response into a global conflict.
+              set({ pendingSave: true });
+              return;
+            }
             // Server is ahead of us (another tab / device / agent wrote
             // first). Stop the autosave loop and surface a persistent
             // toast (with a Reload action) so the user knows their edits
@@ -2241,7 +2226,10 @@ const useCanvasStore = create<RFState>()(
             // first; `loadCanvas` clears the flag (and the toast) once
             // the client re-syncs.
             if (!get().versionConflict) {
-              set({ versionConflict: true });
+              set({
+                versionConflict: true,
+                versionConflictServerVersion: error.serverVersion ?? null,
+              });
               showVersionConflictToast();
             }
             return;
@@ -2432,7 +2420,7 @@ const useCanvasStore = create<RFState>()(
       get().beginGesture('SET_NODE_GEOMETRY');
       // A height correction landing mid-drag would move geometry under
       // the user's hand. Hold them until the gesture settles.
-      suspendHeightCommits();
+      suspendHeightCommits('node-drag');
 
       // Record the pre-drag positions of the dragged nodes so
       // `onNodeDragStop` can tell whether the gesture actually moved
@@ -2454,12 +2442,13 @@ const useCanvasStore = create<RFState>()(
         nodes: get().nodes as NestableNode[],
         gestureIds: new Set(draggedNodes.map((n) => n.id)),
         altPressed: event.altKey,
+        nestedFrameEntryAllowed: event.metaKey || event.ctrlKey,
       });
     },
 
     onNodeResizeStart: () => {
       get().beginGesture('SET_NODE_GEOMETRY');
-      suspendHeightCommits();
+      suspendHeightCommits('node-resize');
     },
 
     onNodeDrag: (_event, draggedNode, draggedNodes) => {
@@ -2501,19 +2490,6 @@ const useCanvasStore = create<RFState>()(
         // Dragged nodes are filtered out: React Flow owns their position
         // until release, so projecting one would fight the cursor.
         const draggedIds = new Set(draggedNodes.map((d) => d.id));
-        const commitReflow = (
-          reflow: readonly StructuredReflowEntry[] | null,
-        ) => {
-          const preview = useGesturePreviewStore.getState();
-          if (!reflow) {
-            preview.clearStructuredReflowPositions();
-            return;
-          }
-          preview.setStructuredReflowPositions(
-            reflow.filter((entry) => !draggedIds.has(entry.id)),
-          );
-        };
-
         // Space-held drag opts out of *parent membership changes* only.
         // The current parent's frame still refits around the child's
         // new position (so the virtual outline grows / shrinks live),
@@ -2524,14 +2500,17 @@ const useCanvasStore = create<RFState>()(
         // different one. Mirrors the `continue` short-circuit in
         // `resolveNodeDragStop`.
         const bypassReparent = isReparentBypassed();
+        const allowNestedFrameEntry = isNestedFrameEntryAllowed();
 
-        const liveNodes = nodes.map((n) => {
-          if (n.id === draggedNode.id)
-            return { ...n, position: draggedNode.position };
-          const live = draggedNodes.find((d) => d.id === n.id);
-          if (live) return { ...n, position: live.position };
-          return n;
-        }) as NestableNode[];
+        const liveNodes = nodes.map((node) => {
+          const live =
+            node.id === draggedNode.id
+              ? draggedNode
+              : draggedNodes.find((dragged) => dragged.id === node.id);
+          return live
+            ? mergeLiveDragGeometry(node as NestableNode, live)
+            : (node as NestableNode);
+        });
 
         // Pointer in flow space — feeds the pointer-aware
         // wouldUnframe / wouldAutoFrame predicates so the live preview
@@ -2624,8 +2603,20 @@ const useCanvasStore = create<RFState>()(
             : wouldAutoFrame(liveNodes, dn.id, {
                 threshold: 0.5,
                 pointer: pointerFlow,
+                allowNestedFrameEntry,
               });
           if (targetFrameId) {
+            if (
+              originalNode.parentId &&
+              originalNode.parentId !== targetFrameId
+            ) {
+              let leaving = leavingByFrame.get(originalNode.parentId);
+              if (!leaving) {
+                leaving = new Set();
+                leavingByFrame.set(originalNode.parentId, leaving);
+              }
+              leaving.add(dn.id);
+            }
             previewFrameIds.add(targetFrameId);
             // Track the dragged node's absolute rect so the fit preview can
             // include the incoming node in the frame's bounding-box calculation.
@@ -2665,6 +2656,46 @@ const useCanvasStore = create<RFState>()(
           }
         }
 
+        let projectedSourceNodes = liveNodes;
+        for (const leavingIds of leavingByFrame.values()) {
+          for (const leavingId of leavingIds) {
+            projectedSourceNodes = projectNodeOutOfFrame(
+              projectedSourceNodes,
+              leavingId,
+            );
+          }
+        }
+        let projectedGestureNodes = projectAffectedFrameGeometry(
+          projectedSourceNodes,
+          leavingByFrame.keys(),
+          edges,
+        ).nodes;
+        const liveById = new Map(liveNodes.map((node) => [node.id, node]));
+        const publishGeometryProjection = (projection: NestableNode[]) => {
+          const geometryPreviews = projection.flatMap((node) => {
+            const current = liveById.get(node.id);
+            if (!current) return [];
+            if (draggedIds.has(node.id)) {
+              const position = compensateDetachedDragPosition(
+                current,
+                projection,
+              );
+              return position ? [{ ...node, position }] : [];
+            }
+            const currentSize = getNodeSize(current);
+            const nextSize = getNodeSize(node);
+            const changed =
+              current.position.x !== node.position.x ||
+              current.position.y !== node.position.y ||
+              currentSize.width !== nextSize.width ||
+              currentSize.height !== nextSize.height;
+            return changed ? [node] : [];
+          });
+          useGesturePreviewStore
+            .getState()
+            .setNodeGeometryPreviews(geometryPreviews);
+        };
+
         // Compute fit previews for all affected frames and show them all
         // simultaneously — e.g. source frame shrinking + target frame expanding.
         // Each entry is tagged with a UI role so the overlay can paint the
@@ -2681,6 +2712,26 @@ const useCanvasStore = create<RFState>()(
         // the landing destination, so painting it `source` would
         // wrongly mute the only relevant overlay.
         const previews: FrameFitPreview[] = [];
+        const publishFrameIntentPreviews = (projection: NestableNode[]) => {
+          const aligned = previews.map((preview) => {
+            const frame = projection.find(
+              (node) => node.id === preview.frameId,
+            );
+            const position = getFrameAbsolutePosition(
+              projection,
+              preview.frameId,
+            );
+            if (!frame || !position) return preview;
+            const size = getNodeSize(frame);
+            return {
+              ...preview,
+              position,
+              width: size.width,
+              height: size.height,
+            };
+          });
+          useGesturePreviewStore.getState().setFrameFitPreviews(aligned);
+        };
 
         // ── Where the drop would land ────────────────────────────────
         // Resolved BEFORE the fit-preview pass, because the structured
@@ -2695,6 +2746,7 @@ const useCanvasStore = create<RFState>()(
           : wouldAutoFrame(liveNodes, draggedNode.id, {
               threshold: 0.5,
               pointer: pointerFlow,
+              allowNestedFrameEntry,
             });
         let targetFrameId = enteringFrameId ?? primary?.parentId;
         // Sticky case (node already lives in a frame): only keep showing the
@@ -2715,87 +2767,49 @@ const useCanvasStore = create<RFState>()(
           : undefined;
         const gridCfg = readFrameGridConfig(targetFrame);
 
-        /** Content-driven fit preview for one structured frame. */
-        const solveStructuredPreview = (
-          frameId: string,
-        ): FrameFitPreview | null => {
-          const leaving = leavingByFrame.get(frameId);
-          const entering = enteringByFrame.get(frameId);
-          const previewNodes = leaving?.size
-            ? liveNodes.filter((node) => !leaving.has(node.id))
-            : liveNodes;
-          const layout = solveStructuredFrameLayout(
-            previewNodes,
-            frameId,
-            'compact',
-            { edges },
+        if (enteringFrameId && targetFrame && !gridCfg) {
+          projectedGestureNodes = projectNodeIntoFrame(
+            projectedGestureNodes,
+            draggedNode.id,
+            enteringFrameId,
           );
-          const frameAbs = getFrameAbsolutePosition(liveNodes, frameId);
-          if (!layout || !frameAbs) return null;
-          return {
-            frameId,
-            position: frameAbs,
-            width: layout.frameSize.width,
-            height: layout.frameSize.height,
-            role: leaving && !entering ? 'source' : 'target',
-          };
-        };
+          projectedGestureNodes = projectAffectedFrameGeometry(
+            projectedGestureNodes,
+            [enteringFrameId],
+            edges,
+          ).nodes;
+        }
 
-        // Skipped in the pass below and reported from the drop zone
-        // instead; recomputed there only if the zone fails to resolve.
-        const deferredStructuredTarget =
-          gridCfg && targetFrameId && getFrameSizing(targetFrame) === 'hug'
-            ? targetFrameId
-            : null;
+        const currentTargetFrameAbs = targetFrameId
+          ? getFrameAbsolutePosition(liveNodes, targetFrameId)
+          : null;
+        const projectedTargetFrameAbs = targetFrameId
+          ? getFrameAbsolutePosition(projectedGestureNodes, targetFrameId)
+          : currentTargetFrameAbs;
 
         for (const frameId of previewFrameIds) {
-          if (frameId === deferredStructuredTarget) continue;
-          // Per-frame sizing gate: only `hug` frames preview a refit;
-          // `manual` frames keep their pinned size during the drag.
-          const frameNode = liveNodes.find((n) => n.id === frameId);
+          const frameNode = projectedGestureNodes.find(
+            (node) => node.id === frameId,
+          );
           if (getFrameSizing(frameNode) !== 'hug') continue;
+          const position = getFrameAbsolutePosition(
+            projectedGestureNodes,
+            frameId,
+          );
+          if (!frameNode || !position) continue;
           const leaving = leavingByFrame.get(frameId);
           const entering = enteringByFrame.get(frameId);
-          if (readFrameGridConfig(frameNode)) {
-            const preview = solveStructuredPreview(frameId);
-            if (preview) previews.push(preview);
-            continue;
-          }
-          const fit = computeFrameFit(liveNodes, frameId, {
-            excludeNodeIds: leaving,
-            includeAbsoluteRects: entering,
-          });
-          if (!fit) continue;
-
-          // Convert to absolute coordinates for overlay rendering.
-          const frame = liveNodes.find((n) => n.id === frameId);
-          if (!frame) continue;
-
-          let absX = fit.position.x;
-          let absY = fit.position.y;
-          if (frame.parentId) {
-            const parentAbsPos = getFrameAbsolutePosition(
-              liveNodes,
-              frame.parentId,
-            );
-            if (parentAbsPos) {
-              absX += parentAbsPos.x;
-              absY += parentAbsPos.y;
-            }
-          }
-
+          const size = getNodeSize(frameNode);
           const role: FrameFitPreviewRole =
             leaving && !entering ? 'source' : 'target';
           previews.push({
             frameId,
-            position: { x: absX, y: absY },
-            width: fit.width,
-            height: fit.height,
+            position,
+            width: size.width,
+            height: size.height,
             role,
           });
         }
-
-        useGesturePreviewStore.getState().setFrameFitPreviews(previews);
 
         // ── Structured-frame drop indicator ──────────────────────────
         // Mirror what NODE_DRAG_STOP will decide, live: if the primary
@@ -2803,7 +2817,9 @@ const useCanvasStore = create<RFState>()(
         // where it would land. Free frames have no tracks → no
         // indicator.
         if (targetFrameId && targetFrame && gridCfg) {
-          const frameAbs = getFrameAbsolutePosition(liveNodes, targetFrameId);
+          const frameAbs =
+            getFrameAbsolutePosition(projectedGestureNodes, targetFrameId) ??
+            projectedTargetFrameAbs;
           // Frame-local drop point: prefer the cursor, fall back to the
           // dragged node's live top-left (matches the resolver).
           const liveDragged = liveNodes.find((n) => n.id === draggedNode.id);
@@ -2817,10 +2833,17 @@ const useCanvasStore = create<RFState>()(
           // Frame-local rect of the dragged node so the indicator can
           // size the new-track ghost and rank the insertion line.
           const draggedAbs = getFrameAbsolutePosition(
-            liveNodes,
+            projectedGestureNodes,
             draggedNode.id,
           );
-          const draggedSize = liveDragged ? getNodeSize(liveDragged) : null;
+          const projectedDragged = projectedGestureNodes.find(
+            (node) => node.id === draggedNode.id,
+          );
+          const draggedSize = projectedDragged
+            ? getNodeSize(projectedDragged)
+            : liveDragged
+              ? getNodeSize(liveDragged)
+              : null;
           const draggedRect =
             frameAbs && draggedAbs && draggedSize
               ? {
@@ -2834,11 +2857,11 @@ const useCanvasStore = create<RFState>()(
 
           const zone = framePoint
             ? describeStructuredDropZone(
-                liveNodes,
+                projectedGestureNodes,
                 targetFrameId,
                 framePoint,
                 gridCfg.axis,
-                resolveFrameTrackCount(nodes, targetFrameId),
+                resolveFrameTrackCount(projectedGestureNodes, targetFrameId),
                 draggedRect,
                 { edges },
               )
@@ -2881,35 +2904,34 @@ const useCanvasStore = create<RFState>()(
               } else {
                 previews.push(structuredFramePreview);
               }
-              useGesturePreviewStore.getState().setFrameFitPreviews(previews);
             }
+            projectedGestureNodes = projectStructuredTargetGeometry({
+              nodes: projectedGestureNodes,
+              targetFrameId,
+              zone,
+              edges,
+            });
+            publishGeometryProjection(projectedGestureNodes);
+            publishFrameIntentPreviews(projectedGestureNodes);
             // Solver owns the slot here → suppress free-alignment guides.
             setSnapStructuredSuppressed(true);
-            commitReflow(zone.reflow);
           } else {
-            // The zone did not resolve, so nothing reported the size of
-            // the frame the fit pass skipped. Compute it after all.
-            if (deferredStructuredTarget) {
-              const preview = solveStructuredPreview(deferredStructuredTarget);
-              if (preview) {
-                previews.push(preview);
-                useGesturePreviewStore.getState().setFrameFitPreviews(previews);
-              }
-            }
             useGesturePreviewStore.getState().clearStructuredDropPreview();
             setSnapStructuredSuppressed(false);
-            commitReflow(null);
+            publishGeometryProjection(projectedGestureNodes);
+            publishFrameIntentPreviews(projectedGestureNodes);
           }
         } else {
           useGesturePreviewStore.getState().clearStructuredDropPreview();
           setSnapStructuredSuppressed(false);
-          commitReflow(null);
+          publishGeometryProjection(projectedGestureNodes);
+          publishFrameIntentPreviews(projectedGestureNodes);
         }
       });
     },
 
     onNodeDragStop: (_event, _node, draggedNodes) => {
-      resumeHeightCommits();
+      resumeHeightCommits('node-drag');
       // Cancel any pending preview computation — the drag is over.
       if (_dragPreviewRafId !== null) {
         cancelAnimationFrame(_dragPreviewRafId);
@@ -2922,7 +2944,7 @@ const useCanvasStore = create<RFState>()(
       // against the same geometry the preview was derived from, and the
       // peers snap to their committed positions in the same tick the
       // authoritative `SET_NODE_GEOMETRY` lands.
-      useGesturePreviewStore.getState().clearStructuredReflowPositions();
+      useGesturePreviewStore.getState().clearNodeGeometryPreviews();
 
       // Read the Space-bypass snapshot taken by `endSnapSession`.
       // The snap session is normally torn down by `onNodesChange`
@@ -2935,6 +2957,8 @@ const useCanvasStore = create<RFState>()(
       // OR-ing with the live flag.
       const bypassReparent =
         consumeLastDragReparentBypass() || isReparentBypassed();
+      const allowNestedFrameEntry =
+        consumeLastNestedFrameEntryAllowed() || isNestedFrameEntryAllowed();
 
       // Read the per-dragged-node frame-membership decisions captured
       // by the live preview tick. Same teardown-before-stop ordering
@@ -2983,6 +3007,7 @@ const useCanvasStore = create<RFState>()(
         draggedNodeIds: draggedNodes.map((n) => n.id),
         pointerFlowPosition,
         bypassReparent,
+        allowNestedFrameEntry,
         cachedDecisions,
       });
 
@@ -3030,7 +3055,7 @@ const useCanvasStore = create<RFState>()(
       const preview = useGesturePreviewStore.getState();
       preview.clearFrameFitPreview();
       preview.clearStructuredDropPreview();
-      preview.clearStructuredReflowPositions();
+      preview.clearNodeGeometryPreviews();
 
       const startPositions = _dragStartPositions;
       _dragStartPositions = null;
@@ -3073,7 +3098,7 @@ const useCanvasStore = create<RFState>()(
       resizePreviewController.cancelPendingRaf();
       useGesturePreviewStore.getState().clearFrameFitPreview();
       useGesturePreviewStore.getState().clearStructuredDropPreview();
-      useGesturePreviewStore.getState().clearStructuredReflowPositions();
+      useGesturePreviewStore.getState().clearNodeGeometryPreviews();
       _dragStartPositions = null;
       endSnapSession();
     },
@@ -3602,8 +3627,8 @@ const useCanvasStore = create<RFState>()(
       // otherwise be flushed back onto a node whose type just changed,
       // overwriting the conversion. The toolbar disables the toggle in this
       // state — this is a defensive backstop for programmatic callers.
-      const { expandedNodeId, ingestionByNodeId } = get();
-      if (expandedNodeId === nodeId) return;
+      if (selectIsNodeOpen(usePreviewWorkspaceStore.getState(), nodeId)) return;
+      const { ingestionByNodeId } = get();
       // Guard: don't change type mid-ingest, otherwise the in-flight ingest
       // result would land on a node that no longer matches its source type.
       if (ingestionByNodeId[nodeId]?.status === 'pending') return;
@@ -4012,7 +4037,6 @@ const useCanvasStore = create<RFState>()(
         nodes: snapshot.nodes,
         edges: snapshot.edges,
       });
-      intentActionWindow.push(action);
       canvasEvents.buffer(canvasId, action);
 
       canvasHistoryManager.syncServerAfterRestore(
@@ -4037,7 +4061,6 @@ const useCanvasStore = create<RFState>()(
         nodes: snapshot.nodes,
         edges: snapshot.edges,
       });
-      intentActionWindow.push(action);
       canvasEvents.buffer(canvasId, action);
 
       canvasHistoryManager.syncServerAfterRestore(

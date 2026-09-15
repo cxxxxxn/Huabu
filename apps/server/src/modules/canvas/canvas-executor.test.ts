@@ -18,7 +18,6 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
-  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -29,45 +28,58 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { nodeRevisionOf } from '@huabu/shared/canvas-engine';
 
+import { executeCanvasCommandsOnHost } from './canvas-command-router.js';
 import { applyDeltasOnServer, executeOnServer } from './canvas-executor.js';
-import { runCanvasPersistenceTransaction } from './canvas-persistence-transaction.js';
+import { setAgentChangeReviewConfig } from '../agent/change-review-config.js';
 import {
-  applyNodeUpdate,
-  canvasBlobs,
+  space,
   getCanvasStore,
+  getStructuredStore,
+  updateNode,
+  withCanvasMutex,
 } from '../storage/index.js';
 import { setWorkspacePath } from '../workspace.js';
 
 import type { CanvasCommand, ExecuteOriginator } from '@huabu/shared';
 
 let tmp: string;
+const originalDataDir = process.env.HUABU_DATA_DIR;
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), 'huabu-cas-'));
+  process.env.HUABU_DATA_DIR = tmp;
   setWorkspacePath(tmp);
 });
 
 afterEach(() => {
+  if (originalDataDir === undefined) {
+    delete process.env.HUABU_DATA_DIR;
+  } else {
+    process.env.HUABU_DATA_DIR = originalDataDir;
+  }
   rmSync(tmp, { recursive: true, force: true });
 });
 
 /** Seed a Space with one note (topology entry + `.md` body). */
-function seedNote(canvasId: string, id: string, content: string): void {
+function seedNote(
+  canvasId: string,
+  id: string,
+  content: string,
+  type = 'note',
+): void {
   const store = getCanvasStore(canvasId);
   store.write({
     canvasId,
     title: null,
     version: 1,
     state: {
-      nodes: [
-        { id, type: 'note', position: { x: 0, y: 0 }, data: { label: 'A' } },
-      ],
+      nodes: [{ id, type, position: { x: 0, y: 0 }, data: { label: 'A' } }],
       edges: [],
     },
     createdAt: Date.now(),
     updatedAt: Date.now(),
   });
-  store.writeNode(id, { nodeId: id, type: 'note', label: 'A', content });
+  store.writeNode(id, { nodeId: id, type, label: 'A', content });
 }
 
 /** Current authored-content rev, computed exactly as the executor does. */
@@ -82,6 +94,110 @@ function currentRev(canvasId: string, id: string): string {
 function bodyOf(canvasId: string, id: string): string | undefined {
   return getCanvasStore(canvasId).readNode(id)?.content ?? undefined;
 }
+
+describe('atomic automatic label commits', () => {
+  it('protects a queued user rename from automatic preprocessing under the Canvas mutex', async () => {
+    seedNote('canvas-title', 'node-q', 'Body must survive', 'question');
+    let release!: () => void;
+    let entered!: () => void;
+    const locked = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const hold = withCanvasMutex('canvas-title', async () => {
+      entered();
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    await locked;
+    const manual = executeCanvasCommandsOnHost({
+      canvasId: 'canvas-title',
+      originator: { source: 'ui' },
+      commands: [
+        {
+          type: 'MERGE_NODE_DATA',
+          patches: [
+            {
+              nodeId: 'node-q' as never,
+              patch: { label: 'User name', labelSource: 'user' },
+            },
+          ],
+        },
+      ],
+    });
+    const automatic = executeCanvasCommandsOnHost({
+      canvasId: 'canvas-title',
+      originator: { source: 'system' },
+      commands: [
+        {
+          type: 'MERGE_NODE_DATA',
+          patches: [
+            {
+              nodeId: 'node-q' as never,
+              patch: { label: 'Late preprocess', labelSource: 'auto' },
+            },
+          ],
+        },
+      ],
+    });
+    release();
+    await hold;
+    await manual;
+    await automatic;
+    expect(getCanvasStore('canvas-title').readNode('node-q')).toMatchObject({
+      label: 'User name',
+      labelSource: 'user',
+      content: 'Body must survive',
+    });
+  });
+
+  it.each(['user', 'agent'])(
+    'drops only late auto-label fields over a protected %s label',
+    async (source) => {
+      seedNote('canvas-title', 'node-q', 'Body must survive', 'question');
+      await executeOnServer({
+        canvasId: 'canvas-title',
+        originator: { source: 'system' },
+        commands: [
+          {
+            type: 'MERGE_NODE_DATA',
+            patches: [
+              {
+                nodeId: 'node-q' as never,
+                patch: { label: 'Protected', labelSource: source },
+              },
+            ],
+          },
+        ],
+      });
+      await executeOnServer({
+        canvasId: 'canvas-title',
+        originator: { source: 'system' },
+        commands: [
+          {
+            type: 'MERGE_NODE_DATA',
+            patches: [
+              {
+                nodeId: 'node-q' as never,
+                patch: {
+                  label: 'Late preprocess',
+                  labelSource: 'auto',
+                  summary: 'New summary',
+                },
+              },
+            ],
+          },
+        ],
+      });
+      expect(getCanvasStore('canvas-title').readNode('node-q')).toMatchObject({
+        label: 'Protected',
+        labelSource: source,
+        content: 'Body must survive',
+        summary: 'New summary',
+      });
+    },
+  );
+});
 
 function imageStyleOf(
   canvasId: string,
@@ -114,6 +230,49 @@ function mergeContent(
 
 const AGENT: ExecuteOriginator = { source: 'agent' };
 const UI: ExecuteOriginator = { source: 'ui' };
+
+describe('executeOnServer — Agent change review policy', () => {
+  it('persists review records when automatic acceptance is disabled', async () => {
+    seedNote('c1', 'n1', 'hello');
+
+    const out = await executeOnServer({
+      canvasId: 'c1',
+      commands: [mergeContent('n1', 'world', currentRev('c1', 'n1'))],
+      originator: { source: 'agent', threadId: 'thread-1' },
+      computeChanges: true,
+      publish: false,
+    });
+
+    expect(out.changes).toHaveLength(1);
+    expect(await space('c1').changes.read('thread-1')).toHaveLength(1);
+  });
+
+  it('auto-accepts new changes without deleting existing review records', async () => {
+    seedNote('c1', 'n1', 'hello');
+    await executeOnServer({
+      canvasId: 'c1',
+      commands: [mergeContent('n1', 'first', currentRev('c1', 'n1'))],
+      originator: { source: 'agent', threadId: 'thread-1' },
+      computeChanges: true,
+      publish: false,
+    });
+    const existing = await space('c1').changes.read('thread-1');
+    expect(existing).toHaveLength(1);
+
+    setAgentChangeReviewConfig({ autoAcceptSpaceChanges: true });
+    const out = await executeOnServer({
+      canvasId: 'c1',
+      commands: [mergeContent('n1', 'second', currentRev('c1', 'n1'))],
+      originator: { source: 'agent', threadId: 'thread-1' },
+      computeChanges: true,
+      publish: false,
+    });
+
+    expect(out.changes).toBeUndefined();
+    expect(bodyOf('c1', 'n1')).toBe('second');
+    expect(await space('c1').changes.read('thread-1')).toEqual(existing);
+  });
+});
 
 describe('executeOnServer — MERGE_NODE_DATA CAS', () => {
   it('applies an agent write whose expectRev matches the current rev', async () => {
@@ -243,7 +402,7 @@ describe('executeOnServer — MERGE_NODE_DATA CAS', () => {
 
     expect(out.conflicts ?? []).toHaveLength(0);
     expect(out.toVersion).toBe(out.fromVersion + 1);
-    expect(getCanvasStore('c1').readNode('m1')?.src).toBe('artifacts/new.png');
+    expect(getCanvasStore('c1').readNode('m1')?.src).toBe('new.png');
   });
 
   it('auto-updates image height when MERGE_NODE_DATA rewrites src', async () => {
@@ -274,7 +433,7 @@ describe('executeOnServer — MERGE_NODE_DATA CAS', () => {
       src: 'old.svg',
       content: '',
     });
-    await canvasBlobs('c1').put(
+    await space('c1').artifacts.put(
       'new.svg',
       Buffer.from(
         '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"></svg>',
@@ -330,7 +489,7 @@ describe('executeOnServer — MERGE_NODE_DATA CAS', () => {
       src: 'pic.svg',
       content: '',
     });
-    await canvasBlobs('c1').put(
+    await space('c1').artifacts.put(
       'pic.svg',
       Buffer.from(
         '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"></svg>',
@@ -401,14 +560,12 @@ describe('executeOnServer — CREATE_NODES id echo', () => {
   });
 });
 
-describe('executeOnServer — batch node writes route through the non-locking core', () => {
+describe('executeOnServer — batch node writes use one ordered backend call', () => {
   it('persists every node in a multi-node batch without self-deadlocking on the canvas lock', async () => {
-    // The executor holds `withCanvasMutex` for the WHOLE batch and writes each
-    // mutated node's `.md` via the NON-locking `applyNodeUpdate`. The
-    // promise-chain mutex is not re-entrant, so if any per-node write went
-    // through the locking `updateNode` instead, this batch would deadlock and
-    // the test would hang until vitest's timeout. Two mutated nodes under one
-    // lock is the minimal case that pins that contract.
+    // The executor holds `withCanvasMutex` for the whole batch and hands all
+    // node mutations to one backend writer call. Two mutated nodes pin that
+    // the adapter validates and persists the aggregate once, rather than
+    // re-entering the application mutex per node.
     const store = getCanvasStore('c1');
     store.write({
       canvasId: 'c1',
@@ -574,7 +731,7 @@ describe('executor tombstone resurrection', () => {
           deltas: [{ type: 'INSERT_NODE', node: restoredNode() }],
           originator: UI,
         }),
-      ).rejects.toThrow(/writeNode rejected n1: not-found/);
+      ).rejects.toThrow(/Space write failed.*Space does not exist/);
     } finally {
       store.writeNode = originalWriteNode;
     }
@@ -619,7 +776,7 @@ describe('executor tombstone resurrection', () => {
     expect(store.isNodeWriteSuppressed('n1')).toBe(false);
   });
 
-  it('does not clear a tombstone when an unrelated write retains the node', () => {
+  it('does not clear a tombstone when an unrelated write retains the node', async () => {
     seedNote('c1', 'n1', 'before');
     const store = getCanvasStore('c1');
     expect(store.deleteNode('n1')).toBe('deleted');
@@ -638,14 +795,18 @@ describe('executor tombstone resurrection', () => {
       updatedAt: retained.updatedAt + 2,
     });
 
-    const late = applyNodeUpdate(store, 'n1', {
-      apply: () => ({
-        nodeId: 'n1',
-        type: 'note',
-        label: 'A',
-        content: 'late',
-      }),
-    });
+    const late = await updateNode(
+      getStructuredStore().space('c1').nodes,
+      'n1',
+      {
+        apply: () => ({
+          nodeId: 'n1',
+          type: 'note',
+          label: 'A',
+          content: 'late',
+        }),
+      },
+    );
     expect(late).toEqual({ status: 'skipped-deleted' });
     expect(store.readNode('n1')).toBeNull();
   });
@@ -947,42 +1108,5 @@ describe('executeOnServer — persistence failure atomicity', () => {
     expect(store.readDeltaLogSince(0).map((entry) => entry.version)).toEqual([
       2,
     ]);
-  });
-
-  it('captures an affected sidecar missed by a stale same-count filename index', () => {
-    seedNote('c1', 'n1', 'before');
-    const store = getCanvasStore('c1');
-    const before = store.read();
-    if (!before) throw new Error('seeded canvas is missing');
-    const nodesPath = join(tmp, 'c1', 'nodes');
-    renameSync(join(nodesPath, 'A.md'), join(nodesPath, 'Finder rename.md'));
-
-    // The warm index still points at A.md: a pure rename preserves the file
-    // count, so the cheap count probe alone cannot discover the new name.
-    expect(store.nodeIdForFilename('Finder rename.md')).toBeNull();
-
-    expect(() =>
-      runCanvasPersistenceTransaction({
-        canvasId: 'c1',
-        affectedNodeIds: new Set(['n1']),
-        nodeIdForFilename: (filename) => store.nodeIdForFilename(filename),
-        resetRecordState: () => store.write(before),
-        commit: () => {
-          store.writeNode('n1', {
-            nodeId: 'n1',
-            type: 'note',
-            label: 'Changed',
-            content: 'after',
-          });
-          throw new Error('injected after stale-index rename');
-        },
-      }),
-    ).toThrow('injected after stale-index rename');
-
-    expect(readdirSync(nodesPath)).toEqual(['Finder rename.md']);
-    expect(store.readNode('n1')).toMatchObject({
-      label: 'A',
-      content: 'before',
-    });
   });
 });

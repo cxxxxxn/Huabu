@@ -1,17 +1,16 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-/**
- * Route tests for the Canvas behavioural event log.
- *
- * Written for the Phase-2 consumer slice (docs/proposals/multi-backend-storage.md
- * §12.2.8): `GET /:canvasId/events` is the one read migrated from the
- * compatibility facade onto `events.read`. The handler had no test, so
- * these assert the payload it produces rather than the data source it uses —
- * which is what makes them meaningful on both sides of the swap.
- */
+/** Route coverage for repository-backed storage consumers and lifecycle. */
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { request as httpRequest, type ClientRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -29,28 +28,38 @@ vi.mock('../storage/index.js', async (importOriginal) => {
   };
 });
 
-vi.mock('../workspace/disk/space-dir-handles.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof SpaceDirHandlesModule>();
-  return {
-    ...actual,
-    withSpaceDirHandlesReleased: vi.fn(actual.withSpaceDirHandlesReleased),
-  };
-});
+// Mocked at the module the Disk repository imports, not at the facade: these
+// cases force a Space-directory rename to fail, which is Disk behavior, and a
+// facade mock would not intercept the adapter's own import.
+vi.mock(
+  '../storage/backends/disk/space-dir-handles.js',
+  async (importOriginal) => {
+    const actual = await importOriginal<typeof SpaceDirHandlesModule>();
+    return {
+      ...actual,
+      withSpaceDirHandlesReleased: vi.fn(actual.withSpaceDirHandlesReleased),
+    };
+  },
+);
 
 import canvasRoutes from './canvas.route.js';
+import { withSpaceDirHandlesReleased } from '../storage/backends/disk/space-dir-handles.js';
+import { createCanvas, deleteCanvas } from '../storage/compatibility/canvas.js';
 import {
-  createCanvas,
-  canvasBlobs,
-  deleteCanvas,
+  space,
+  composeStorage,
   getCanvasStore,
+  getStorage,
   getStructuredStore,
   resetStorageCache,
+  setStorageForTesting,
+  unavailableCapabilityMessage,
 } from '../storage/index.js';
-import { withSpaceDirHandlesReleased } from '../workspace/disk/space-dir-handles.js';
+import { changesPath } from '../storage/paths.js';
 import { setWorkspacePath } from '../workspace.js';
 
+import type * as SpaceDirHandlesModule from '../storage/backends/disk/space-dir-handles.js';
 import type * as StorageModule from '../storage/index.js';
-import type * as SpaceDirHandlesModule from '../workspace/disk/space-dir-handles.js';
 import type { RecentAction } from '@huabu/shared';
 
 let tmp: string;
@@ -90,6 +99,21 @@ function action(nodeId: string): RecentAction {
   };
 }
 
+function change(nodeId: string) {
+  const [record] = extractCanvasChanges([
+    {
+      type: 'INSERT_NODE' as const,
+      node: {
+        id: nodeId,
+        type: 'note' as const,
+        position: { x: 0, y: 0 },
+        data: { label: nodeId, content: `body-${nodeId}` },
+      },
+    },
+  ]);
+  return record;
+}
+
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => {
@@ -123,7 +147,220 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
+describe('POST /api/canvas lifecycle', () => {
+  it('allocates concurrent default titles without skipping a suffix', async () => {
+    const app = await buildApp();
+    try {
+      const [first, second] = await Promise.all([
+        app.inject({ method: 'POST', url: '/canvas', payload: {} }),
+        app.inject({ method: 'POST', url: '/canvas', payload: {} }),
+      ]);
+
+      expect(first.statusCode).toBe(201);
+      expect(second.statusCode).toBe(201);
+      expect([first.json().title, second.json().title].sort()).toEqual([
+        'Untitled',
+        'Untitled (1)',
+      ]);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
 describe('PUT /api/canvas/:canvasId lifecycle', () => {
+  it('preserves the legacy structural response, version bump, and no-delta behavior', async () => {
+    createCanvas('c1', 'Original');
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'PUT',
+        url: '/canvas/c1',
+        payload: {
+          version: 0,
+          state: {
+            nodes: [
+              {
+                id: 'n1',
+                type: 'note',
+                position: { x: 0, y: 0 },
+                data: { label: 'Note', content: 'must stay out of space.json' },
+              },
+            ],
+            edges: [],
+          },
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ canvasId: 'c1', version: 1 });
+      expect(getCanvasStore('c1').read()).toMatchObject({
+        version: 1,
+        state: {
+          nodes: [
+            expect.objectContaining({
+              id: 'n1',
+              data: { label: 'Note' },
+            }),
+          ],
+          edges: [],
+        },
+      });
+      expect(getCanvasStore('c1').readDeltaLogSince(0)).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('keeps the legacy implicit-create path for an initially absent Space', async () => {
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'PUT',
+        url: '/canvas/implicit',
+        payload: { version: 0, state: { nodes: [], edges: [] } },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ canvasId: 'implicit', version: 1 });
+      expect(getCanvasStore('implicit').read()).toMatchObject({
+        canvasId: 'implicit',
+        version: 1,
+        state: { nodes: [], edges: [] },
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('keeps title collision as a 409 without applying the record write', async () => {
+    createCanvas('c1', 'Original');
+    createCanvas('c2', 'Taken/A');
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'PUT',
+        url: '/canvas/c1',
+        payload: {
+          version: 0,
+          title: 'Taken:A',
+          state: { nodes: [], edges: [] },
+        },
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({
+        code: 'CANVAS_TITLE_CONFLICT',
+        conflictWith: 'Taken/A',
+      });
+      expect(getCanvasStore('c1').read()).toMatchObject({
+        title: 'Original',
+        version: 0,
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('renames only when the request explicitly supplies a new title', async () => {
+    createCanvas('c1', 'Original');
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'PUT',
+        url: '/canvas/c1',
+        payload: {
+          version: 0,
+          title: 'Explicit rename',
+          state: { nodes: [], edges: [] },
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(getCanvasStore('c1').read()).toMatchObject({
+        title: 'Explicit rename',
+        version: 1,
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('persists a logical rename when both titles share one safe filename', async () => {
+    createCanvas('c1', 'A/B');
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'PUT',
+        url: '/canvas/c1',
+        payload: {
+          version: 0,
+          title: 'A:B',
+          state: { nodes: [], edges: [] },
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(getCanvasStore('c1').read()).toMatchObject({
+        title: 'A:B',
+        version: 1,
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('preserves an externally reconciled title when the request omits title', async () => {
+    createCanvas('c1', 'Original');
+    const store = getCanvasStore('c1');
+    expect(store.renameSelf('Finder rename')).toMatchObject({ ok: true });
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'PUT',
+        url: '/canvas/c1',
+        payload: { version: 0, state: { nodes: [], edges: [] } },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(getCanvasStore('c1').read()).toMatchObject({
+        title: 'Finder rename',
+        version: 1,
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('keeps filesystem rename failures behind the legacy generic 500', async () => {
+    createCanvas('c1', 'Original');
+    vi.mocked(withSpaceDirHandlesReleased).mockImplementationOnce(
+      (async () => ({
+        ok: false,
+        reason: 'fs-error',
+        message: 'sensitive filesystem detail',
+      })) as unknown as typeof withSpaceDirHandlesReleased,
+    );
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'PUT',
+        url: '/canvas/c1',
+        payload: {
+          version: 0,
+          title: 'Cannot rename',
+          state: { nodes: [], edges: [] },
+        },
+      });
+
+      expect(response.statusCode).toBe(500);
+      expect(response.json()).toEqual({ message: 'Failed to rename canvas' });
+      expect(response.body).not.toContain('sensitive filesystem detail');
+    } finally {
+      await app.close();
+    }
+  });
+
   it('does not recreate a Space deleted after the initial read', async () => {
     createCanvas('c1', 'Original');
     const paused = deferred();
@@ -157,6 +394,48 @@ describe('PUT /api/canvas/:canvasId lifecycle', () => {
       expect(getCanvasStore('c1').read()).toBeNull();
     } finally {
       release.resolve();
+      await app.close();
+    }
+  });
+});
+
+describe('GET /api/canvas', () => {
+  it('lists through the Space repository and sorts a copy by updatedAt', async () => {
+    const source = [
+      {
+        canvasId: 'older',
+        title: 'Older',
+        nodeCount: 1,
+        createdAt: 1,
+        updatedAt: 10,
+      },
+      {
+        canvasId: 'newer',
+        title: 'Newer',
+        nodeCount: 2,
+        createdAt: 2,
+        updatedAt: 20,
+      },
+    ];
+    const list = vi.fn().mockResolvedValue(source);
+    const spaces = vi.fn(() => ({
+      list,
+      worldId: vi.fn(),
+    }));
+    vi.mocked(getStructuredStore).mockImplementationOnce(
+      () => ({ spaces }) as unknown as ReturnType<typeof getStructuredStore>,
+    );
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({ method: 'GET', url: '/canvas' });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ canvases: [source[1], source[0]] });
+      expect(source.map((row) => row.canvasId)).toEqual(['older', 'newer']);
+      expect(spaces).toHaveBeenCalledTimes(1);
+      expect(list).toHaveBeenCalledTimes(1);
+    } finally {
       await app.close();
     }
   });
@@ -311,7 +590,365 @@ describe('GET /api/canvas/:canvasId/events', () => {
   });
 });
 
+describe('GET /api/canvas/:canvasId/threads/:threadId/changes', () => {
+  it('reads change records through one structured Space handle', async () => {
+    const expected = [change('n1')];
+    const readRecord = vi.fn().mockResolvedValue({ canvasId: 'c1' });
+    const readChanges = vi.fn().mockResolvedValue(expected);
+    const space = vi.fn(() => ({
+      read: readRecord,
+      changes: { read: readChanges },
+    }));
+    vi.mocked(getStructuredStore).mockImplementationOnce(
+      () => ({ space }) as unknown as ReturnType<typeof getStructuredStore>,
+    );
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/canvas/c1/threads/thread-1/changes',
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ changes: expected });
+      expect(getStructuredStore).toHaveBeenCalledTimes(1);
+      expect(space).toHaveBeenCalledTimes(1);
+      expect(space).toHaveBeenCalledWith('c1');
+      expect(readRecord).toHaveBeenCalledTimes(1);
+      expect(readChanges).toHaveBeenCalledWith('thread-1');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('returns an empty list when the thread has no changes', async () => {
+    createCanvas('c1', 'Canvas One');
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/canvas/c1/threads/thread-1/changes',
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ changes: [] });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('404s for a Space that does not exist', async () => {
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/canvas/missing/threads/thread-1/changes',
+      });
+
+      expect(res.statusCode).toBe(404);
+      expect(res.json()).toEqual({ message: 'Canvas not found' });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('does not report a corrupt Space record as missing', async () => {
+    createCanvas('c1', 'Canvas One');
+    writeFileSync(join(tmp, 'Canvas One', 'space.json'), '{broken', 'utf8');
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/canvas/c1/threads/thread-1/changes',
+      });
+
+      expect(res.statusCode).toBe(500);
+      expect(res.json()).not.toEqual({ message: 'Canvas not found' });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects a corrupt change-record array', async () => {
+    createCanvas('c1', 'Canvas One');
+    await getStructuredStore()
+      .space('c1')
+      .changes.append('thread-1', [change('n1')]);
+    writeFileSync(changesPath('c1', 'thread-1'), '{}', 'utf8');
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/canvas/c1/threads/thread-1/changes',
+      });
+
+      expect(res.statusCode).toBe(500);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+/**
+ * Serve the real Disk stores under a profile that claims to keep Spaces in
+ * tables, so `diskTree` is absent while every record still reads back.
+ *
+ * The alternative — waiting for a second adapter — would leave the declared
+ * refusals unexercised on the only profile that exists.
+ */
+function useTablesProfile(): () => void {
+  const real = getStorage();
+  return setStorageForTesting(
+    composeStorage(
+      { ...real.profile, structured: { kind: 'sqlite' } },
+      real.structured,
+      real.blobs,
+    ),
+  );
+}
+
+describe('Disk-only capability refusals', () => {
+  it.each(['headers only', 'partial file'] as const)(
+    'rejects an unsupported import with %s without waiting for the upload to finish',
+    async (uploadState) => {
+      const restore = useTablesProfile();
+      const app = await buildApp();
+      let upload: ClientRequest | undefined;
+      try {
+        const address = await app.listen({ port: 0, host: '127.0.0.1' });
+        const body = await new Promise<string>((resolve, reject) => {
+          upload = httpRequest(
+            `${address}/canvas/import`,
+            {
+              method: 'POST',
+              headers: {
+                'content-type':
+                  'multipart/form-data; boundary=unfinished-upload',
+                'transfer-encoding': 'chunked',
+              },
+            },
+            (response) => {
+              let body = '';
+              response.setEncoding('utf8');
+              response.on('data', (chunk: string) => {
+                body += chunk;
+              });
+              response.on('error', reject);
+              response.on('end', () => {
+                if (response.statusCode !== 400) {
+                  reject(new Error(`Unexpected status ${response.statusCode}`));
+                } else resolve(body);
+              });
+            },
+          );
+          upload.on('error', reject);
+          upload.setTimeout(2_000, () => {
+            upload?.destroy(
+              new Error('Import waited for unsupported upload data'),
+            );
+          });
+          // Leave the request open: neither a client that has not sent a file
+          // nor one stalled partway through a file should delay this refusal.
+          upload.flushHeaders();
+          if (uploadState === 'partial file') {
+            upload.write(
+              '--unfinished-upload\r\n' +
+                'Content-Disposition: form-data; name="file"; filename="space.zip"\r\n' +
+                'Content-Type: application/zip\r\n\r\n',
+            );
+            upload.write(Buffer.alloc(64 * 1024));
+          }
+        });
+        expect(JSON.parse(body)).toEqual({
+          code: 'STORAGE_CAPABILITY_UNAVAILABLE',
+          message: unavailableCapabilityMessage('space-bundle-import'),
+        });
+      } finally {
+        upload?.destroy();
+        await app.close();
+        restore();
+      }
+    },
+  );
+
+  it('preflights Disk export without sending an archive, then still downloads it', async () => {
+    createCanvas('c1', 'Disk Space');
+    const app = await buildApp();
+    try {
+      const checked = await app.inject({
+        method: 'GET',
+        url: '/canvas/c1/export?check=true',
+      });
+      expect(checked.statusCode).toBe(204);
+      expect(checked.body).toBe('');
+      expect(checked.headers['content-disposition']).toBeUndefined();
+      const download = await app.inject({
+        method: 'GET',
+        url: '/canvas/c1/export',
+      });
+      expect(download.statusCode).toBe(200);
+      expect(download.headers['content-type']).toBe('application/zip');
+      expect(download.rawPayload.subarray(0, 2).toString()).toBe('PK');
+      const missing = await app.inject({
+        method: 'GET',
+        url: '/canvas/missing/export?check=true',
+      });
+      expect(missing.statusCode).toBe(404);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses an unsupported export during preflight using the same policy as download', async () => {
+    createCanvas('c1', 'Tables Space');
+    const restore = useTablesProfile();
+    const app = await buildApp();
+    try {
+      const checked = await app.inject({
+        method: 'GET',
+        url: '/canvas/c1/export?check=true',
+      });
+      expect(checked.statusCode).toBe(400);
+      expect(checked.json()).toEqual({
+        code: 'STORAGE_CAPABILITY_UNAVAILABLE',
+        message: unavailableCapabilityMessage('space-bundle-export'),
+      });
+      const body = multipartBody(
+        'space.zip',
+        'application/zip',
+        Buffer.from('zip'),
+      );
+      const imported = await app.inject({
+        method: 'POST',
+        url: '/canvas/import',
+        ...body,
+      });
+      expect(imported.statusCode).toBe(400);
+      expect(imported.json()).toEqual({
+        code: 'STORAGE_CAPABILITY_UNAVAILABLE',
+        message: unavailableCapabilityMessage('space-bundle-import'),
+      });
+    } finally {
+      await app.close();
+      restore();
+    }
+  });
+
+  it('refuses in the same words the profile declared at startup', async () => {
+    createCanvas('c1', 'Tables Space');
+    const restore = useTablesProfile();
+    const app = await buildApp();
+    try {
+      const exported = await app.inject({
+        method: 'GET',
+        url: '/canvas/c1/export',
+      });
+      expect(exported.statusCode).toBe(400);
+      expect((exported.json() as { message: string }).message).toBe(
+        unavailableCapabilityMessage('space-bundle-export'),
+      );
+
+      const revealed = await app.inject({
+        method: 'POST',
+        url: '/canvas/c1/reveal-nodes',
+      });
+      expect(revealed.statusCode).toBe(400);
+      expect((revealed.json() as { message: string }).message).toBe(
+        unavailableCapabilityMessage('reveal-space-folder'),
+      );
+    } finally {
+      await app.close();
+      restore();
+    }
+  });
+
+  it('still reports a missing folder as missing on Disk', async () => {
+    // The refusal above must not swallow the other failure: on Disk the
+    // capability is present, so a Space whose directory is gone is data
+    // trouble, not a profile limitation.
+    createCanvas('c2', 'Vanished Space');
+    const tree = space('c2').diskTree;
+    if (!tree) throw new Error('Expected the Disk backend in this test');
+    rmSync(tree.directory(), { recursive: true, force: true });
+
+    const app = await buildApp();
+    try {
+      const exported = await app.inject({
+        method: 'GET',
+        url: '/canvas/c2/export',
+      });
+      expect(exported.statusCode).toBe(404);
+      expect((exported.json() as { message: string }).message).toMatch(
+        /not found/i,
+      );
+    } finally {
+      await app.close();
+    }
+  });
+});
+
 describe('Space export/import persistence', () => {
+  it('omits prompt logs but preserves other extension state without history', async () => {
+    createCanvas('c1', 'Private Export');
+    const promptStore = await space('c1').extension('huabu.prompt.log');
+    const memoryStore = await space('c1').extension('huabu.memory');
+    if (promptStore?.kind !== 'disk' || memoryStore?.kind !== 'disk') {
+      throw new Error('Expected Disk stores');
+    }
+    writeFileSync(
+      join(promptStore.directory, 'thread.prompt.log'),
+      'private system and user prompt',
+      'utf8',
+    );
+    writeFileSync(
+      join(memoryStore.directory, 'state.json'),
+      JSON.stringify({ counter: 17 }),
+      'utf8',
+    );
+
+    const app = await buildApp();
+    try {
+      const exported = await app.inject({
+        method: 'GET',
+        url: '/canvas/c1/export?includeHistory=false',
+      });
+      expect(exported.statusCode).toBe(200);
+
+      const upload = multipartBody(
+        'private-export.huabu.zip',
+        'application/zip',
+        exported.rawPayload,
+      );
+      const imported = await app.inject({
+        method: 'POST',
+        url: '/canvas/import',
+        payload: upload.payload,
+        headers: upload.headers,
+      });
+      expect(imported.statusCode).toBe(200);
+      const importedId = (imported.json() as { canvasId: string }).canvasId;
+
+      const importedPrompt =
+        await space(importedId).extension('huabu.prompt.log');
+      const importedMemory = await space(importedId).extension('huabu.memory');
+      if (importedPrompt?.kind !== 'disk' || importedMemory?.kind !== 'disk') {
+        throw new Error('Expected imported Disk stores');
+      }
+      expect(
+        existsSync(join(importedPrompt.directory, 'thread.prompt.log')),
+      ).toBe(false);
+      expect(
+        readFileSync(join(importedMemory.directory, 'state.json'), 'utf8'),
+      ).toContain('17');
+    } finally {
+      await app.close();
+    }
+  });
+
   it('round-trips topology, sidecars, history, and blobs after a cache reopen', async () => {
     createCanvas('c1', 'Round Trip');
     const store = getCanvasStore('c1');
@@ -343,25 +980,14 @@ describe('Space export/import persistence', () => {
         content: 'persisted body',
       }),
     ).toMatchObject({ ok: true });
-    const history = getStructuredStore().space('c1');
-    await history.events.append([{ payload: action('n1'), ts: 1 }]);
-    await history.deltas.append({
+    const seededSpace = getStructuredStore().space('c1');
+    await seededSpace.events.append([{ payload: action('n1'), ts: 1 }]);
+    getCanvasStore('c1').appendDeltaLogEntry({
       version: 1,
       ts: 2,
       commands: [],
       deltas: [],
       originator: { source: 'agent' },
-    });
-    await history.intents.upsert({
-      id: 'intent-1',
-      timestamp: 3,
-      contextSummary: 'Persist this intent',
-      candidates: [],
-      outcome: {
-        type: 'selected',
-        chosenIndex: 0,
-        chosenLabel: 'Keep it',
-      },
     });
     const [change] = extractCanvasChanges([
       {
@@ -374,11 +1000,11 @@ describe('Space export/import persistence', () => {
         },
       },
     ]);
-    const storedChanges = await history.changes.append('thread-export', [
+    const storedChanges = await seededSpace.changes.append('thread-export', [
       change,
     ]);
     const blob = Buffer.from([0, 1, 2, 3, 255]);
-    await canvasBlobs('c1').put('asset.bin', blob);
+    await space('c1').artifacts.put('asset.bin', blob);
 
     const app = await buildApp();
     try {
@@ -418,22 +1044,19 @@ describe('Space export/import persistence', () => {
         `/api/canvas/${importedId}/artifact/asset.bin`,
       );
       expect(reopened.readNode('n1')?.content).toBe('persisted body');
-      const reopenedHistory = getStructuredStore().space(importedId);
+      const importedSpace = getStructuredStore().space(importedId);
       expect(
-        (await reopenedHistory.events.read()).map((event) => event.ts),
+        (await importedSpace.events.read()).map((event) => event.ts),
       ).toEqual([1]);
       expect(
-        (await reopenedHistory.deltas.readSince(0)).map(
-          (entry) => entry.version,
-        ),
+        getCanvasStore(importedId)
+          .readDeltaLogSince(0)
+          .map((entry) => entry.version),
       ).toEqual([1]);
-      expect(
-        (await reopenedHistory.intents.read()).map((episode) => episode.id),
-      ).toEqual(['intent-1']);
-      expect(await reopenedHistory.changes.read('thread-export')).toEqual(
+      expect(await importedSpace.changes.read('thread-export')).toEqual(
         storedChanges,
       );
-      expect(await canvasBlobs(importedId).read('asset.bin')).toEqual(blob);
+      expect(await space(importedId).artifacts.read('asset.bin')).toEqual(blob);
     } finally {
       await app.close();
     }

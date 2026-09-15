@@ -21,7 +21,6 @@ import {
 import { isSnapSessionActive } from '../../handler/snap/snapSession';
 import useCanvasStore from '../../store/canvasStore';
 import { useGesturePreviewStore } from '../../store/gesturePreviewStore';
-import { useIntentStore } from '../../store/intentStore';
 import {
   parseHuabuClipboard,
   readHuabuClipboardPayload,
@@ -46,6 +45,22 @@ export interface UseCanvasShortcutsOptions {
 }
 
 export type CanvasTool = 'select' | 'lasso' | 'pan';
+
+function hasNativeCopySelection(target: EventTarget | null): boolean {
+  if (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement
+  ) {
+    return (
+      target.selectionStart !== null &&
+      target.selectionEnd !== null &&
+      target.selectionStart !== target.selectionEnd
+    );
+  }
+
+  const selection = window.getSelection();
+  return !!selection && !selection.isCollapsed;
+}
 
 /**
  * All keyboard / paste handling for the canvas, extracted from Canvas.tsx.
@@ -83,6 +98,10 @@ export function useCanvasShortcuts(
   // --- Tool state (select / lasso / pan) ---
   const [tool, setTool] = useState<CanvasTool>('select');
   const previousToolRef = useRef<Exclude<CanvasTool, 'pan'>>('select');
+  const temporaryPanRef = useRef(false);
+  const temporaryPanPointerRef = useRef<number | null>(null);
+  const temporaryPanMouseUpPendingRef = useRef(false);
+  const spacePressedRef = useRef(false);
 
   useEffect(() => {
     if (tool !== 'pan') {
@@ -94,6 +113,15 @@ export function useCanvasShortcuts(
   useEffect(() => {
     if (disabled) return;
 
+    const restoreTemporaryPan = () => {
+      if (!temporaryPanRef.current) return;
+      temporaryPanRef.current = false;
+      temporaryPanPointerRef.current = null;
+      temporaryPanMouseUpPendingRef.current = false;
+      spacePressedRef.current = false;
+      setTool((prev) => (prev === 'pan' ? previousToolRef.current : prev));
+    };
+
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== ' ' || e.repeat) return;
       if (isEditableTarget(e.target)) return;
@@ -102,21 +130,67 @@ export function useCanvasShortcuts(
       // keydown listener for the duration of the drag). Skip the
       // pan-tool switch so the two interpretations don't fight.
       if (isSnapSessionActive()) return;
+      spacePressedRef.current = true;
       setTool((prev) => {
         if (prev === 'pan') return prev;
         e.preventDefault();
+        temporaryPanRef.current = true;
         return 'pan';
       });
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.key !== ' ') return;
-      setTool((prev) => (prev === 'pan' ? previousToolRef.current : prev));
+      spacePressedRef.current = false;
+      if (
+        temporaryPanPointerRef.current === null &&
+        !temporaryPanMouseUpPendingRef.current
+      ) {
+        restoreTemporaryPan();
+      }
+    };
+    const onPointerDown = (e: PointerEvent) => {
+      if (!temporaryPanRef.current || e.button !== 0 || !e.isPrimary) return;
+      temporaryPanPointerRef.current = e.pointerId;
+    };
+    const onPointerUp = (e: PointerEvent) => {
+      if (temporaryPanPointerRef.current !== e.pointerId) return;
+      temporaryPanPointerRef.current = null;
+      if (e.pointerType !== 'mouse') {
+        if (!spacePressedRef.current) restoreTemporaryPan();
+        return;
+      }
+      temporaryPanMouseUpPendingRef.current = true;
+    };
+    const onMouseUp = () => {
+      if (!temporaryPanMouseUpPendingRef.current) return;
+      temporaryPanMouseUpPendingRef.current = false;
+      if (!spacePressedRef.current) restoreTemporaryPan();
+    };
+    const onPointerCancel = (e: PointerEvent) => {
+      if (temporaryPanPointerRef.current !== e.pointerId) return;
+      restoreTemporaryPan();
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') restoreTemporaryPan();
     };
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('pointerup', onPointerUp, true);
+    window.addEventListener('pointercancel', onPointerCancel, true);
+    window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('blur', restoreTemporaryPan);
+    document.addEventListener('visibilitychange', onVisibilityChange);
     return () => {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('pointerup', onPointerUp, true);
+      window.removeEventListener('pointercancel', onPointerCancel, true);
+      window.removeEventListener('mouseup', onMouseUp);
+      window.removeEventListener('blur', restoreTemporaryPan);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      restoreTemporaryPan();
     };
   }, [disabled]);
 
@@ -321,12 +395,10 @@ export function useCanvasShortcuts(
         e.preventDefault();
         frameSelectedNodes();
       } else if (lowerKey === 'c') {
-        if (editable) return;
-        // If the user has selected text (e.g. in a panel), let the browser
-        // handle the native copy instead of overwriting the clipboard with
-        // serialized node data.
-        const selection = window.getSelection();
-        if (selection && !selection.isCollapsed) return;
+        // Editors can retain focus after their node is selected. Preserve
+        // native copy only when the user has an actual text selection;
+        // otherwise copy the selected Canvas nodes.
+        if (hasNativeCopySelection(e.target)) return;
         e.preventDefault();
         copySelectedNodes();
       } else if (lowerKey === 'v') {
@@ -384,15 +456,6 @@ export function useCanvasShortcuts(
             // Clipboard API denied
           }
         }, 150);
-      } else if (lowerKey === 'i') {
-        if (editable) return;
-        e.preventDefault();
-        useIntentStore
-          .getState()
-          .triggerIntent(
-            mousePositionRef.current.x,
-            mousePositionRef.current.y,
-          );
       }
     };
 

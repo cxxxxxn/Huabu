@@ -13,7 +13,7 @@
  *
  * Everything else is rejected. Each writer goes through
  * {@link resolveLongTermPath} / {@link resolveUserSkillPath} /
- * {@link resolveWorkingMemoryPath} so the security model lives in one
+ * one resolver per tier so the security model lives in one
  * place — same posture as the chat sandbox at
  * `modules/agent/tools/handlers/fs-sandbox.ts`.
  *
@@ -29,9 +29,7 @@ import {
   workspaceMemoryPath,
   settingDir,
   userSkillsDir,
-  canvasMemoryDir,
-  canvasMemoryPath,
-} from '../../storage/paths.js';
+} from '../../workspace/paths.js';
 
 /** Thrown by every resolver below on out-of-sandbox attempts. */
 export class MemorySandboxError extends Error {
@@ -95,18 +93,5 @@ export function resolveUserSkillPath(id: string): string {
   const root = userSkillsDir();
   const target = path.resolve(root, safeId, 'SKILL.md');
   ensureUnderRoot(root, target, 'user skills');
-  return target;
-}
-
-/**
- * Resolve the absolute Space memory file path. Throws if the resolved path
- * escapes the canvas's `.memory/` root (a defensive check — the path
- * computation in `workspace/disk/paths.ts` already constrains the result,
- * but going through `ensureUnderRoot` keeps the invariant explicit).
- */
-export function resolveWorkingMemoryPath(canvasId: string): string {
-  const root = canvasMemoryDir(canvasId);
-  const target = canvasMemoryPath(canvasId);
-  ensureUnderRoot(root, target, 'canvas memory');
   return target;
 }

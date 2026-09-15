@@ -39,6 +39,7 @@ import { Button } from '@/components/Common/Button';
 import { MilkdownEditor } from '@/components/Milkdown';
 import { MilkdownFloatingToolbar } from '@/components/Milkdown/MilkdownFloatingToolbar';
 import { usePreviewHeaderSlot } from '@/components/Nodes/PreviewHeaderSlot';
+import { usePreviewScrollMemory } from '@/hooks/usePreviewScrollMemory';
 import useCanvasStore from '@/store/canvasStore';
 import {
   coerceProvenance,
@@ -79,8 +80,13 @@ const RawMarkdownEditor = lazy(
 export interface PreviewComponentProps {
   /** Canvas node id, when this preview is bound to a real node. */
   id?: string;
+  /** Runtime identity used to restore this Preview target's scroll offset. */
+  scrollViewKey?: string;
   data: Record<string, unknown>;
   readOnly?: boolean;
+  /** One-shot focus request owned by the containing preview tab. */
+  focusRequestNonce?: number;
+  onFocusRequestHandled?: (nonce: number) => void;
   /** Called with a plain string for backward-compat consumers. */
   onContentChange?: (newContent: string) => void;
   /**
@@ -93,8 +99,11 @@ export interface PreviewComponentProps {
 
 export const NotePreview = ({
   id,
+  scrollViewKey,
   data,
   readOnly,
+  focusRequestNonce,
+  onFocusRequestHandled,
   onContentChange,
   onDataChange,
 }: PreviewComponentProps) => {
@@ -121,6 +130,7 @@ export const NotePreview = ({
 
   const [editor, setEditor] = useState<MilkdownInstance | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  usePreviewScrollMemory(containerRef, scrollViewKey);
 
   // Edit-mode toggle: rich-text WYSIWYG (Milkdown) vs raw markdown
   // (textarea). Provenance overlays and the batch accept/reject chip
@@ -366,31 +376,21 @@ export const NotePreview = ({
     editor.setBlockDecorations(decorations?.blocks ?? []);
   }, [editor, decorations]);
 
-  // Auto-focus the editor whenever the user triggers "expand this
-  // node" — covering both the first mount (e.g., double-click an
-  // unopened note) AND a repeat double-click on the already-expanded
-  // node. We drive this off `expandedNodeFocusTick`, a store counter
-  // bumped by every `openExpanded` call. The ref-tracked
-  // `lastHandledTickRef` skips redundant focuses on unrelated effect
-  // runs (e.g., toggling raw ↔ wysiwyg) so we never steal focus from
-  // an input elsewhere on the page when no expansion was requested.
-  // The sentinel `-1` guarantees the first valid run (editor ready,
-  // editable, wysiwyg) always focuses even on a fresh mount.
-  const focusTick = useCanvasStore((s) => s.expandedNodeFocusTick);
   // Needed to resolve artifact-key image srcs (e.g. `art_xxx.png`)
   // dragged in from chat so the inserted markdown carries a
   // fetchable HTTP URL rather than a bare key the renderer can't
   // dereference.
   const canvasId = useCanvasStore((s) => s.canvasId);
-  const lastHandledFocusTickRef = useRef<number>(-1);
+  // Explicit opens target one workspace tab. Consume the request after the
+  // editor focuses so remounting that tab cannot replay stale focus intent.
   useEffect(() => {
     if (!editor) return;
     if (readOnly) return;
     if (editMode !== 'wysiwyg') return;
-    if (lastHandledFocusTickRef.current === focusTick) return;
-    lastHandledFocusTickRef.current = focusTick;
+    if (focusRequestNonce === undefined) return;
     editor.focus();
-  }, [editor, readOnly, editMode, focusTick]);
+    onFocusRequestHandled?.(focusRequestNonce);
+  }, [editor, readOnly, editMode, focusRequestNonce, onFocusRequestHandled]);
 
   const handleBlockDragStart = useCallback(
     (event: MilkdownBlockDragEvent) => {
@@ -606,17 +606,19 @@ export const NotePreview = ({
                 surfaceRef={containerRef}
               />
             ) : null}
-            <MilkdownEditor
-              markdown={markdown}
-              editable={!readOnly}
-              canvasId={canvasId ?? undefined}
-              onChange={handleEditorChange}
-              onExternalUpdate={handleExternalUpdate}
-              onReady={setEditor}
-              onBlockDragStart={readOnly ? undefined : handleBlockDragStart}
-              decorations={decorations}
-              className="milkdown-note-preview"
-            />
+            <div className="contents" data-preview-search-content>
+              <MilkdownEditor
+                markdown={markdown}
+                editable={!readOnly}
+                canvasId={canvasId ?? undefined}
+                onChange={handleEditorChange}
+                onExternalUpdate={handleExternalUpdate}
+                onReady={setEditor}
+                onBlockDragStart={readOnly ? undefined : handleBlockDragStart}
+                decorations={decorations}
+                className="milkdown-note-preview"
+              />
+            </div>
             {PROVENANCE_ENABLED && !readOnly ? (
               <ProvenanceOverlay
                 blocks={provenance.blocks}
@@ -632,21 +634,23 @@ export const NotePreview = ({
             ) : null}
           </>
         ) : (
-          <Suspense
-            fallback={
-              <div className="text-fg-subtle px-2 py-1 text-xs">
-                {t('node.loadingSourceEditor')}
-              </div>
-            }
-          >
-            <RawMarkdownEditor
-              value={markdown}
-              readOnly={readOnly}
-              onChange={handleRawChange}
-              ariaLabel={t('node.rawMarkdownSource')}
-              className="huabu-raw-markdown"
-            />
-          </Suspense>
+          <div className="contents" data-preview-search-content>
+            <Suspense
+              fallback={
+                <div className="text-fg-subtle px-2 py-1 text-xs">
+                  {t('node.loadingSourceEditor')}
+                </div>
+              }
+            >
+              <RawMarkdownEditor
+                value={markdown}
+                readOnly={readOnly}
+                onChange={handleRawChange}
+                ariaLabel={t('node.rawMarkdownSource')}
+                className="huabu-raw-markdown"
+              />
+            </Suspense>
+          </div>
         )}
       </div>
       {showProvenanceChip ? (

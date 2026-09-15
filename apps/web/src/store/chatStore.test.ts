@@ -1,15 +1,34 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { selectCurrentDraft, useChatStore } from './chatStore';
+import { selectThreadDraft, useChatStore } from './chatStore';
+
+const testStorage = vi.hoisted(() => {
+  const values = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => values.set(key, value),
+    removeItem: (key: string) => values.delete(key),
+    clear: () => values.clear(),
+    key: (index: number) => [...values.keys()][index] ?? null,
+    get length() {
+      return values.size;
+    },
+  };
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: storage,
+  });
+  return storage;
+});
 
 describe('chatStore composer drafts', () => {
   beforeEach(() => {
+    testStorage.clear();
     useChatStore.setState({
-      draftsByThread: {},
-      threadId: 'thread-a',
+      threadsById: {},
     });
   });
 
@@ -18,15 +37,17 @@ describe('chatStore composer drafts', () => {
 
     setDraft('thread-a', 'first draft');
     setDraft('thread-b', 'second draft');
-    expect(selectCurrentDraft(useChatStore.getState())).toBe('first draft');
-
-    useChatStore.setState({ threadId: 'thread-b' });
-    expect(selectCurrentDraft(useChatStore.getState())).toBe('second draft');
+    expect(selectThreadDraft(useChatStore.getState(), 'thread-a')).toBe(
+      'first draft',
+    );
+    expect(selectThreadDraft(useChatStore.getState(), 'thread-b')).toBe(
+      'second draft',
+    );
 
     setDraft('thread-b', '');
-    expect(selectCurrentDraft(useChatStore.getState())).toBe('');
-    expect(useChatStore.getState().draftsByThread).toEqual({
-      'thread-a': 'first draft',
-    });
+    expect(selectThreadDraft(useChatStore.getState(), 'thread-b')).toBe('');
+    expect(selectThreadDraft(useChatStore.getState(), 'thread-a')).toBe(
+      'first draft',
+    );
   });
 });

@@ -14,11 +14,23 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { importForeignNodeSources } from './import-node-src.js';
-import { canvasBlobs, createCanvas, getCanvasStore } from '../storage/index.js';
-import { canvasRoot } from '../storage/paths.js';
+import { createCanvas } from '../storage/compatibility/canvas.js';
+import { space, getCanvasStore } from '../storage/index.js';
 import { setWorkspacePath } from '../workspace.js';
 
 import type { CanvasCommand } from '@huabu/shared';
+
+/**
+ * The Space's Disk directory, or a test failure.
+ *
+ * These cases are Disk-specific by construction; the assertion states that
+ * rather than letting an optional-chained `undefined` quietly pass.
+ */
+function diskDirOf(canvasId: string): string {
+  const tree = space(canvasId).diskTree;
+  if (!tree) throw new Error('Expected the Disk backend in this test');
+  return tree.directory();
+}
 
 let tmp: string;
 
@@ -31,8 +43,10 @@ beforeEach(() => {
     'c-web-remote',
     'c-web-data',
     'c-web-merge-local',
+    'c-web-merge-multiple',
     'c-web-merge-remote',
     'c-image-local',
+    'c-image-reentered',
   ]) {
     createCanvas(canvasId);
   }
@@ -44,7 +58,7 @@ afterEach(() => {
 
 /** Stage a file under the canvas's hidden `.upload/` scratch dir. */
 function stageUpload(canvasId: string, name: string, body: string): string {
-  const uploadDir = path.join(canvasRoot(canvasId), '.upload');
+  const uploadDir = path.join(diskDirOf(canvasId), '.upload');
   mkdirSync(uploadDir, { recursive: true });
   const abs = path.join(uploadDir, name);
   writeFileSync(abs, body);
@@ -69,19 +83,25 @@ function firstPatchedSrc(commands: CanvasCommand[]): string | undefined {
 
 /** Seed a Space with one existing web node for merge-path tests. */
 function seedWebNode(canvasId: string, nodeId: string, src: string): void {
+  seedWebNodes(canvasId, [{ nodeId, src }]);
+}
+
+/** Seed a Space with existing web nodes for merge-path tests. */
+function seedWebNodes(
+  canvasId: string,
+  nodes: readonly { nodeId: string; src: string }[],
+): void {
   getCanvasStore(canvasId).write({
     canvasId,
     title: null,
     version: 1,
     state: {
-      nodes: [
-        {
-          id: nodeId,
-          type: 'web',
-          position: { x: 0, y: 0 },
-          data: { label: 'Existing page', src },
-        },
-      ],
+      nodes: nodes.map(({ nodeId, src }) => ({
+        id: nodeId,
+        type: 'web',
+        position: { x: 0, y: 0 },
+        data: { label: 'Existing page', src },
+      })),
       edges: [],
     },
     createdAt: Date.now(),
@@ -92,7 +112,6 @@ function seedWebNode(canvasId: string, nodeId: string, src: string): void {
 describe('importForeignNodeSources — web nodes', () => {
   it('relocates a locally-staged HTML upload into .artifacts/ and reclaims it', async () => {
     const canvasId = 'c-web-local';
-    const store = getCanvasStore(canvasId);
     const uploadAbs = stageUpload(
       canvasId,
       'index.html',
@@ -112,7 +131,7 @@ describe('importForeignNodeSources — web nodes', () => {
       },
     ];
 
-    const out = await importForeignNodeSources(store, canvasId, commands);
+    const out = await importForeignNodeSources(canvasId, commands);
     const src = firstSrc(out);
 
     // Rewritten to a bare artifact key…
@@ -120,14 +139,13 @@ describe('importForeignNodeSources — web nodes', () => {
     // …whose file exists in the artifact store…
     expect(src).toBeDefined();
     if (src === undefined) throw new Error('Expected a rewritten web src');
-    expect(await canvasBlobs(canvasId).head(src)).not.toBeNull();
+    expect(await space(canvasId).artifacts.head(src)).not.toBeNull();
     // …and the staging upload was reclaimed (move semantics).
     expect(existsSync(uploadAbs)).toBe(false);
   });
 
   it('rejects a non-HTML local upload without reclaiming it', async () => {
     const canvasId = 'c-web-invalid-local';
-    const store = getCanvasStore(canvasId);
     const uploadAbs = stageUpload(canvasId, 'document.pdf', 'not html');
 
     const commands: CanvasCommand[] = [
@@ -143,7 +161,7 @@ describe('importForeignNodeSources — web nodes', () => {
       },
     ];
 
-    const out = await importForeignNodeSources(store, canvasId, commands);
+    const out = await importForeignNodeSources(canvasId, commands);
 
     expect(firstSrc(out)).toBe('upload/document.pdf');
     expect(existsSync(uploadAbs)).toBe(true);
@@ -151,7 +169,6 @@ describe('importForeignNodeSources — web nodes', () => {
 
   it('leaves a live remote URL untouched (never downloads it)', async () => {
     const canvasId = 'c-web-remote';
-    const store = getCanvasStore(canvasId);
     const remote = 'https://example.com/some/page.html';
 
     const commands: CanvasCommand[] = [
@@ -167,13 +184,12 @@ describe('importForeignNodeSources — web nodes', () => {
       },
     ];
 
-    const out = await importForeignNodeSources(store, canvasId, commands);
+    const out = await importForeignNodeSources(canvasId, commands);
     expect(firstSrc(out)).toBe(remote);
   });
 
   it('leaves a data: URL untouched', async () => {
     const canvasId = 'c-web-data';
-    const store = getCanvasStore(canvasId);
     const dataUrl = 'data:text/html,<h1>inline</h1>';
 
     const commands: CanvasCommand[] = [
@@ -189,7 +205,7 @@ describe('importForeignNodeSources — web nodes', () => {
       },
     ];
 
-    const out = await importForeignNodeSources(store, canvasId, commands);
+    const out = await importForeignNodeSources(canvasId, commands);
     expect(firstSrc(out)).toBe(dataUrl);
   });
 
@@ -197,7 +213,6 @@ describe('importForeignNodeSources — web nodes', () => {
     const canvasId = 'c-web-merge-local';
     const nodeId = 'node-web-merge-local';
     seedWebNode(canvasId, nodeId, 'https://example.com/old');
-    const store = getCanvasStore(canvasId);
     const uploadAbs = stageUpload(
       canvasId,
       'replacement.html',
@@ -210,13 +225,13 @@ describe('importForeignNodeSources — web nodes', () => {
       },
     ];
 
-    const out = await importForeignNodeSources(store, canvasId, commands);
+    const out = await importForeignNodeSources(canvasId, commands);
     const src = firstPatchedSrc(out);
 
     expect(src).toMatch(/^artifact-[^/]+\.html$/);
     expect(src).toBeDefined();
     if (src === undefined) throw new Error('Expected a rewritten web src');
-    expect(await canvasBlobs(canvasId).head(src)).not.toBeNull();
+    expect(await space(canvasId).artifacts.head(src)).not.toBeNull();
     expect(existsSync(uploadAbs)).toBe(false);
   });
 
@@ -224,7 +239,6 @@ describe('importForeignNodeSources — web nodes', () => {
     const canvasId = 'c-web-merge-remote';
     const nodeId = 'node-web-merge-remote';
     seedWebNode(canvasId, nodeId, 'https://example.com/old');
-    const store = getCanvasStore(canvasId);
     const remote = 'https://example.com/new';
     const commands: CanvasCommand[] = [
       {
@@ -233,16 +247,48 @@ describe('importForeignNodeSources — web nodes', () => {
       },
     ];
 
-    const out = await importForeignNodeSources(store, canvasId, commands);
+    const out = await importForeignNodeSources(canvasId, commands);
 
     expect(firstPatchedSrc(out)).toBe(remote);
+  });
+
+  it('normalizes every entry in a multi-node MERGE_NODE_DATA command', async () => {
+    const canvasId = 'c-web-merge-multiple';
+    const firstNodeId = 'node-web-merge-first';
+    const secondNodeId = 'node-web-merge-second';
+    seedWebNodes(canvasId, [
+      { nodeId: firstNodeId, src: 'https://example.com/first' },
+      { nodeId: secondNodeId, src: 'https://example.com/second' },
+    ]);
+    const firstUpload = stageUpload(canvasId, 'first.html', '<p>first</p>');
+    const secondUpload = stageUpload(canvasId, 'second.html', '<p>second</p>');
+
+    const out = await importForeignNodeSources(canvasId, [
+      {
+        type: 'MERGE_NODE_DATA',
+        patches: [
+          { nodeId: firstNodeId, patch: { src: 'upload/first.html' } },
+          { nodeId: secondNodeId, patch: { src: 'upload/second.html' } },
+        ],
+      },
+    ]);
+    const command = out[0];
+    if (command?.type !== 'MERGE_NODE_DATA') {
+      throw new Error('Expected MERGE_NODE_DATA output');
+    }
+
+    expect(command.patches.map((entry) => entry.patch.src)).toEqual([
+      expect.stringMatching(/^artifact-[^/]+\.html$/),
+      expect.stringMatching(/^artifact-[^/]+\.html$/),
+    ]);
+    expect(existsSync(firstUpload)).toBe(false);
+    expect(existsSync(secondUpload)).toBe(false);
   });
 });
 
 describe('importForeignNodeSources — media nodes (regression)', () => {
   it('still relocates a locally-staged image upload', async () => {
     const canvasId = 'c-image-local';
-    const store = getCanvasStore(canvasId);
     stageUpload(canvasId, 'pic.png', 'not-a-real-png-but-bytes');
 
     const commands: CanvasCommand[] = [
@@ -258,11 +304,42 @@ describe('importForeignNodeSources — media nodes (regression)', () => {
       },
     ];
 
-    const out = await importForeignNodeSources(store, canvasId, commands);
+    const out = await importForeignNodeSources(canvasId, commands);
     const src = firstSrc(out);
     expect(src).toMatch(/^artifact-[^/]+\.png$/);
     expect(src).toBeDefined();
     if (src === undefined) throw new Error('Expected a rewritten image src');
-    expect(await canvasBlobs(canvasId).head(src)).not.toBeNull();
+    expect(await space(canvasId).artifacts.head(src)).not.toBeNull();
+  });
+
+  it('canonicalizes an artifact path that leaves and re-enters the Space', async () => {
+    const canvasId = 'c-image-reentered';
+    const spaceDir = diskDirOf(canvasId);
+    const artifactsDir = path.join(spaceDir, '.artifacts');
+    mkdirSync(artifactsDir, { recursive: true });
+    writeFileSync(path.join(artifactsDir, 'pic.png'), 'existing artifact');
+    const src = path.join(
+      '..',
+      path.basename(spaceDir),
+      '.artifacts',
+      'pic.png',
+    );
+
+    const commands: CanvasCommand[] = [
+      {
+        type: 'CREATE_NODES',
+        nodes: [
+          {
+            nodeType: 'image',
+            data: { src },
+            position: { x: 0, y: 0 },
+          },
+        ],
+      },
+    ];
+
+    const out = await importForeignNodeSources(canvasId, commands);
+
+    expect(firstSrc(out)).toBe('pic.png');
   });
 });

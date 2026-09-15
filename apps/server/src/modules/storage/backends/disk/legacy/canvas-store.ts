@@ -5,7 +5,13 @@
  * Per-canvas storage facade. One instance per `<canvasDir>/`.
  */
 
-import { existsSync, readdirSync, rmSync, unlinkSync } from 'node:fs';
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  unlinkSync,
+} from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -19,7 +25,6 @@ import {
   markNodeDeleted,
   restoreNodeTombstones,
 } from './node-tombstones.js';
-import { assertSpaceMutationAllowed } from './space-lifecycle-admission.js';
 import {
   appendJsonLine,
   appendJsonLines,
@@ -38,6 +43,9 @@ import {
   parseFrontmatter,
   toFrontmatter,
 } from '../../../../../utils/markdown-frontmatter.js';
+import { toSafeFilename } from '../../../../../utils/naming.js';
+import { getWorkspacePath } from '../../../../workspace.js';
+import { assertSpaceMutationAllowed } from '../../../space-lifecycle-admission.js';
 import {
   patchCanvasDirTitle,
   refreshCanvasDirIndex,
@@ -45,9 +53,7 @@ import {
   renameCanvasDirOnDisk,
   isWorldCanvasId,
   unregisterCanvasDir,
-} from '../../../../workspace/disk/canvas-dirs.js';
-import { NameIndex } from '../../../../workspace/disk/name-index.js';
-import { toSafeFilename } from '../../../../workspace/disk/naming.js';
+} from '../canvas-dirs.js';
 import {
   canvasJsonPath,
   canvasRoot,
@@ -55,12 +61,12 @@ import {
   chatDir,
   deltaLogPath,
   eventsPath,
-  intentPath,
   nodeFilePath,
   nodesDir,
-} from '../../../../workspace/disk/paths.js';
-import { getWorkspacePath } from '../../../../workspace.js';
+} from '../layout.js';
+import { NameIndex } from '../name-index.js';
 import { readValidCanvasFile } from '../space-record-validation.js';
+import { titleVisibleAtDirectory } from '../space-title.js';
 
 import type {
   CanvasEvent,
@@ -68,7 +74,7 @@ import type {
   DeltaLogEntry,
   NodeContent,
 } from '../../../../canvas/persistence-types.js';
-import type { IntentEpisode, RecentAction } from '@huabu/shared';
+import type { RecentAction } from '@huabu/shared';
 import type { CanvasChangeRecord } from '@huabu/shared/canvas-engine';
 
 export type {
@@ -267,11 +273,67 @@ function addSidecarToIndex(
   idx.add({ id, filename });
 }
 
+/**
+ * How a directory scan of `nodes/*.md` treats a file it cannot use.
+ *
+ * The two axes are separate because reachability and content are separate
+ * failures, and the readers that want one do not all want the other. A scan
+ * that conflated them would force the portable repository to choose between
+ * hiding an I/O error and rejecting a sidecar its own single read repairs.
+ */
+export interface NodeScanOptions {
+  /**
+   * Reject an unreadable sidecar (EACCES, EIO, a directory in the way)
+   * instead of dropping it from the scan. Absence — ENOENT — is still
+   * absence. Matches {@link CanvasStore.readNodeStrict}, so a scan and a
+   * single read agree about which nodes exist.
+   */
+  strict?: boolean;
+  /**
+   * Reject a sidecar whose frontmatter does not parse. Defaults to
+   * {@link strict}.
+   *
+   * The portable node repository sets it `false`: `readNodeStrict` recovers a
+   * hand-broken sidecar on purpose — the body survives, the unparseable
+   * frontmatter is dropped — so a scan that rejected what a read repairs
+   * would make the two shapes disagree about the same node. Readers that
+   * treat malformed content as an integrity failure (the World reference
+   * resolver, the Space preview) leave it defaulted.
+   */
+  strictRecords?: boolean;
+}
+
+/**
+ * Read one node sidecar under either compatibility or repository semantics.
+ * Compatibility readers preserve the legacy "missing or unreadable" `null`
+ * while retaining whether that answer proves absence. Strict repository reads
+ * treat only ENOENT as absence so a failed ownership scan cannot authorize a
+ * create over durable bytes it could not inspect.
+ */
+function readNodeSidecar(
+  filePath: string,
+  strict: boolean,
+): { raw: string | null; conclusive: boolean } {
+  try {
+    return { raw: readFileSync(filePath, 'utf8'), conclusive: true };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | null)?.code === 'ENOENT') {
+      return { raw: null, conclusive: true };
+    }
+    if (!strict) return { raw: null, conclusive: false };
+    throw error;
+  }
+}
+
 export class CanvasStore {
   readonly canvasId: string;
   /** Workspace this handle was created for; handles never follow activation. */
   readonly #workspacePath: string;
   private nodes: NameIndex<NodeFileEntry> | null = null;
+  /** Whether the cached index was built without swallowing sidecar failures. */
+  private nodeIndexIsConclusive = false;
+  /** Invalidates stale async batch scans without serializing their I/O. */
+  private nodeIndexGeneration = 0;
   /**
    * Ids that resolve to more than one `.md` sidecar on disk, captured
    * during the most recent index scan. Kept in sync with {@link nodes}:
@@ -343,20 +405,24 @@ export class CanvasStore {
       );
     }
     const dirName = path.basename(canvasRoot(this.canvasId));
-    const expectedDir = toSafeFilename(file.title, this.canvasId);
-    if (!isWorldCanvasId(this.canvasId) && dirName && dirName !== expectedDir) {
+    const visibleTitle = titleVisibleAtDirectory(
+      file.title,
+      this.canvasId,
+      dirName,
+    );
+    if (!isWorldCanvasId(this.canvasId) && visibleTitle !== file.title) {
       const next: CanvasFile = {
         ...file,
-        title: dirName,
+        title: visibleTitle,
         updatedAt: Date.now(),
       };
       try {
         assertSpaceMutationAllowed(this.#workspacePath, this.canvasId);
         atomicWriteJson(canvasJsonPath(this.canvasId), next);
-        patchCanvasDirTitle(this.canvasId, dirName);
+        patchCanvasDirTitle(this.canvasId, visibleTitle);
         return next;
       } catch {
-        return { ...file, title: dirName };
+        return { ...file, title: visibleTitle };
       }
     }
 
@@ -493,6 +559,12 @@ export class CanvasStore {
       );
     }
 
+    // Physical node ownership is established by {@link writeNode}'s own
+    // staleness probes, which run per mutation inside this batch. Forcing a
+    // rescan here instead would make every executor batch read and parse
+    // every sidecar in the Space — O(nodes) synchronous I/O inside the canvas
+    // mutex, on the hottest write path there is.
+
     const tombstoneSnapshot = captureNodeTombstones(
       this.#workspacePath,
       this.canvasId,
@@ -560,15 +632,27 @@ export class CanvasStore {
 
   // ── Node content ─────────────────────────────────────────────────────────
 
-  private nodeIndex(): NameIndex<NodeFileEntry> {
-    if (this.nodes) return this.nodes;
+  private nodeIndex(strict = false): NameIndex<NodeFileEntry> {
+    if (this.nodes && (!strict || this.nodeIndexIsConclusive)) {
+      return this.nodes;
+    }
+    if (strict) {
+      // A lenient compatibility scan may have skipped an unreadable sidecar.
+      // Invalidate it before a repository read relies on physical ownership.
+      // This also prevents an older asynchronous batch scan from replacing the
+      // strict result after it completes.
+      this.invalidateNodeIndex();
+    }
     const idx = new NameIndex<NodeFileEntry>();
     const duplicates = new Set<string>();
+    let indexIsConclusive = true;
     const dir = nodesDir(this.canvasId);
     if (existsSync(dir)) {
       for (const file of readdirSync(dir)) {
         if (!file.endsWith('.md')) continue;
-        const raw = readText(path.join(dir, file));
+        const read = readNodeSidecar(path.join(dir, file), strict);
+        if (!read.conclusive) indexIsConclusive = false;
+        const { raw } = read;
         if (raw == null) continue;
         const { meta } = parseFrontmatter(raw);
         const rawId = meta['id'];
@@ -580,12 +664,15 @@ export class CanvasStore {
       }
     }
     this.nodes = idx;
+    this.nodeIndexIsConclusive = indexIsConclusive;
     this.nodeDuplicateIds = duplicates;
     return idx;
   }
 
   private invalidateNodeIndex(): void {
     this.nodes = null;
+    this.nodeIndexIsConclusive = false;
+    this.nodeIndexGeneration += 1;
   }
 
   /**
@@ -593,22 +680,26 @@ export class CanvasStore {
    * (the manual-refresh path), dropping the cache only when a rescan is
    * actually warranted. Two triggers force the drop:
    *
-   *   1. `nodeId` is currently flagged duplicate. The cheap count probe
+   *   1. `nodeId` is currently flagged duplicate. The cheap filename probe
    *      below can't see a duplicate being *resolved*: while duplicated,
    *      the index collapses the two sidecars to one id, so deleting one
    *      file makes the on-disk `.md` count match the cached index size
    *      again (1 === 1) and the probe reads "fresh". A flagged node
    *      therefore always re-reads so the resolution is detected.
-   *   2. the on-disk `.md` count drifted from the index size — a sibling
-   *      sidecar appeared or vanished since the last scan (e.g. a new
-   *      duplicate, or another CanvasStore instance's write).
+   *   2. the on-disk `.md` filename set drifted from the cached index — a
+   *      sibling sidecar appeared, vanished, or was replaced since the last
+   *      scan (e.g. a new duplicate or another store instance's write).
+   *
+   * A strict repository read additionally upgrades a cache built by a
+   * lenient compatibility scan before applying these probes, because that
+   * scan may have omitted an unreadable physical owner.
    *
    * Otherwise the warm cache is trusted. The probe is a names-only
    * `readdir`; per-file contents are only re-read when a rescan fires.
    */
-  revalidateNodeForRead(nodeId: string): void {
+  revalidateNodeForRead(nodeId: string, strict = false): void {
     this.assertActiveWorkspace();
-    const idx = this.nodeIndex();
+    const idx = this.nodeIndex(strict);
     if (this.nodeDuplicateIds.has(nodeId) || this.nodeIndexCountStale(idx)) {
       this.invalidateNodeIndex();
     }
@@ -640,21 +731,25 @@ export class CanvasStore {
   }
 
   /**
-   * Cheap staleness probe: compare the number of `.md` files currently on
-   * disk against the cached index size. A names-only `readdirSync` (no
-   * file contents read) is enough to notice that a sidecar appeared or
-   * vanished since the last scan — the signal {@link writeNode} uses to
-   * decide whether a full content rescan is needed before treating a
-   * write as a create. Returns `true` when a rescan is warranted.
+   * Cheap staleness probe: compare the `.md` filenames currently on disk
+   * against the cached index. A names-only `readdirSync` (no file contents
+   * read) notices appearances, removals, renames, and equal-count
+   * replacements before a write trusts cached physical ownership.
    */
   private nodeIndexCountStale(idx: NameIndex<NodeFileEntry>): boolean {
     const dir = nodesDir(this.canvasId);
     if (!existsSync(dir)) return idx.size() > 0;
-    let count = 0;
-    for (const file of readdirSync(dir)) {
-      if (file.endsWith('.md')) count++;
-    }
-    return count !== idx.size();
+    const diskFiles = readdirSync(dir)
+      .filter((file) => file.endsWith('.md'))
+      .sort();
+    const indexedFiles = idx
+      .list()
+      .map((entry) => entry.filename)
+      .sort();
+    return (
+      diskFiles.length !== indexedFiles.length ||
+      diskFiles.some((file, index) => file !== indexedFiles[index])
+    );
   }
 
   /**
@@ -737,6 +832,66 @@ export class CanvasStore {
   }
 
   /**
+   * Single-record read for the backend-neutral repository.
+   *
+   * Strict about *reachability*, not about content. Compatibility reads
+   * collapse every failure into `null`; this one treats only ENOENT as
+   * absence, so an unreadable sidecar (EACCES, EIO, a directory in the way)
+   * surfaces instead of being reported as a missing node.
+   *
+   * Malformed frontmatter is deliberately **not** a read failure. A sidecar
+   * is a hand-editable file, and a node whose YAML a user broke must stay
+   * repairable: rejecting the read here would make that node uneditable
+   * through the content PUT and undeletable through the DELETE route, while
+   * the lenient GET kept rendering it. Recovery matches {@link readNode} —
+   * the body survives and the unparseable frontmatter is dropped.
+   *
+   * Duplicate sidecars remain readable through the selected representative;
+   * the following repository `put` reports the existing actionable duplicate
+   * outcome instead of overwriting either file.
+   */
+  readNodeStrict(nodeId: string): NodeContent | null {
+    this.assertActiveWorkspace();
+    this.revalidateNodeForRead(nodeId, true);
+
+    const read = (filename: string): string | null =>
+      readNodeSidecar(nodeFilePath(this.canvasId, filename), true).raw;
+
+    const readOwned = (filename: string): string | null => {
+      const raw = read(filename);
+      if (raw === null) return null;
+      // Same lenient parse the index itself uses, so ownership resolves the
+      // same way for a broken sidecar as it does during a scan.
+      const { meta } = parseFrontmatter(raw);
+      const rawId = meta['id'];
+      const persistedId =
+        typeof rawId === 'string' && rawId
+          ? rawId
+          : filename.replace(/\.md$/, '');
+      return persistedId === nodeId ? raw : null;
+    };
+
+    let filename = this.nodeIndex(true).get(nodeId)?.filename;
+    if (filename === undefined) {
+      // A warm filename cache cannot detect an in-place frontmatter id edit.
+      // Rebuild content ownership before declaring a stable id absent.
+      this.invalidateNodeIndex();
+      filename = this.nodeIndex(true).get(nodeId)?.filename;
+      if (filename === undefined) return null;
+    }
+    let raw = readOwned(filename);
+    if (raw === null) {
+      this.invalidateNodeIndex();
+      const retryFilename = this.nodeIndex(true).get(nodeId)?.filename;
+      if (retryFilename === undefined) return null;
+      filename = retryFilename;
+      raw = readOwned(filename);
+      if (raw === null) return null;
+    }
+    return markdownToNodeContent(nodeId, raw);
+  }
+
+  /**
    * One-pass batch read of every node's markdown sidecar. Returns a
    * `Map<nodeId, NodeContent>` so the canvas GET route can hydrate the
    * full node list with a single `readdirSync` + one `readText` per
@@ -749,19 +904,27 @@ export class CanvasStore {
    * Only used on the batch hydrate path — single-node lookups should
    * continue to call `readNode(nodeId)`.
    *
+   * Defaults to the legacy compatibility semantics: a sidecar that cannot be
+   * read is dropped and the index it primes is marked inconclusive. See
+   * {@link NodeScanOptions} for the strict variants the portable repository
+   * and the integrity-sensitive readers ask for.
+   *
    * Reads run concurrently (bounded by {@link NODE_READ_CONCURRENCY})
    * via async, non-blocking `readFile` calls so the event loop stays
    * free and large canvases hydrate with overlapped I/O. The id index
    * is still built in stable `readdirSync` order so the derived keys
    * match the previous synchronous implementation exactly.
    */
-  async readAllNodes(options?: {
-    strict?: boolean;
-  }): Promise<Map<string, NodeContent>> {
+  async readAllNodes(
+    options?: NodeScanOptions,
+  ): Promise<Map<string, NodeContent>> {
     this.assertActiveWorkspace();
+    const strictRecords = options?.strictRecords ?? options?.strict ?? false;
+    const generation = this.nodeIndexGeneration;
     const contents = new Map<string, NodeContent>();
     const idx = new NameIndex<NodeFileEntry>();
     const duplicates = new Set<string>();
+    let indexIsConclusive = true;
     const dir = nodesDir(this.canvasId);
     if (existsSync(dir)) {
       const files = readdirSync(dir).filter((file) => file.endsWith('.md'));
@@ -775,7 +938,10 @@ export class CanvasStore {
       );
       for (let i = 0; i < files.length; i++) {
         const raw = raws[i];
-        if (raw === null) continue;
+        if (raw === null) {
+          indexIsConclusive = false;
+          continue;
+        }
         const file = files[i];
         // Mirror `nodeIndex()`'s id derivation so the keys in the
         // returned map align 1:1 with what `readNode(nodeId)` would
@@ -788,11 +954,14 @@ export class CanvasStore {
             ? rawId
             : file.replace(/\.md$/, '');
         addSidecarToIndex(idx, duplicates, this.canvasId, id, file);
-        contents.set(id, markdownToNodeContent(id, raw, options?.strict));
+        contents.set(id, markdownToNodeContent(id, raw, strictRecords));
       }
     }
-    this.nodes = idx;
-    this.nodeDuplicateIds = duplicates;
+    if (this.nodeIndexGeneration === generation) {
+      this.nodes = idx;
+      this.nodeIndexIsConclusive = indexIsConclusive;
+      this.nodeDuplicateIds = duplicates;
+    }
     return contents;
   }
 
@@ -815,22 +984,58 @@ export class CanvasStore {
    *
    * Concurrency bound is the same {@link NODE_READ_CONCURRENCY} the
    * non-streaming path uses, so memory / FD pressure is identical.
+   *
+   * Takes the same {@link NodeScanOptions} as {@link readAllNodes}, and with
+   * the same defaults. A strict scan rejects rather than returning a silently
+   * short collection: the first unreadable sidecar stops the remaining
+   * workers from starting, and the failure is raised once every in-flight
+   * read has settled. `onNode` may already have fired for the files that
+   * landed before the failure — a partial delivery is unavoidable — but never
+   * after the caller has been told the scan failed, which is the part a
+   * caller cannot defend against itself.
    */
   async streamAllNodes(
     onNode: (id: string, content: NodeContent) => void,
     signal?: { readonly aborted: boolean },
+    options?: NodeScanOptions,
   ): Promise<Map<string, NodeContent>> {
     this.assertActiveWorkspace();
+    const strictRecords = options?.strictRecords ?? options?.strict ?? false;
+    const generation = this.nodeIndexGeneration;
     const contents = new Map<string, NodeContent>();
     const idx = new NameIndex<NodeFileEntry>();
     const duplicates = new Set<string>();
+    let indexIsConclusive = true;
+    // The first strict failure, raised after the fan-out settles. Throwing
+    // from inside a worker would reject while its siblings were still
+    // delivering, so a caller could receive nodes after it had already been
+    // handed the error. Only a strict scan ever sets it; `onNode` is left
+    // outside the guard so a caller's own throw propagates as it always has.
+    const scan: { failure: { readonly error: unknown } | null } = {
+      failure: null,
+    };
     const dir = nodesDir(this.canvasId);
     if (existsSync(dir)) {
       const files = readdirSync(dir).filter((file) => file.endsWith('.md'));
       await mapWithConcurrency(files, NODE_READ_CONCURRENCY, async (file) => {
-        if (signal?.aborted) return;
-        const raw = await readTextAsync(path.join(dir, file));
-        if (raw === null) return;
+        if (signal?.aborted || scan.failure !== null) {
+          indexIsConclusive = false;
+          return;
+        }
+        let raw: string | null;
+        try {
+          raw = options?.strict
+            ? await readFile(path.join(dir, file), 'utf8')
+            : await readTextAsync(path.join(dir, file));
+        } catch (error) {
+          scan.failure ??= { error };
+          indexIsConclusive = false;
+          return;
+        }
+        if (raw === null) {
+          indexIsConclusive = false;
+          return;
+        }
         // Same id derivation as `readAllNodes()` / `nodeIndex()`.
         const { meta } = parseFrontmatter(raw);
         const rawId = meta['id'];
@@ -839,16 +1044,27 @@ export class CanvasStore {
             ? rawId
             : file.replace(/\.md$/, '');
         addSidecarToIndex(idx, duplicates, this.canvasId, id, file);
-        const content = markdownToNodeContent(id, raw);
+        let content: NodeContent;
+        try {
+          content = markdownToNodeContent(id, raw, strictRecords);
+        } catch (error) {
+          scan.failure ??= { error };
+          indexIsConclusive = false;
+          return;
+        }
         contents.set(id, content);
         // JS is single-threaded between awaits, so even though
         // multiple workers may be in-flight, exactly one onNode call
         // runs at a time. Callers can mutate shared counters safely.
         onNode(id, content);
       });
+      if (scan.failure !== null) throw scan.failure.error;
     }
-    this.nodes = idx;
-    this.nodeDuplicateIds = duplicates;
+    if (this.nodeIndexGeneration === generation) {
+      this.nodes = idx;
+      this.nodeIndexIsConclusive = indexIsConclusive;
+      this.nodeDuplicateIds = duplicates;
+    }
     return contents;
   }
 
@@ -890,8 +1106,8 @@ export class CanvasStore {
     // fresh name (a duplicate) or rename the wrong file. Two cheap probes
     // decide whether a full content rescan is warranted:
     //   1. the file the index points at for this id is gone, or
-    //   2. the on-disk `.md` count no longer matches the index size
-    //      (a sibling appeared / vanished — e.g. another instance's write).
+    //   2. the on-disk `.md` filename set no longer matches the cached set
+    //      (a sibling appeared, vanished, or was replaced externally).
     // Only then do we pay for a rescan, which also refreshes the
     // duplicate-id set consulted by the guard below. Steady-state edits
     // and batch creates skip the rescan and stay on the fast path.
@@ -1004,7 +1220,10 @@ export class CanvasStore {
         // the rollback unlink ALSO fails (double failure) the duplicate is
         // now persistent: flag the id so the next read/write reports it.
         const rollback = this.tryUnlink(newPath);
-        if (!rollback.ok) this.nodeDuplicateIds.add(nodeId);
+        if (!rollback.ok) {
+          this.nodeDuplicateIds.add(nodeId);
+          this.nodeIndexGeneration += 1;
+        }
         const message = `Failed to remove stale node sidecar "${oldFilename}" after writing "${target}": ${toErrnoString(removed.error)}`;
         log.warn(
           {
@@ -1022,6 +1241,8 @@ export class CanvasStore {
     } else if (!existing) {
       idx.add({ id: nodeId, filename: target });
     }
+
+    this.nodeIndexGeneration += 1;
 
     return { ok: true, filename: target, label: finalLabel };
   }
@@ -1053,6 +1274,11 @@ export class CanvasStore {
     ) {
       return 'absent';
     }
+    // A duplicated id deliberately still deletes its indexed representative.
+    // Refusing would strand the node: duplicate sidecars are exactly the state
+    // a user resolves by deleting, and an executor batch containing such a
+    // delete would fail and roll back wholesale.
+    //
     // Tombstone the id up front (before any early return or throw) so a late
     // in-flight write cannot resurrect the sidecar regardless of which delete
     // branch we take. The process registry outlives an evicted LRU instance
@@ -1064,6 +1290,7 @@ export class CanvasStore {
     const filePath = nodeFilePath(this.canvasId, filename);
     if (!existsSync(filePath)) {
       idx.remove(nodeId);
+      this.nodeIndexGeneration += 1;
       return 'absent';
     }
     const removed = this.tryUnlink(filePath);
@@ -1076,6 +1303,7 @@ export class CanvasStore {
       throw new CanvasStoreIOError(message, { cause: removed.error });
     }
     idx.remove(nodeId);
+    this.nodeIndexGeneration += 1;
     return 'deleted';
   }
 
@@ -1098,7 +1326,7 @@ export class CanvasStore {
    * tombstoned, so a first write racing its structural PUT is never
    * suppressed.
    *
-   * Called from the single write funnel {@link applyNodeUpdate}. The
+   * Called from the Disk node adapter's single-record write funnel. The
    * `read()` cost is paid only for the rare write that targets a
    * recently-deleted id (the common case short-circuits on an empty map).
    */
@@ -1132,7 +1360,7 @@ export class CanvasStore {
   // ── Artifacts ────────────────────────────────────────────────────────────
   //
   // Artifact bytes are NOT owned here. They live behind the `BlobStore`
-  // port — `canvasBlobs(canvasId)` in `storage.js` — so this store holds
+  // port — `space(canvasId).blobs` in `storage.js` — so this store holds
   // structured records only and a non-filesystem blob backend can be
   // configured independently. See docs/proposals/multi-backend-storage.md.
 
@@ -1197,27 +1425,6 @@ export class CanvasStore {
     const [removed] = existing.splice(idx, 1);
     this.writeChanges(threadId, existing);
     return removed ?? null;
-  }
-
-  // ── Intent ───────────────────────────────────────────────────────────────
-
-  readIntents(): IntentEpisode[] {
-    this.assertActiveWorkspace();
-    return readJson<IntentEpisode[]>(intentPath(this.canvasId)) ?? [];
-  }
-
-  upsertIntent(episode: IntentEpisode): void {
-    this.assertActiveWorkspace();
-    this.requireExistingSpaceForMutation('upsert an intent');
-    const list = this.readIntents();
-    const idx = list.findIndex((e) => e.id === episode.id);
-    if (idx >= 0) {
-      list[idx] = episode;
-    } else {
-      list.push(episode);
-    }
-    mkdirp(path.dirname(intentPath(this.canvasId)));
-    atomicWriteJson(intentPath(this.canvasId), list);
   }
 
   // ── Events ───────────────────────────────────────────────────────────────

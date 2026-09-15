@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { useCallback, useRef, useEffect } from 'react';
+import { useCallback, useRef } from 'react';
 
 import {
   createId,
@@ -21,26 +21,44 @@ import { i18n } from '@/i18n';
 import { useAcpProfilesStore } from '@/store/acpProfilesStore';
 import { useAcpThreadChangesStore } from '@/store/acpThreadChangesStore';
 import useCanvasStore from '@/store/canvasStore';
-import { useChatStore } from '@/store/chatStore';
+import {
+  selectThreadBinding,
+  selectThreadIsLoading,
+  selectThreadMessages,
+  selectThreadPendingAttachments,
+  selectThreadSettings,
+  useChatStore,
+} from '@/store/chatStore';
 import {
   conversationRequestScope,
   ConversationIntegrityError,
+  filterClientOwnedQuestionPatch,
   isHeadlessConversation,
   patchConversationOwnerNode,
   refreshConversationPresentation,
+  resolveConversationAgentBinding,
   resolveConversationOwnerSource,
   shouldComposeConversationOwner,
   validateConversationView,
 } from '@/store/conversationOwner';
+import {
+  receiveAcpConversationTitle,
+  refreshConversationTitleAfterStream,
+  seedConversationTitle,
+} from '@/store/conversationTitleStore';
 import { useGesturePreviewStore } from '@/store/gesturePreviewStore';
+import { usePreviewWorkspaceStore } from '@/store/previewWorkspace/store';
 import { snapshotAgentIcon } from '@/utils/agentIcon';
+import { isPageUnloading } from '@/utils/pageLifecycle';
+
+import {
+  abortAgentStreamClaim,
+  claimAgentStream,
+} from './agentStreamCoordinator';
 
 import type { AssistantSegment } from '../store/chatTypes';
-import type {
-  AgentMode,
-  AgentStreamEvent,
-  IntentCandidate,
-} from '@huabu/shared';
+import type { ChatSession } from '@/hooks/useChatSession';
+import type { AgentMode, AgentStreamEvent } from '@huabu/shared';
 
 // ==================== Pure Utility Functions ====================
 
@@ -121,12 +139,14 @@ function normalizeInternalToolResultData(
 interface StreamEventContext {
   /**
    * The thread that owns this stream. Captured at send time; all
-   * message reads / writes inside the SSE handler key off this — never
-   * `state.threadId` — so events keep landing on the originating
+   * message reads / writes inside the SSE handler key off this explicit
+   * session address, so events keep landing on the originating
    * thread even after the user navigates away.
    */
   threadId: string;
   assistantId: string;
+  /** Only unbound chats mirror ACP title metadata; Questions use node labels. */
+  titleCanvasId?: string;
 }
 
 /**
@@ -145,20 +165,19 @@ export type AcpSessionMetaStreamEvent = Extract<
   }
 >;
 
-/**
- * Module-level sink for session-meta events. A single subscriber (the
- * ChatPanel's `useAcpSessionMeta` hook) registers itself on mount via
- * {@link setAcpSessionMetaSink} so `handleStreamEvent` can dispatch
- * meta updates without re-plumbing every event through props.
- *
- * Last-writer-wins by design — there is only ever one ChatPanel
- * mounted at a time (the canvas chat OR a question-thread view, never
- * both), so concurrent subscribers would be a bug.
- */
 type AcpSessionMetaSink = (event: AcpSessionMetaStreamEvent) => void;
-let acpSessionMetaSink: AcpSessionMetaSink | null = null;
-export function setAcpSessionMetaSink(sink: AcpSessionMetaSink | null): void {
-  acpSessionMetaSink = sink;
+const acpSessionMetaSinks = new Map<string, AcpSessionMetaSink>();
+
+export function registerAcpSessionMetaSink(
+  threadId: string,
+  sink: AcpSessionMetaSink,
+): () => void {
+  acpSessionMetaSinks.set(threadId, sink);
+  return () => {
+    if (acpSessionMetaSinks.get(threadId) === sink) {
+      acpSessionMetaSinks.delete(threadId);
+    }
+  };
 }
 
 /**
@@ -166,11 +185,11 @@ export function setAcpSessionMetaSink(sink: AcpSessionMetaSink | null): void {
  * the tool-call / plan handlers which may fire before any text_delta.
  */
 function ensureAssistantMessage(ctx: StreamEventContext): void {
-  const { addMessage, messagesByThread } = useChatStore.getState();
-  const list = messagesByThread[ctx.threadId] ?? [];
+  const state = useChatStore.getState();
+  const list = selectThreadMessages(state, ctx.threadId);
   const existing = list.find((m) => m.id === ctx.assistantId);
   if (!existing) {
-    addMessage(ctx.threadId, {
+    state.addMessage(ctx.threadId, {
       id: ctx.assistantId,
       role: 'assistant',
       segments: [],
@@ -366,14 +385,15 @@ function applyInternalToolResult(
   toolName: string,
   rawText: string,
 ): void {
-  const { upsertAssistantToolPart, messagesByThread } = useChatStore.getState();
+  const { upsertAssistantToolPart } = useChatStore.getState();
   const toolResponse = parseToolResponse(toolName, rawText);
   if (!toolResponse) return;
 
   const variant = variantForInternalTool(toolName);
-  const assistantMsg = (messagesByThread[ctx.threadId] ?? []).find(
-    (m) => m.id === ctx.assistantId,
-  );
+  const assistantMsg = selectThreadMessages(
+    useChatStore.getState(),
+    ctx.threadId,
+  ).find((m) => m.id === ctx.assistantId);
   let existingArgs: Record<string, unknown> = {};
   if (assistantMsg?.role === 'assistant') {
     const priorPart = assistantMsg.segments.find(
@@ -426,17 +446,13 @@ export function handleStreamEvent(
   event: AgentStreamEvent,
   ctx: StreamEventContext,
 ): void {
-  const {
-    addMessage,
-    updateMessage,
-    upsertAssistantToolPart,
-    messagesByThread,
-  } = useChatStore.getState();
+  const state = useChatStore.getState();
+  const { addMessage, updateMessage, upsertAssistantToolPart } = state;
   // All reads / writes below key off the owner thread captured on
   // `ctx`, never the currently-visible thread. This is what makes
   // mid-stream thread switches safe — events keep landing on the
   // thread that issued the request.
-  const ownerMessages = messagesByThread[ctx.threadId] ?? [];
+  const ownerMessages = selectThreadMessages(state, ctx.threadId);
 
   if (event.type === 'text_delta' || event.type === 'thinking_delta') {
     const delta = event.data.content;
@@ -591,10 +607,16 @@ export function handleStreamEvent(
     event.type === 'session_usage_update'
   ) {
     // Session-meta updates have no message-list impact — they drive
-    // the ChatPanel's mode/model/config selector dropdowns. Hand off
-    // to the registered sink (see {@link setAcpSessionMetaSink}); if
-    // no panel is mounted (e.g. tests, headless reconnect), drop.
-    acpSessionMetaSink?.(event);
+    // the owning ChatPanel's mode/model/config selector dropdowns. If
+    // that thread has no mounted panel (e.g. headless reconnect), drop.
+    acpSessionMetaSinks.get(ctx.threadId)?.(event);
+    if (event.type === 'session_info_update' && ctx.titleCanvasId) {
+      receiveAcpConversationTitle(
+        ctx.titleCanvasId,
+        ctx.threadId,
+        event.data.title,
+      );
+    }
   }
 }
 
@@ -615,10 +637,6 @@ export interface UseAgentStreamReturn {
   startStream: (
     prompt: string,
     agentMode: AgentMode,
-    intentData?: {
-      candidates: IntentCandidate[];
-      selectedIntent: string;
-    },
     /**
      * Optional skill ids the user explicitly invoked via leading
      * `/<id>` tokens. Forwarded to the server, which prepends each
@@ -634,21 +652,31 @@ export interface UseAgentStreamReturn {
 /**
  * Hook that manages agent streaming, including starting/stopping streams
  * and processing SSE events.
+ *
+ * Every read and write is addressed to `session.threadId`, never to whichever
+ * thread happens to be visible, so two mounted Chat renderers stream
+ * independently.
  */
-export function useAgentStream(): UseAgentStreamReturn {
-  const threadId = useChatStore((state) => state.threadId);
-  // Loading is per-thread (a question node thread can stream
-  // independently of the canvas chat), so read the flag for the
-  // currently-visible thread from the store.
+export function useAgentStream(
+  session: ChatSession,
+  previewTabId?: string,
+): UseAgentStreamReturn {
+  const { threadId, canvasId, conversationView } = session;
+  // Loading is per-thread: a question node's thread can stream independently
+  // of the canvas chat.
   const isLoading = useChatStore((state) =>
-    state.loadingThreadIds.has(state.threadId),
+    selectThreadIsLoading(state, threadId),
   );
   const setThreadLoading = useChatStore((state) => state.setThreadLoading);
 
   const addMessage = useChatStore((state) => state.addMessage);
   const updateMessage = useChatStore((state) => state.updateMessage);
-  const setLastAction = useChatStore((state) => state.setLastAction);
-  const pendingAttachments = useChatStore((state) => state.pendingAttachments);
+  const setThreadLastAction = useChatStore(
+    (state) => state.setThreadLastAction,
+  );
+  const pendingAttachments = useChatStore((state) =>
+    selectThreadPendingAttachments(state, threadId),
+  );
   const selectionAttachment = useChatStore(
     (state) => state.selectionAttachment,
   );
@@ -659,7 +687,6 @@ export function useAgentStream(): UseAgentStreamReturn {
   const getAgentChatContext = useCanvasStore(
     (state) => state.getAgentChatContext,
   );
-  const canvasId = useCanvasStore((state) => state.canvasId);
 
   // Per-thread abort controllers. We can have multiple streams in
   // flight at once (canvas chat + one or more question threads), so a
@@ -667,42 +694,17 @@ export function useAgentStream(): UseAgentStreamReturn {
   // starts on a different thread.
   const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
 
-  // Track whether the component is still active (not unloading).
-  // Prevents adding spurious "network error" status on page refresh.
-  const activeRef = useRef(true);
-  useEffect(() => {
-    activeRef.current = true;
-    const onUnload = () => {
-      activeRef.current = false;
-    };
-    window.addEventListener('beforeunload', onUnload);
-    return () => {
-      window.removeEventListener('beforeunload', onUnload);
-      activeRef.current = false;
-    };
-  }, []);
-
   const startStream = useCallback(
-    async (
-      prompt: string,
-      agentMode: AgentMode,
-      intentData?: {
-        candidates: IntentCandidate[];
-        selectedIntent: string;
-      },
-      invokedSkills?: string[],
-    ) => {
+    async (prompt: string, agentMode: AgentMode, invokedSkills?: string[]) => {
       // Per-thread guard: this thread's own loading flag, not any other
       // thread's. The user may already have a stream running in a
       // different chat (canvas chat + question node both active).
       if (
         !prompt.trim() ||
-        useChatStore.getState().loadingThreadIds.has(threadId)
+        selectThreadIsLoading(useChatStore.getState(), threadId)
       )
         return;
 
-      const conversationView =
-        useChatStore.getState().viewingQuestionThread ?? null;
       if (conversationView) {
         try {
           await validateConversationView(conversationView);
@@ -715,19 +717,25 @@ export function useAgentStream(): UseAgentStreamReturn {
           }
           throw error;
         }
-        const currentChat = useChatStore.getState();
-        if (
-          currentChat.threadId !== threadId ||
-          currentChat.viewingQuestionThread?.presentationAnchor.canvasId !==
-            conversationView.presentationAnchor.canvasId ||
-          currentChat.viewingQuestionThread?.presentationAnchor.nodeId !==
-            conversationView.presentationAnchor.nodeId
-        ) {
-          return;
+        // Validation is async, so confirm this renderer still owns the same
+        // tab. Closing or replacing it invalidates the pending send.
+        if (previewTabId) {
+          const tab =
+            usePreviewWorkspaceStore.getState().workspace.tabs[previewTabId];
+          if (
+            tab?.target.kind !== 'node' ||
+            tab.target.canvasId !==
+              conversationView.presentationAnchor.canvasId ||
+            tab.target.nodeId !== conversationView.presentationAnchor.nodeId
+          ) {
+            return;
+          }
         }
       }
 
-      setLastAction(agentMode);
+      setThreadLastAction(threadId, agentMode);
+      if (!conversationView) seedConversationTitle(canvasId, threadId, prompt);
+      let titleCreationConfirmed = false;
 
       // Merge pending attachments + selection attachment into a single array.
       // Sketch-rasterization is now performed server-side in `agent.route.ts`
@@ -795,36 +803,38 @@ export function useAgentStream(): UseAgentStreamReturn {
       const mergedAttachments = [...allPending];
       const attachments =
         mergedAttachments.length > 0 ? mergedAttachments : undefined;
-      if (allPending.length > 0) {
-        clearPendingAttachments();
+      const streamClaim = claimAgentStream(
+        requestScope.canvasId,
+        threadId,
+        'post',
+      );
+      if (!streamClaim) return;
+
+      // Both are consumed by the send, and they are cleared separately
+      // because they are owned differently: staged attachments belong to this
+      // thread, while the excerpt is the one shared selection. Spending it
+      // here retires the hint from every Chat showing it, which is correct —
+      // there is only ever one selection and this send just used it.
+      if (pendingAttachments.length > 0) {
+        clearPendingAttachments(threadId);
+      }
+      if (selectionAttachment) {
         useChatStore.getState().setSelectionAttachment(null);
       }
 
-      // For intent-driven operate calls, show an intent-select widget instead of user bubble
-      if (intentData && agentMode === 'operate') {
-        addMessage(threadId, {
-          id: createId('intent'),
-          role: 'intent-select',
-          candidates: intentData.candidates,
-          selectedIntent: intentData.selectedIntent,
-        });
-      } else {
-        addMessage(threadId, {
-          id: createId('message'),
-          role: 'user',
-          content: prompt,
-          attachments,
-          ...(sentSelectedNodeIds.length > 0
-            ? { selectedNodeIds: sentSelectedNodeIds }
-            : {}),
-          ...(sentSelectedStrokeIds.length > 0
-            ? { selectedStrokeIds: sentSelectedStrokeIds }
-            : {}),
-          ...(invokedSkills && invokedSkills.length > 0
-            ? { invokedSkills }
-            : {}),
-        });
-      }
+      addMessage(threadId, {
+        id: createId('message'),
+        role: 'user',
+        content: prompt,
+        attachments,
+        ...(sentSelectedNodeIds.length > 0
+          ? { selectedNodeIds: sentSelectedNodeIds }
+          : {}),
+        ...(sentSelectedStrokeIds.length > 0
+          ? { selectedStrokeIds: sentSelectedStrokeIds }
+          : {}),
+        ...(invokedSkills && invokedSkills.length > 0 ? { invokedSkills } : {}),
+      });
 
       setThreadLoading(threadId, true);
 
@@ -844,18 +854,15 @@ export function useAgentStream(): UseAgentStreamReturn {
         if (abortControllersRef.current.get(threadId) === abortController) {
           abortControllersRef.current.delete(threadId);
         }
+        streamClaim.release();
       };
 
       // ── Question-node follow-up bookkeeping ─────────────────────────
       //
-      // When the chat panel is currently rendering a question node's
-      // thread (`viewingQuestionThread` is set), every message the user
-      // sends is a follow-up turn against that node. The question node
-      // owns a `status` field (`idle | pending | running | done | error`)
-      // that the canvas badge reads. The dedicated `useQuestionRunner`
-      // hook only manages the *initial* auto-run; follow-ups travel
-      // through this hook, so we are the only place that can keep that
-      // badge honest across multi-turn conversations.
+      // When this session renders a selectable Question Node, this hook keeps
+      // its client-authored lifecycle honest across follow-up turns. Fixed
+      // Agent Nodes route content/status/error through the server; this hook
+      // writes only their client presentation state (`viewed`).
       //
       // We also track whether a successful `done` event was observed so
       // a late cap-out `error` event (`Agent loop exceeded maximum
@@ -864,6 +871,18 @@ export function useAgentStream(): UseAgentStreamReturn {
       // agent run should not poison the final status).
       const questionNodeId = conversationView?.conversationOwner.nodeId ?? null;
       let sawDone = false;
+      let serverOwnsQuestionLifecycle = false;
+      let isComposingQuestion = false;
+      let serverSettingsConfirmed = false;
+      const canvasState = useCanvasStore.getState();
+      const ownerSource = conversationView
+        ? resolveConversationOwnerSource(
+            canvasState.canvasId,
+            canvasState.nodes,
+            canvasState.worldReferences,
+            conversationView,
+          )
+        : undefined;
 
       if (questionNodeId && conversationView) {
         // First send of a freshly-composed question node ⇔ the node is still
@@ -872,15 +891,11 @@ export function useAgentStream(): UseAgentStreamReturn {
         // send we author the node's `content` and lock in the agent the user
         // picked in the inline selector (binding + built-in mode); follow-up
         // turns skip both.
-        const canvasState = useCanvasStore.getState();
-        const ownerSource = resolveConversationOwnerSource(
-          canvasState.canvasId,
-          canvasState.nodes,
-          canvasState.worldReferences,
-          conversationView,
-        );
         const isCompose = shouldComposeConversationOwner(ownerSource, headless);
-        if (isCompose && !headless) {
+        isComposingQuestion = isCompose;
+        serverOwnsQuestionLifecycle =
+          ownerSource?.agentBindingPolicy === 'fixed';
+        if (isCompose && !headless && !serverOwnsQuestionLifecycle) {
           // Author content through the intent pipeline so it gets a
           // markdown sidecar save + server-side label preprocessing —
           // matching how the inline editor used to commit the prompt.
@@ -888,7 +903,10 @@ export function useAgentStream(): UseAgentStreamReturn {
             .getState()
             .updateNodeData(questionNodeId, { content: prompt });
         }
-        const selectedBinding = useChatStore.getState().agentBinding;
+        const selectedBinding = resolveConversationAgentBinding(
+          ownerSource,
+          selectThreadBinding(useChatStore.getState(), threadId),
+        );
         const selectedProfile =
           selectedBinding.kind === 'external'
             ? useAcpProfilesStore
@@ -902,7 +920,7 @@ export function useAgentStream(): UseAgentStreamReturn {
             ? { ...selectedBinding, alias: selectedProfile.alias }
             : selectedBinding;
         const composeBinding =
-          isCompose && !headless
+          isCompose && !headless && !serverOwnsQuestionLifecycle
             ? {
                 agentBinding: snapshotBinding,
                 agentIcon: snapshotAgentIcon(
@@ -913,19 +931,25 @@ export function useAgentStream(): UseAgentStreamReturn {
               }
             : {};
         // Reset `viewed` so the layer-panel dot + on-canvas "done · unread"
-        // glow re-appear when the follow-up answer lands (mirrors
-        // `useQuestionRunner`'s initial-run behaviour). `onComplete`
-        // marks it viewed again if the user is still in the thread.
-        const startPatch = {
+        // glow re-appear when the follow-up answer lands. Completion marks it
+        // viewed again if the user is still in the thread.
+        const startPatch = filterClientOwnedQuestionPatch(ownerSource, {
           ...(isCompose && headless ? { content: prompt } : {}),
           status: 'running',
           errorMessage: undefined,
           viewed: false,
           ...composeBinding,
-        };
+        });
         try {
-          await patchConversationOwnerNode(conversationView, startPatch);
-          await refreshConversationPresentation(conversationView);
+          if (startPatch) {
+            await patchConversationOwnerNode(conversationView, startPatch);
+            await refreshConversationPresentation(conversationView);
+            if (isCompose) {
+              useChatStore.getState().makeThreadMetadataEphemeral(threadId, {
+                preserveSettings: true,
+              });
+            }
+          }
         } catch (error) {
           const message =
             error instanceof Error ? error.message : 'Unknown error';
@@ -947,11 +971,13 @@ export function useAgentStream(): UseAgentStreamReturn {
       // network blip to block the agent call.
       await useCanvasStore.getState().flushCanvasEvents();
 
-      // Snapshot the current thread → agent binding at send time. The
-      // server is stateless about bindings; we pass it per-request so
-      // the server-side dispatch sees exactly which agent the user
-      // picked for this thread.
-      const agentBinding = useChatStore.getState().agentBinding;
+      // Snapshot the current thread's picker binding at send time. The server
+      // uses it for selectable threads but replaces it with the persisted
+      // binding when the thread resolves to a fixed Agent Node.
+      const agentBinding = resolveConversationAgentBinding(
+        ownerSource,
+        selectThreadBinding(useChatStore.getState(), threadId),
+      );
 
       // Build the canvas context, dropping the anchored question node
       // from `selectedNodes` for the same reason as `selectedNodeIds`
@@ -976,14 +1002,23 @@ export function useAgentStream(): UseAgentStreamReturn {
           agentMode,
           {
             onEvent: (event: AgentStreamEvent) => {
+              if (!conversationView && !titleCreationConfirmed) {
+                titleCreationConfirmed = true;
+                refreshConversationTitleAfterStream(canvasId, threadId);
+              }
+              if (isComposingQuestion && !serverSettingsConfirmed) {
+                serverSettingsConfirmed = true;
+                useChatStore.getState().makeThreadMetadataEphemeral(threadId);
+              }
               if (event.type === 'done') sawDone = true;
               handleStreamEvent(event, {
                 threadId,
                 assistantId,
+                titleCanvasId: conversationView ? undefined : canvasId,
               });
             },
             onError: (err) => {
-              if (!activeRef.current || errorHandled) return;
+              if (isPageUnloading() || errorHandled) return;
               errorHandled = true;
               console.error(`${agentMode} error:`, err);
               // Question-node follow-up: only flip to `error` if no
@@ -993,12 +1028,21 @@ export function useAgentStream(): UseAgentStreamReturn {
                 const stillViewing = isActivelyViewingQuestion({
                   nodeId: questionNodeId,
                 });
-                if (conversationView) {
-                  void patchConversationOwnerNode(conversationView, {
+                const terminalPatch = filterClientOwnedQuestionPatch(
+                  serverOwnsQuestionLifecycle
+                    ? { agentBindingPolicy: 'fixed' }
+                    : undefined,
+                  {
                     status: sawDone ? 'done' : 'error',
                     errorMessage: sawDone ? undefined : err.message,
                     ...(stillViewing ? { viewed: true } : {}),
-                  })
+                  },
+                );
+                if (conversationView && terminalPatch) {
+                  void patchConversationOwnerNode(
+                    conversationView,
+                    terminalPatch,
+                  )
                     .then(refreshAfterLifecycle)
                     .catch((error) =>
                       console.error(
@@ -1010,6 +1054,9 @@ export function useAgentStream(): UseAgentStreamReturn {
                       setThreadLoading(threadId, false);
                       releaseAbort();
                     });
+                } else {
+                  setThreadLoading(threadId, false);
+                  releaseAbort();
                 }
               } else {
                 setThreadLoading(threadId, false);
@@ -1031,12 +1078,21 @@ export function useAgentStream(): UseAgentStreamReturn {
                 const stillViewing = isActivelyViewingQuestion({
                   nodeId: questionNodeId,
                 });
-                if (conversationView) {
-                  void patchConversationOwnerNode(conversationView, {
+                const terminalPatch = filterClientOwnedQuestionPatch(
+                  serverOwnsQuestionLifecycle
+                    ? { agentBindingPolicy: 'fixed' }
+                    : undefined,
+                  {
                     status: 'done',
                     errorMessage: undefined,
                     ...(stillViewing ? { viewed: true } : {}),
-                  })
+                  },
+                );
+                if (conversationView && terminalPatch) {
+                  void patchConversationOwnerNode(
+                    conversationView,
+                    terminalPatch,
+                  )
                     .then(refreshAfterLifecycle)
                     .catch((error) =>
                       console.error(
@@ -1048,6 +1104,9 @@ export function useAgentStream(): UseAgentStreamReturn {
                       setThreadLoading(threadId, false);
                       releaseAbort();
                     });
+                } else {
+                  setThreadLoading(threadId, false);
+                  releaseAbort();
                 }
               } else {
                 setThreadLoading(threadId, false);
@@ -1059,25 +1118,27 @@ export function useAgentStream(): UseAgentStreamReturn {
             canvasContext,
             canvasId: requestScope.canvasId || undefined,
             attachments,
-            intentData,
             agentBinding,
             anchorNodeId: requestScope.anchorNodeId,
             invokedSkills,
-            // Carry the current built-in per-thread selection so a model /
+            // Carry this thread's built-in selection so a model /
             // reasoning effort picked before the first message is applied
-            // when the thread is created. Only when the stored selection
-            // belongs to THIS thread (guards a just-switched thread from
-            // writing the previous thread's model). Ignored server-side for
-            // external bindings.
+            // when the thread is created. Ignored server-side for external
+            // bindings.
             ...(() => {
-              const cs = useChatStore.getState().chatSettings;
-              if (cs.threadId !== threadId) return {};
+              const settings = selectThreadSettings(
+                useChatStore.getState(),
+                threadId,
+              );
               return {
-                modelId: cs.modelId ?? undefined,
-                reasoningEffort: cs.reasoningEffort ?? undefined,
+                modelId: settings.modelId ?? undefined,
+                reasoningEffort: settings.reasoningEffort ?? undefined,
               };
             })(),
-            signal: abortController.signal,
+            signal: AbortSignal.any([
+              abortController.signal,
+              streamClaim.signal,
+            ]),
           },
         );
       } catch (err) {
@@ -1092,18 +1153,29 @@ export function useAgentStream(): UseAgentStreamReturn {
               nodeId: questionNodeId,
             });
             if (conversationView) {
-              await patchConversationOwnerNode(conversationView, {
-                status: 'done',
-                errorMessage: undefined,
-                ...(stillViewing ? { viewed: true } : {}),
-              });
-              await refreshAfterLifecycle();
+              const terminalPatch = filterClientOwnedQuestionPatch(
+                serverOwnsQuestionLifecycle
+                  ? { agentBindingPolicy: 'fixed' }
+                  : undefined,
+                {
+                  status: 'done',
+                  errorMessage: undefined,
+                  ...(stillViewing ? { viewed: true } : {}),
+                },
+              );
+              if (terminalPatch) {
+                await patchConversationOwnerNode(
+                  conversationView,
+                  terminalPatch,
+                );
+                await refreshAfterLifecycle();
+              }
             }
           }
           return;
         }
         // Page unloading — don't persist error
-        if (!activeRef.current) return;
+        if (isPageUnloading()) return;
         // Skip if onError callback already handled this
         if (errorHandled) return;
         errorHandled = true;
@@ -1114,12 +1186,20 @@ export function useAgentStream(): UseAgentStreamReturn {
             nodeId: questionNodeId,
           });
           if (conversationView) {
-            await patchConversationOwnerNode(conversationView, {
-              status: sawDone ? 'done' : 'error',
-              errorMessage: sawDone ? undefined : message,
-              ...(stillViewing ? { viewed: true } : {}),
-            });
-            await refreshAfterLifecycle();
+            const terminalPatch = filterClientOwnedQuestionPatch(
+              serverOwnsQuestionLifecycle
+                ? { agentBindingPolicy: 'fixed' }
+                : undefined,
+              {
+                status: sawDone ? 'done' : 'error',
+                errorMessage: sawDone ? undefined : message,
+                ...(stillViewing ? { viewed: true } : {}),
+              },
+            );
+            if (terminalPatch) {
+              await patchConversationOwnerNode(conversationView, terminalPatch);
+              await refreshAfterLifecycle();
+            }
           }
         }
         setThreadLoading(threadId, false);
@@ -1130,6 +1210,9 @@ export function useAgentStream(): UseAgentStreamReturn {
           status: 'error',
           detail: err instanceof Error ? err.message : 'Unknown error',
         });
+      } finally {
+        if (!conversationView)
+          refreshConversationTitleAfterStream(canvasId, threadId);
       }
     },
     [
@@ -1137,19 +1220,25 @@ export function useAgentStream(): UseAgentStreamReturn {
       selectionAttachment,
       clearPendingAttachments,
       addMessage,
-      setLastAction,
+      setThreadLastAction,
       threadId,
       getAgentChatContext,
       canvasId,
       setThreadLoading,
+      conversationView,
+      previewTabId,
     ],
   );
 
   const stopStream = useCallback(() => {
-    // Stop the currently-visible thread. Tell the server, then abort
-    // our local subscription so callbacks stop firing.
-    const tid = useChatStore.getState().threadId;
+    // Stop this session's thread. Tell the server, then abort our local
+    // subscription so callbacks stop firing.
+    const tid = threadId;
     void agentApi.stopThread(tid);
+    abortAgentStreamClaim(
+      conversationRequestScope(conversationView, canvasId).canvasId,
+      tid,
+    );
 
     const controller = abortControllersRef.current.get(tid);
     if (controller) {
@@ -1166,7 +1255,7 @@ export function useAgentStream(): UseAgentStreamReturn {
 
     // Mark any still-pending tool parts as cancelled so the renderer
     // can drop spinners / show a definitive end state.
-    const msgs = useChatStore.getState().messagesByThread[tid] ?? [];
+    const msgs = selectThreadMessages(useChatStore.getState(), tid);
     for (const msg of msgs) {
       if (msg.role !== 'assistant') continue;
       const hasInflight = msg.segments.some(
@@ -1187,7 +1276,14 @@ export function useAgentStream(): UseAgentStreamReturn {
         };
       });
     }
-  }, [addMessage, updateMessage, setThreadLoading]);
+  }, [
+    addMessage,
+    updateMessage,
+    setThreadLoading,
+    threadId,
+    conversationView,
+    canvasId,
+  ]);
 
   // `useChatHistory` reconnect flips loading on/off explicitly for the
   // owner thread of the reconnect attempt. We simply re-expose

@@ -9,17 +9,22 @@ import path from 'node:path';
 import { validatePathSchema, workspacePathSchema } from '@huabu/shared';
 
 import { resetPreprocessDispatcher } from './preprocessing/index.js';
-import { requireWorldCanvasId, resetStorageCache } from './storage/index.js';
+import {
+  getStructuredStore,
+  materializesWorkspaces,
+  resetStorageCache,
+  storageServes,
+  unavailableCapabilityMessage,
+} from './storage/index.js';
 import {
   activateWorkspacePath,
   WorkspaceActivationInProgressError,
   WorkspaceActivationTimeoutError,
 } from './workspace-activation.js';
 import {
-  getWorkspaceName,
-  getWorkspacePath,
+  getWorkspaceDirectory,
+  getWorkspaceHandle,
   isManagedMode,
-  isWorkspaceConfigured,
 } from './workspace.js';
 
 import type {
@@ -153,20 +158,30 @@ function sendError(
 }
 
 /** Build the canonical success payload describing the current workspace. */
-function buildWorkspaceState(): WorkspaceInfo {
+async function buildWorkspaceState(): Promise<WorkspaceInfo> {
   const managed = isManagedMode();
-  const configured = isWorkspaceConfigured();
+  const workspace = getWorkspaceHandle();
+  const configured = workspace !== null;
   return {
     mode: managed ? 'managed' : 'free',
     configured,
+    workspaceId: workspace?.workspaceId ?? null,
     // Free-mode active absolute path. Never exposed in managed mode.
-    path: configured && !managed ? getWorkspacePath() : null,
-    // Display label (basename). Safe to send in either mode.
-    name: configured ? getWorkspaceName() : null,
-    worldCanvasId: configured ? requireWorldCanvasId() : null,
+    // Null in managed mode, and null wherever a Workspace has no folder at
+    // all. The client already renders a Workspace with no path.
+    path: workspace && !managed ? getWorkspaceDirectory() : null,
+    // Persisted display label. Safe to send in either mode.
+    name: workspace?.name ?? null,
+    worldCanvasId: configured
+      ? await getStructuredStore().spaces().worldId()
+      : null,
     capabilities: {
-      canChangeWorkspace: !managed,
-      nativePicker: !managed && canShowNativePicker(),
+      // Switching Workspaces means picking a folder in this API. A backend
+      // that keeps Workspaces as rows has one already open and no folder to
+      // offer, so the client stops showing a picker it could not honour.
+      canChangeWorkspace: !managed && materializesWorkspaces(),
+      nativePicker:
+        !managed && materializesWorkspaces() && canShowNativePicker(),
     },
   };
 }
@@ -190,6 +205,14 @@ const workspaceRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       if (isManagedMode()) {
         return sendError(reply, 403, 'Workspace is locked');
+      }
+      if (!storageServes('workspace-directory')) {
+        return sendError(
+          reply,
+          409,
+          unavailableCapabilityMessage('workspace-directory'),
+          'STORAGE_CAPABILITY_UNAVAILABLE',
+        );
       }
       if (!isLocalhost(request.ip)) {
         return sendError(
@@ -250,6 +273,14 @@ const workspaceRoutes: FastifyPluginAsync = async (app) => {
         'Forbidden: workspace settings can only be changed from localhost',
       );
     }
+    if (!storageServes('workspace-directory')) {
+      return sendError(
+        reply,
+        409,
+        unavailableCapabilityMessage('workspace-directory'),
+        'STORAGE_CAPABILITY_UNAVAILABLE',
+      );
+    }
     const parsed = workspacePathSchema.safeParse(request.body);
     if (!parsed.success) {
       return sendError(
@@ -263,7 +294,7 @@ const workspaceRoutes: FastifyPluginAsync = async (app) => {
       // Reset singletons that cache filesystem handles for the old workspace.
       resetStorageCache();
       resetPreprocessDispatcher();
-      return buildWorkspaceState();
+      return await buildWorkspaceState();
     } catch (e) {
       if (e instanceof WorkspaceActivationTimeoutError) {
         return sendError(

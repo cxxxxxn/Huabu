@@ -15,7 +15,7 @@
  * plugin directly needs no Bearer token.
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -30,6 +30,7 @@ import {
   getStorage,
   setStorageForTesting,
 } from '../storage/index.js';
+import { nodesDir } from '../storage/paths.js';
 import { setWorkspacePath } from '../workspace.js';
 
 import type { BlobScope, BlobStore } from '../storage/index.js';
@@ -86,6 +87,38 @@ afterEach(() => {
 });
 
 describe('PUT /nodes/:nodeId/content — content CAS', () => {
+  it.each(['user', 'agent'])(
+    'preserves a current %s Question label against a late preprocessing save',
+    async (labelSource) => {
+      const app = await buildApp();
+      try {
+        seedCanvas('c1', 'n1', 'Question');
+        await putContent(app, 'c1', 'n1', {
+          nodeType: 'question',
+          label: 'Protected',
+          labelSource,
+          content: 'Prompt',
+        });
+        const response = await putContent(app, 'c1', 'n1', {
+          nodeType: 'question',
+          label: 'Late automatic',
+          labelSource: 'auto',
+          summary: 'Independent summary',
+        });
+        expect(response.statusCode).toBe(200);
+        expect(response.json().label).toBe('Protected');
+        expect(getCanvasStore('c1').readNode('n1')).toMatchObject({
+          label: 'Protected',
+          labelSource,
+          content: 'Prompt',
+          summary: 'Independent summary',
+        });
+      } finally {
+        await app.close();
+      }
+    },
+  );
+
   it('creates a brand-new node when expectRev is the empty-content rev', async () => {
     const app = await buildApp();
     try {
@@ -171,6 +204,35 @@ describe('PUT /nodes/:nodeId/content — content CAS', () => {
       });
       expect(res.statusCode).toBe(409);
       expect(res.json<{ code: string }>().code).toBe('NODE_CONTENT_CONFLICT');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('keeps duplicate sidecars as the existing actionable 409 outcome', async () => {
+    const app = await buildApp();
+    try {
+      seedCanvas('c1', 'n1', 'Note');
+      getCanvasStore('c1').writeNode('n1', {
+        nodeId: 'n1',
+        type: 'note',
+        label: 'Note',
+        content: 'body',
+      });
+      const dir = nodesDir('c1');
+      const [original] = readdirSync(dir);
+      copyFileSync(join(dir, original), join(dir, 'Duplicate.md'));
+
+      const response = await putContent(app, 'c1', 'n1', {
+        nodeType: 'note',
+        content: 'must not overwrite either file',
+        expectRev: nodeRevisionOf({ content: 'body' }),
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json<{ code: string }>().code).toBe(
+        'NODE_DUPLICATE_FILES',
+      );
     } finally {
       await app.close();
     }
@@ -501,7 +563,12 @@ describe('artifact presence hydration', () => {
         return { ok: true, kind: 'disk' };
       },
       async close() {},
-      scope: () => scope,
+      space: () => ({
+        artifacts: scope,
+        guide: scope,
+        memory: scope,
+        uploads: scope,
+      }),
     };
   }
 

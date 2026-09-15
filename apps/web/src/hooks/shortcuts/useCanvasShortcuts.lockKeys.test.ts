@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * drift apart, this fails.
  */
 
-const { canvasActions, triggerIntent } = vi.hoisted(() => ({
+const { canvasActions } = vi.hoisted(() => ({
   canvasActions: {
     frameSelectedNodes: vi.fn(),
     copySelectedNodes: vi.fn(),
@@ -31,7 +31,6 @@ const { canvasActions, triggerIntent } = vi.hoisted(() => ({
     nodes: [] as unknown[],
     edges: [] as unknown[],
   },
-  triggerIntent: vi.fn(),
 }));
 
 vi.mock('../../store/canvasStore', () => {
@@ -40,10 +39,6 @@ vi.mock('../../store/canvasStore', () => {
   useCanvasStore.getState = () => canvasActions;
   return { default: useCanvasStore };
 });
-
-vi.mock('../../store/intentStore', () => ({
-  useIntentStore: { getState: () => ({ triggerIntent }) },
-}));
 
 import {
   useCanvasShortcuts,
@@ -87,8 +82,8 @@ describe('useCanvasShortcuts catalog key lock', () => {
       mousePositionRef: { current: { x: 0, y: 0 } },
     };
     function Harness() {
-      useCanvasShortcuts(refs);
-      return null;
+      const { tool } = useCanvasShortcuts(refs);
+      return createElement('div', { 'data-tool': tool });
     }
     act(() => {
       root.render(createElement(Harness));
@@ -121,8 +116,179 @@ describe('useCanvasShortcuts catalog key lock', () => {
 
     dispatchCombo('layer.bringFront');
     expect(canvasActions.sendSelectedToOrder).toHaveBeenLastCalledWith('top');
+  });
 
-    dispatchCombo('ai.openIntent');
-    expect(triggerIntent).toHaveBeenCalledTimes(1);
+  it('copies selected nodes when an editor retains focus without selected text', () => {
+    const editor = document.createElement('textarea');
+    editor.value = 'Note text';
+    editor.setSelectionRange(4, 4);
+    container.appendChild(editor);
+
+    act(() => {
+      editor.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'c',
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+
+    expect(canvasActions.copySelectedNodes).toHaveBeenCalledOnce();
+  });
+
+  it('preserves native copy when text is selected in an editor', () => {
+    const editor = document.createElement('textarea');
+    editor.value = 'Note text';
+    editor.setSelectionRange(0, 4);
+    container.appendChild(editor);
+
+    const event = new KeyboardEvent('keydown', {
+      key: 'c',
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => editor.dispatchEvent(event));
+
+    expect(canvasActions.copySelectedNodes).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it('keeps temporary pan active until the primary pointer is released', () => {
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: ' ', cancelable: true }),
+      );
+      window.dispatchEvent(
+        new PointerEvent('pointerdown', {
+          button: 0,
+          isPrimary: true,
+          pointerId: 1,
+          pointerType: 'mouse',
+        }),
+      );
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: ' ' }));
+    });
+    expect(container.querySelector('[data-tool="pan"]')).not.toBeNull();
+
+    act(() => {
+      window.dispatchEvent(
+        new PointerEvent('pointerup', {
+          pointerId: 2,
+          pointerType: 'mouse',
+        }),
+      );
+    });
+    expect(container.querySelector('[data-tool="pan"]')).not.toBeNull();
+
+    act(() => {
+      window.dispatchEvent(
+        new PointerEvent('pointerup', {
+          pointerId: 1,
+          pointerType: 'mouse',
+        }),
+      );
+    });
+    expect(container.querySelector('[data-tool="pan"]')).not.toBeNull();
+
+    act(() => {
+      window.dispatchEvent(new MouseEvent('mouseup'));
+    });
+    expect(container.querySelector('[data-tool="select"]')).not.toBeNull();
+  });
+
+  it('keeps temporary pan active until Space is released', () => {
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: ' ', cancelable: true }),
+      );
+      window.dispatchEvent(
+        new PointerEvent('pointerdown', {
+          button: 0,
+          isPrimary: true,
+          pointerId: 1,
+          pointerType: 'mouse',
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent('pointerup', {
+          pointerId: 1,
+          pointerType: 'mouse',
+        }),
+      );
+      window.dispatchEvent(new MouseEvent('mouseup'));
+    });
+    expect(container.querySelector('[data-tool="pan"]')).not.toBeNull();
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: ' ' }));
+    });
+    expect(container.querySelector('[data-tool="select"]')).not.toBeNull();
+  });
+
+  it('does not restore temporary pan between pointerup and mouseup', () => {
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: ' ', cancelable: true }),
+      );
+      window.dispatchEvent(
+        new PointerEvent('pointerdown', {
+          button: 0,
+          isPrimary: true,
+          pointerId: 1,
+          pointerType: 'mouse',
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent('pointerup', {
+          pointerId: 1,
+          pointerType: 'mouse',
+        }),
+      );
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: ' ' }));
+    });
+    expect(container.querySelector('[data-tool="pan"]')).not.toBeNull();
+
+    act(() => {
+      window.dispatchEvent(new MouseEvent('mouseup'));
+    });
+    expect(container.querySelector('[data-tool="select"]')).not.toBeNull();
+  });
+
+  it('restores temporary pan after touch pointerup without mouseup', () => {
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: ' ', cancelable: true }),
+      );
+      window.dispatchEvent(
+        new PointerEvent('pointerdown', {
+          button: 0,
+          isPrimary: true,
+          pointerId: 1,
+          pointerType: 'touch',
+        }),
+      );
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: ' ' }));
+      window.dispatchEvent(
+        new PointerEvent('pointerup', {
+          pointerId: 1,
+          pointerType: 'touch',
+        }),
+      );
+    });
+
+    expect(container.querySelector('[data-tool="select"]')).not.toBeNull();
+  });
+
+  it('restores temporary pan when the window loses focus', () => {
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: ' ', cancelable: true }),
+      );
+      window.dispatchEvent(new Event('blur'));
+    });
+    expect(container.querySelector('[data-tool="select"]')).not.toBeNull();
   });
 });

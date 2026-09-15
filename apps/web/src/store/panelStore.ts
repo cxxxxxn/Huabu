@@ -27,7 +27,9 @@ interface PanelState {
    * because the toggle is driven from multiple, non-adjacent
    * surfaces (toolbar button, hotkey, future API), and the
    * `CanvasSearchInput` component is mounted only while this is
-   * `true` so its auto-focus / cleanup run on every reveal.
+   * `true` so its auto-focus / cleanup run on every reveal. Opening
+   * search expands the panel once; later manual collapse is respected
+   * without closing or clearing the search session.
    */
   isSearchOpen: boolean;
   setSearchOpen: (open: boolean) => void;
@@ -41,6 +43,10 @@ interface PanelState {
    * first-time users.
    */
   isRightCollapsed: boolean;
+  /** Transient presentation mode; fullscreen never survives a reload. */
+  isPreviewFullscreen: boolean;
+  setPreviewFullscreen: (fullscreen: boolean) => void;
+  togglePreviewFullscreen: () => void;
   /** Node explicitly associated with the action that opened Chat. */
   rightPanelAnchorNodeId: string | null;
   clearRightPanelAnchor: () => void;
@@ -56,15 +62,15 @@ interface PanelState {
   requestOpenRightPanel: (anchorNodeId?: string) => void;
 
   /**
-   * Monotonic counter bumped whenever some surface wants the chat input
-   * focused (e.g. opening a question node into compose mode). `ChatInput`
-   * watches this value and focuses its textarea on every change. A nonce
-   * (rather than a boolean) lets repeated requests re-fire focus without
-   * a manual reset.
+   * The outstanding request to focus a composer, or `null` if none.
+   *
+   * Named to a thread so a request meant for the Chat a question node just
+   * opened cannot steal focus from another Chat on screen. The nonce lets
+   * repeated requests for the same thread re-fire focus without a reset.
    */
-  focusChatInputNonce: number;
-  /** Request the chat input textarea be focused. */
-  requestFocusChatInput: () => void;
+  focusChatInputRequest: { threadId: string; nonce: number } | null;
+  /** Request that the composer bound to `threadId` take focus. */
+  requestFocusChatInput: (threadId: string) => void;
 }
 
 export const usePanelStore = create<PanelState>()(
@@ -76,20 +82,41 @@ export const usePanelStore = create<PanelState>()(
         set((s) => ({ isLeftCollapsed: !s.isLeftCollapsed })),
 
       isSearchOpen: false,
-      setSearchOpen: (open) => set({ isSearchOpen: open }),
-      toggleSearchOpen: () => set((s) => ({ isSearchOpen: !s.isSearchOpen })),
+      setSearchOpen: (open) =>
+        set({
+          isSearchOpen: open,
+          ...(open ? { isLeftCollapsed: false } : {}),
+        }),
+      toggleSearchOpen: () =>
+        set((s) => ({
+          isSearchOpen: !s.isSearchOpen,
+          ...(!s.isSearchOpen ? { isLeftCollapsed: false } : {}),
+        })),
 
       isRightCollapsed: true,
+      isPreviewFullscreen: false,
+      setPreviewFullscreen: (fullscreen) =>
+        set({
+          isPreviewFullscreen: fullscreen,
+          ...(fullscreen ? { isRightCollapsed: false } : {}),
+        }),
+      togglePreviewFullscreen: () =>
+        set((s) => ({
+          isPreviewFullscreen: !s.isPreviewFullscreen,
+          ...(!s.isPreviewFullscreen ? { isRightCollapsed: false } : {}),
+        })),
       rightPanelAnchorNodeId: null,
       clearRightPanelAnchor: () => set({ rightPanelAnchorNodeId: null }),
       setRightCollapsed: (collapsed) =>
         set({
           isRightCollapsed: collapsed,
+          ...(collapsed ? { isPreviewFullscreen: false } : {}),
           rightPanelAnchorNodeId: null,
         }),
       toggleRightPanel: () =>
         set((s) => ({
           isRightCollapsed: !s.isRightCollapsed,
+          ...(!s.isRightCollapsed ? { isPreviewFullscreen: false } : {}),
           rightPanelAnchorNodeId: null,
         })),
       requestOpenRightPanel: (anchorNodeId) =>
@@ -98,9 +125,14 @@ export const usePanelStore = create<PanelState>()(
           rightPanelAnchorNodeId: anchorNodeId ?? null,
         }),
 
-      focusChatInputNonce: 0,
-      requestFocusChatInput: () =>
-        set((s) => ({ focusChatInputNonce: s.focusChatInputNonce + 1 })),
+      focusChatInputRequest: null,
+      requestFocusChatInput: (threadId) =>
+        set((s) => ({
+          focusChatInputRequest: {
+            threadId,
+            nonce: (s.focusChatInputRequest?.nonce ?? 0) + 1,
+          },
+        })),
     }),
     {
       name: 'huabu-panel',

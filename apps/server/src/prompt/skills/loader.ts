@@ -24,7 +24,7 @@
  * Frontmatter must include:
  *   - name        human-readable label
  *   - description short catalogue blurb
- *   - appliesTo   array of agent surfaces (ask | operate | sketch | external)
+ *   - appliesTo   array of agent surfaces (ask | operate | external)
  * Optional:
  *   - triggers    string[] (catalogue ranking hints, unused in phase 1)
  *   - version     number
@@ -49,7 +49,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { userSkillsDir } from '../../modules/storage/paths.js';
+import { userSkillsDir } from '../../modules/workspace/paths.js';
 import { getWorkspacePath } from '../../modules/workspace.js';
 import { getLogger } from '../../utils/logger.js';
 import { parseFrontmatter } from '../../utils/markdown-frontmatter.js';
@@ -62,11 +62,10 @@ const log = getLogger('skill-loader');
  * Agent surfaces a skill is intended for.
  *
  * `ask` / `operate` mirror the public `AgentMode` enum from
- * `@huabu/shared`; `sketch` is the sketch-intent
- * pipeline; `external` is reserved for skills that should also be
+ * `@huabu/shared`; `external` is reserved for skills that should also be
  * advertised to external agents (Copilot / Codex / Claude Code).
  */
-export type SkillScope = 'ask' | 'operate' | 'sketch' | 'external';
+export type SkillScope = 'ask' | 'operate' | 'external';
 
 /**
  * Where a `LoadedSkill` came from. Surfaced in the catalogue so the
@@ -141,7 +140,7 @@ export const SYSTEM_SKILLS_DIR = existsSync(BUNDLED_SKILLS_DIR)
 // `skills/<id>/SKILL.md` path) lives in the memory module — see
 // `modules/agent/memory/sandbox.ts` + `writers.ts`. Keeping it out of
 // the loader means the loader does not need to expose write paths; the
-// user-side root is owned by `userSkillsDir()` in `workspace/disk/paths.ts`.
+// user-side root is owned by `userSkillsDir()` in `workspace/paths.ts`.
 
 // ─── Validation ─────────────────────────────────────────────────────────────
 
@@ -150,7 +149,6 @@ const REQUIRED_FRONTMATTER_KEYS = ['name', 'description', 'appliesTo'] as const;
 const VALID_SCOPES: ReadonlySet<SkillScope> = new Set<SkillScope>([
   'ask',
   'operate',
-  'sketch',
   'external',
 ]);
 

@@ -38,12 +38,11 @@ import {
 import { getLogger } from '../../utils/logger.js';
 import {
   safeResolve,
+  isArtifactsRel,
+  sandboxRoot,
   toPhysicalRel,
 } from '../agent/tools/handlers/fs-sandbox.js';
-import { canvasBlobs } from '../storage/index.js';
-import { artifactsDir } from '../storage/paths.js';
-
-import type { CanvasStore } from '../storage/index.js';
+import { space } from '../storage/index.js';
 
 const log = getLogger('canvas.import-node-src');
 
@@ -136,26 +135,28 @@ function srcNormalizeMode(type: string): SrcNormalizeMode | null {
  * preserved so a single unreachable URL never fails the whole batch.
  */
 export async function importForeignNodeSources(
-  store: CanvasStore,
   canvasId: string,
   commands: readonly CanvasCommand[],
 ): Promise<CanvasCommand[]> {
   // Lazily built nodeId → nodeType map, needed only to gate MERGE_NODE_DATA
   // patches (CREATE_NODES carries `nodeType` inline). Node type is immutable,
   // so reading the pre-batch snapshot here is race-free.
-  let typeById: Map<string, string> | null = null;
-  const nodeType = (nodeId: string): string => {
-    if (!typeById) {
-      typeById = new Map();
-      const canvas = store.read();
-      for (const raw of canvas?.state.nodes ?? []) {
-        const n = raw as { id?: unknown; type?: unknown };
-        if (typeof n.id === 'string' && typeof n.type === 'string') {
-          typeById.set(n.id, n.type);
+  let typeByIdPromise: Promise<Map<string, string>> | null = null;
+  const nodeType = async (nodeId: string): Promise<string> => {
+    if (!typeByIdPromise) {
+      typeByIdPromise = (async () => {
+        const byId = new Map<string, string>();
+        const canvas = await space(canvasId).read();
+        for (const raw of canvas?.state.nodes ?? []) {
+          const n = raw as { id?: unknown; type?: unknown };
+          if (typeof n.id === 'string' && typeof n.type === 'string') {
+            byId.set(n.id, n.type);
+          }
         }
-      }
+        return byId;
+      })();
     }
-    return typeById.get(nodeId) ?? '';
+    return (await typeByIdPromise).get(nodeId) ?? '';
   };
 
   const out: CanvasCommand[] = [];
@@ -167,7 +168,6 @@ export async function importForeignNodeSources(
           if (!mode) return node;
           const data = node.data as Record<string, unknown> | undefined;
           const key = await resolveImportedSrc(
-            store,
             canvasId,
             data?.['src'],
             mode.allowRemoteDownload,
@@ -188,10 +188,9 @@ export async function importForeignNodeSources(
     if (cmd.type === 'MERGE_NODE_DATA') {
       const patches = await Promise.all(
         cmd.patches.map(async (entry) => {
-          const mode = srcNormalizeMode(nodeType(entry.nodeId));
+          const mode = srcNormalizeMode(await nodeType(entry.nodeId));
           if (!mode) return entry;
           const key = await resolveImportedSrc(
-            store,
             canvasId,
             entry.patch?.['src'],
             mode.allowRemoteDownload,
@@ -222,7 +221,6 @@ export async function importForeignNodeSources(
  * preserved in place and left unchanged.
  */
 async function resolveImportedSrc(
-  store: CanvasStore,
   canvasId: string,
   raw: unknown,
   allowRemoteDownload: boolean,
@@ -248,7 +246,7 @@ async function resolveImportedSrc(
     ) {
       return null;
     }
-    return await downloadToArtifact(store, src, pathname);
+    return await downloadToArtifact(canvasId, src, pathname);
   }
 
   // Already an in-app API path — leave it for the web resolver.
@@ -266,16 +264,20 @@ async function resolveImportedSrc(
     return null;
   }
 
-  // Already inside `.artifacts/` (or a bare artifact key that resolves there)
-  // — nothing to import. This inspects the real local filesystem, as the
-  // whole local-import branch does; only the write below goes through the
-  // blob port.
-  const artifactsRoot = artifactsDir(canvasId);
-  if (
-    absPath === artifactsRoot ||
-    absPath.startsWith(artifactsRoot + path.sep)
-  ) {
-    return null;
+  // A direct artifact child needs no copy, but it still needs the canonical
+  // bare-key spelling the web resolver serves. Classify the path after
+  // sandbox resolution so a ref that leaves and re-enters the current Space
+  // is judged by where it actually lands, while the helper still owns the
+  // virtual/physical `.artifacts` vocabulary. A nested path is not a blob key,
+  // so it falls through and is copied into the artifact root below.
+  const resolvedPhysicalRel = path.relative(sandboxRoot(canvasId), absPath);
+  if (isArtifactsRel(resolvedPhysicalRel)) {
+    const key = path.basename(absPath);
+    const canonicalPath = safeResolve(
+      canvasId,
+      toPhysicalRel(`artifacts/${key}`),
+    );
+    if (absPath === canonicalPath) return key;
   }
 
   // A bare key like `art_abc.png` resolves under the canvas root but has no
@@ -291,12 +293,12 @@ async function resolveImportedSrc(
     return null;
   }
 
-  return await copyToArtifact(store, absPath, physicalRel);
+  return await copyToArtifact(canvasId, absPath, physicalRel);
 }
 
 /** Copy a canvas-local file into blob storage, returning the new key. */
 async function copyToArtifact(
-  store: CanvasStore,
+  canvasId: string,
   absPath: string,
   physicalRel: string,
 ): Promise<string | null> {
@@ -305,7 +307,7 @@ async function copyToArtifact(
     const id = createId('artifact');
     const key = `${id}${ext}`;
     const buffer = await readFile(absPath);
-    await canvasBlobs(store.canvasId).put(key, buffer);
+    await space(canvasId).artifacts.put(key, buffer);
 
     // Move semantics: reclaim RFS scratch uploads once they are safely
     // stored. Never delete user node files or other canvas content —
@@ -330,7 +332,7 @@ async function copyToArtifact(
 
 /** Download an online resource into `.artifacts/`, returning the new key. */
 async function downloadToArtifact(
-  store: CanvasStore,
+  canvasId: string,
   url: string,
   pathname: string,
 ): Promise<string | null> {
@@ -361,7 +363,7 @@ async function downloadToArtifact(
     }
     const ext = pickDownloadExt(pathname, contentType);
     const key = `${createId('artifact')}${ext}`;
-    await canvasBlobs(store.canvasId).put(key, buffer);
+    await space(canvasId).artifacts.put(key, buffer);
     return key;
   } catch (err) {
     log.warn({ err, url }, 'Failed to download online node src into artifacts');

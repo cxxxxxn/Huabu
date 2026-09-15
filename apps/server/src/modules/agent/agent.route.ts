@@ -12,8 +12,6 @@
  * GET  /api/agent/history/:threadId — Load conversation history
  */
 
-import { emptyAcpOverlay } from '@agenetes/acp-driver';
-
 import {
   AGENT_SSE_EVENTS,
   agentCanvasIdQuerySchema,
@@ -24,24 +22,17 @@ import {
   setChatThreadReasoningEffortRequestSchema,
 } from '@huabu/shared';
 
-import { loadAgent } from '../../prompt/index.js';
-import { runAcpAgent } from '../agent/acp/service.js';
-import { agenetes } from '../agent/agenetes/drivers.js';
-import { INTERNAL_DRIVER_KIND } from '../agent/agenetes/drivers.js';
-import { runAgent } from '../agent/agent.service.js';
+import conversationTitleRoutes from './conversation-title.route.js';
+import { ExternalAgentRealizationError } from '../agent/acp/external-agent-realization.js';
+import { agenetes, INTERNAL_DRIVER_KIND } from '../agent/agenetes/drivers.js';
 import {
-  buildChatEnvelope,
-  envelopeHasImage,
-} from '../agent/conversation/envelope.js';
+  AgentThreadBusyError,
+  agentThreadService,
+} from '../agent/agent-thread.service.js';
+import { buildChatEnvelope } from '../agent/conversation/envelope.js';
 import { buildHistoryFromTurns } from '../agent/conversation/transcript/history.js';
 import { getLLMModel } from '../agent/llm.js';
-import { readWorkspaceMemory } from '../agent/memory/index.js';
-import { planSkillDispatch } from '../agent/skill-model-routing.js';
-import {
-  acquireAgentTurn,
-  waitForAgentTurnRelease,
-} from '../agent/turn-lease.js';
-import { canvasAcpNamespace } from '../storage/paths.js';
+import { canvasAcpNamespace } from '../workspace/paths.js';
 
 import type { ControlMsg, Namespace } from '@agenetes/protocol';
 import type {
@@ -74,53 +65,7 @@ function writeSSE(
   raw.write(`event: ${event.type}\ndata: ${JSON.stringify(event.data)}\n\n`);
 }
 
-function buildAgentSystemPrompt(params: {
-  canvasId: string | undefined;
-  mode: Parameters<typeof loadAgent>[0];
-}): string {
-  const { canvasId, mode } = params;
-  // We re-render the agent's system prompt on every turn so the
-  // `{{skillCatalogue}}` placeholder reflects freshly written user
-  // skills. `canvasId` flows into `loadAgent({ canvasId })` for
-  // forward compatibility with future per-canvas template vars.
-  const agentCfg = loadAgent(mode, { canvasId });
-
-  // Workspace memory (cross-canvas user profile) is part of the agent's
-  // stable system instructions, so it rides in the system prompt as a
-  // tagged block — grounding every turn and staying cache-friendly —
-  // rather than as a one-shot first-turn user message.
-  const workspaceMemory = readWorkspaceMemory();
-  return workspaceMemory
-    ? `${agentCfg.systemPrompt}\n\n<workspace_memory>\n${workspaceMemory}\n</workspace_memory>`
-    : agentCfg.systemPrompt;
-}
-
 // ==================== Route ====================
-
-/**
- * State for an active agent run. Reconnecting clients now replay from
- * L2's Tier-1 event log (`agenetes.tail`), so the host keeps only the
- * abort handle + a completion flag needed by `/stop` and `/stream`.
- */
-interface ActiveRun {
-  abortController: AbortController;
-  /** Whether the run has finished (success, error, or abort). */
-  completed: boolean;
-}
-
-/**
- * Tracks active (and recently completed) agent runs by threadId.
- * Enables client reconnection after page refresh.
- */
-const activeRuns = new Map<string, ActiveRun>();
-
-/** Remove a completed run after a grace period. */
-function scheduleRunCleanup(threadId: string, delayMs = 60_000): void {
-  setTimeout(() => {
-    const run = activeRuns.get(threadId);
-    if (run?.completed) activeRuns.delete(threadId);
-  }, delayMs);
-}
 
 /**
  * Dispatch a {@link ControlMsg} to a built-in (internal) chat thread's
@@ -188,6 +133,7 @@ const agentRoutes: FastifyPluginAsync = async (
   fastify,
   _opts,
 ): Promise<void> => {
+  await fastify.register(conversationTitleRoutes);
   /**
    * GET /agent/history/:threadId
    * Reconstructs the UI message list from L2's folded Tier-2 turn log
@@ -213,7 +159,12 @@ const agentRoutes: FastifyPluginAsync = async (
     }
 
     const namespace = canvasAcpNamespace(canvasId ?? '');
-    const { turns } = agenetes.history(namespace, threadId);
+    if (agentThreadService.isActive(threadId, canvasId)) {
+      await agentThreadService.waitForTurnStart(threadId, canvasId);
+    }
+    const { turns } = agenetes.history(namespace, threadId, {
+      withTail: true,
+    });
     if (turns.length === 0) {
       // No folded turns → empty/new thread.
       return reply.send({ threadId, messages: [] });
@@ -288,9 +239,7 @@ const agentRoutes: FastifyPluginAsync = async (
     Reply: ApiResult<StopThreadResponse>;
   }>('/stop/:threadId', async function (request, reply) {
     const { threadId } = request.params;
-    const run = activeRuns.get(threadId);
-    if (run && !run.abortController.signal.aborted) {
-      run.abortController.abort();
+    if (agentThreadService.stop(threadId)) {
       return reply.send({ stopped: true });
     }
     return reply.send({ stopped: false });
@@ -316,12 +265,11 @@ const agentRoutes: FastifyPluginAsync = async (
       });
     }
     const { canvasId } = parsedQuery.data;
-    const run = activeRuns.get(threadId);
-
-    // Only reconnect to runs that are still in progress. Completed runs
-    // are fully folded into the Tier-2 log, so the history endpoint
-    // returns complete data — no need to replay a live tail.
-    if (!run || run.completed) {
+    if (
+      !agentThreadService.isActive(threadId, canvasId) ||
+      !(await agentThreadService.waitForTurnStart(threadId, canvasId)) ||
+      !agentThreadService.isActive(threadId, canvasId)
+    ) {
       return reply.code(404).send({ message: 'No active run' });
     }
 
@@ -585,12 +533,6 @@ const agentRoutes: FastifyPluginAsync = async (
         .code(400)
         .send({ message: parsed.error.issues[0]?.message ?? 'Invalid body' });
     }
-    // TODO: `request.body.intentData` is sent by
-    // the client (see `apps/web/src/api/agent.ts` and
-    // `apps/web/src/hooks/useAgentStream.ts`) but is intentionally NOT
-    // destructured here — it is silently dropped. Either inject it as a
-    // `[SYSTEM IntentSelect]` user-role message before `runAgent`, or
-    // remove `intentData` from `AgentRequest` and the client.
     const {
       content,
       threadId,
@@ -605,22 +547,24 @@ const agentRoutes: FastifyPluginAsync = async (
       reasoningEffort,
     } = parsed.data;
 
-    // Log the thread→agent binding so external dispatches are visible
-    // in the server log. When `kind === 'external'`, the dispatch below
-    // routes to `runAcpAgent` instead of the built-in pi-driver path.
-    if (agentBinding && agentBinding.kind === 'external') {
+    const resolvedThreadId = getOrCreateThreadId(threadId);
+    const fixedTarget = await agentThreadService.resolveFixedTarget(
+      canvasId,
+      resolvedThreadId,
+    );
+    const effectiveBinding = fixedTarget?.agentBinding ?? agentBinding;
+    if (effectiveBinding?.kind === 'external') {
       request.log.info(
         {
-          threadId: threadId ?? null,
+          threadId: resolvedThreadId,
           canvasId: canvasId ?? null,
-          alias: agentBinding.alias,
-          profileId: agentBinding.profileId,
+          alias: effectiveBinding.alias,
+          profileId: effectiveBinding.profileId,
+          fixed: fixedTarget !== null,
         },
         'agent.route: external agentBinding → ACP dispatch',
       );
     }
-
-    const resolvedThreadId = getOrCreateThreadId(threadId);
 
     // Read lightweight L2 log metadata only to number the optional debug
     // prompt dump. Recovery history flows from Agenetes into the selected
@@ -640,81 +584,77 @@ const agentRoutes: FastifyPluginAsync = async (
       content,
       attachments,
       selectedNodes: canvasContext?.selectedNodes,
-      anchorNodeId,
+      anchorNodeId: fixedTarget?.nodeId ?? anchorNodeId,
       invokedSkills,
       canvasId: canvasId ?? null,
       logger: request.log,
     });
-    const skillDispatch = planSkillDispatch(envelope.skills.resolved);
-    const runsSkillAuthoring = skillDispatch.closeLiveHandle;
-
-    // A replacement send races the client's fire-and-forget `/stop` request,
-    // so a just-cancelled turn's abort may not be observed here yet. Wait
-    // (bounded) for any in-flight turn on this thread to release its lease
-    // before acquiring — this absorbs the cancel-then-resend race. Placed
-    // immediately before `acquireAgentTurn` (no `await` in between) so the
-    // released lease cannot be re-taken by another request in the gap. A turn
-    // that never releases within the timeout, or a genuinely concurrent turn,
-    // falls through to the 409 below.
-    const previousRun = activeRuns.get(resolvedThreadId);
-    if (previousRun && !previousRun.completed) {
-      await waitForAgentTurnRelease(resolvedThreadId);
-    }
-
-    const releaseTurn = acquireAgentTurn(resolvedThreadId);
-    if (!releaseTurn) {
-      return reply.code(409).send({
-        message: 'Another turn is already running for this thread.',
-        code: 'thread_busy',
-      });
-    }
-
     // Debug-prompt metadata forwarded to the dispatch layer (it assembles
     // the final prompt). No-op unless HUABU_DEBUG_PROMPT is set.
     const debugPrompt = {
       turnNumber: turnCount + 1,
       threadId: resolvedThreadId,
       mode:
-        agentBinding?.kind === 'external'
-          ? `external:${agentBinding.alias}`
+        effectiveBinding?.kind === 'external'
+          ? `external:${effectiveBinding.alias}`
           : mode,
       logger: request.log,
     };
 
-    // SSE streaming
-    reply.hijack();
-    reply.raw.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-      'Access-Control-Allow-Origin': '*',
-      'X-Accel-Buffering': 'no',
-    });
-    reply.raw.flushHeaders?.();
-    reply.raw.write(': ok\n\n');
+    let invocation;
+    try {
+      invocation = await agentThreadService.invoke({
+        threadId: resolvedThreadId,
+        canvasId,
+        content,
+        mode,
+        envelope,
+        requestBinding: agentBinding,
+        fixedTarget,
+        modelId,
+        reasoningEffort,
+        logger: request.log,
+        debugPrompt,
+      });
+    } catch (error) {
+      if (error instanceof AgentThreadBusyError) {
+        return reply.code(409).send({
+          message: 'Another turn is already running for this thread.',
+          code: 'thread_busy',
+        });
+      }
+      if (error instanceof ExternalAgentRealizationError) {
+        return reply.code(409).send({
+          message: error.message,
+          code: error.code,
+        });
+      }
+      throw error;
+    }
 
-    // Send thread ID
-    const metaEvent: AgentStreamEvent = {
-      type: AGENT_SSE_EVENTS.Meta,
-      data: { threadId: resolvedThreadId, mode },
-    };
-    writeSSE(reply.raw, metaEvent);
+    try {
+      // SSE streaming
+      reply.hijack();
+      reply.raw.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+        'X-Accel-Buffering': 'no',
+      });
+      reply.raw.flushHeaders?.();
+      reply.raw.write(': ok\n\n');
 
-    // Abort controller — only triggered by the explicit /stop endpoint,
-    // NOT by client disconnect (so page refreshes don't interrupt the run).
-    const abortController = new AbortController();
-    const run: ActiveRun = {
-      abortController,
-      completed: false,
-    };
-    activeRuns.set(resolvedThreadId, run);
-
-    // `acpOverlay`: tool extensions + plan, mutated by `runAcpAgent` only.
-    // Persistence is now owned entirely by L2 (the dispatch runs through
-    // `agenetes.create(spec).run(...)`, which tees every event into the
-    // Tier-1 log and folds the Tier-2 turn on return), so the route no
-    // longer builds or writes any turn record.
-    const acpOverlay = emptyAcpOverlay();
+      // Send thread ID
+      const metaEvent: AgentStreamEvent = {
+        type: AGENT_SSE_EVENTS.Meta,
+        data: { threadId: resolvedThreadId, mode },
+      };
+      writeSSE(reply.raw, metaEvent);
+    } catch (error) {
+      await invocation.dispose(error);
+      throw error;
+    }
 
     // Emit an event to the connected client. Reconnecting clients replay
     // from L2's tail (see `/stream`), so there is no host-side buffer or
@@ -739,69 +679,6 @@ const agentRoutes: FastifyPluginAsync = async (
     socket?.once('close', onDisconnect);
 
     try {
-      // Route dispatch: external bindings go to `runAcpAgent`, everything
-      // else (including missing/`internal` bindings) goes to the built-in
-      // pi-driver-backed path. Both paths yield the same
-      // `AgentStreamEvent` shape so the consume loop below is
-      // binding-agnostic.
-      let stream: AsyncGenerator<AgentStreamEvent, unknown>;
-      if (agentBinding?.kind === 'external') {
-        stream = runAcpAgent({
-          binding: {
-            alias: agentBinding.alias,
-            profileId: agentBinding.profileId,
-          },
-          threadId: resolvedThreadId,
-          canvasId,
-          envelope,
-          overlay: acpOverlay,
-          signal: abortController.signal,
-          logger: request.log,
-          debugPrompt,
-        });
-      } else {
-        // A live Deployment bakes its host context when created. Skill
-        // authoring commands therefore run as fresh Jobs on the Utility role.
-        // Ordinary task Skills stay on the Chat-backed Deployment. Closing any
-        // live chat handle before authoring ensures the next normal turn
-        // rehydrates the authoring turn instead of continuing from stale state.
-        // (See `planSkillDispatch` for the coupled role/lifecycle/close rule.)
-        if (skillDispatch.closeLiveHandle) agenetes.close(resolvedThreadId);
-        // The pi-driver owns restart recovery from Agenetes durable input.
-        // L1 supplies only current host policy and the current request.
-        const context = {
-          systemPrompt: buildAgentSystemPrompt({ canvasId, mode }),
-          messages: [],
-          tools: [],
-        };
-        stream = runAgent({
-          scope: mode,
-          workloadType: skillDispatch.workloadType,
-          modelRole: skillDispatch.modelRole,
-          // `hasImage` only informs the vision guard on a fresh Job (the
-          // Utility-tier authoring path). A live Deployment bakes its host
-          // context at creation, so passing it there would be dead data that
-          // never re-reads per turn — omit it and let the chat model (always
-          // vision-capable) handle images.
-          hasImage: runsSkillAuthoring ? envelopeHasImage(envelope) : undefined,
-          // The built-in chat agent's canvas writes are delivered to the
-          // frontend ONLY via the sync broadcast (like ACP), not applied
-          // from the chat tool result. Attributing them to the chat
-          // `threadId` feeds the per-thread change card (ChangeReviewCard)
-          // that owns revert for this agent.
-          threadId: resolvedThreadId,
-          canvasId,
-          envelope,
-          context,
-          modelId,
-          reasoningEffort,
-          maxIterations: 20,
-          signal: abortController.signal,
-          logger: request.log,
-          debugPrompt,
-        });
-      }
-
       // Consume the dispatch stream, forwarding events to the connected
       // client. L2 tees every event into the Tier-1 log and folds the
       // Tier-2 turn on return, so the route no longer collects or persists
@@ -809,28 +686,25 @@ const agentRoutes: FastifyPluginAsync = async (
       // `iterator.return()` and can cut the dispatch short before it emits
       // its terminal frame); we stop forwarding to the client but keep
       // draining so the dispatch settles and L2 folds a complete turn.
-      const iterator = stream[Symbol.asyncIterator]();
+      const iterator = invocation.events[Symbol.asyncIterator]();
       while (true) {
         const { value, done } = await iterator.next();
         if (done) break;
-        if (abortController.signal.aborted) continue;
+        if (invocation.signal.aborted) continue;
         emit(value);
       }
 
-      if (!abortController.signal.aborted) {
+      if (!invocation.signal.aborted) {
         emit({ type: AGENT_SSE_EVENTS.End, data: {} });
       }
     } catch (error) {
-      if (!abortController.signal.aborted) {
+      if (!invocation.signal.aborted) {
         request.log.error(error);
         const errorMsg =
           error instanceof Error ? error.message : 'Internal Error';
         emit({ type: AGENT_SSE_EVENTS.Error, data: { error: errorMsg } });
       }
     } finally {
-      run.completed = true;
-      scheduleRunCleanup(resolvedThreadId);
-      releaseTurn();
       reply.raw.removeListener('close', onDisconnect);
       socket?.removeListener('close', onDisconnect);
       if (clientConnected) {

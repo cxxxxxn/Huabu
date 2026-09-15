@@ -112,6 +112,7 @@ export {
   medianOfChildExtents,
 } from './utils/constants.js';
 export { stripMarkdown } from './utils/markdown.js';
+export { normalizeMathDelimiters } from './provenance/normalizeMathDelimiters.js';
 export {
   type AutoHeightFreshness,
   type AutoHeightHintRead,
@@ -196,6 +197,7 @@ export {
   computeFrameFit,
   fitFrameToChildren,
   fitFrames,
+  projectAffectedFrameGeometry,
   getFrameSizing,
   moveNodeOutOfFrame,
 } from './frame/index.js';
@@ -225,6 +227,7 @@ export {
   fingerprintMarkdownBlocks,
   fingerprintMarkdownKeys,
   fingerprintMdastBlock,
+  topLevelListItemMarkdown,
   type FingerprintedBlock,
 } from './provenance/blockFingerprint.js';
 export {

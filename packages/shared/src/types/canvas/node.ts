@@ -10,6 +10,7 @@ import type { AccentToken } from './color.js';
 import type { AgentMode } from '../agent/agent.js';
 import type { AgentBinding } from '../api/acp.js';
 import type { AgentIcon } from '../api/agent-profile.js';
+import type { InteractiveViewDefinitionV1 } from '../api/interactive-view.js';
 
 // ==================== Basic Node Types ====================
 
@@ -28,6 +29,7 @@ export const CANVAS_NODE_TYPES = [
   'audio',
   'web',
   'frame',
+  'spacePreview',
   'canvasRef',
   'frameRef',
   'nodeRef',
@@ -40,7 +42,8 @@ export type CanvasNodeType = (typeof CANVAS_NODE_TYPES)[number];
  * Node kinds the agent is allowed to construct via `CREATE_NODES`.
  * Excludes:
  * - `sketch` — produced only by the freehand drawing tool.
- * - `canvasRef` / `frameRef` / `nodeRef` — created only by World host operations.
+ * - `spacePreview` — created only by the user-facing target picker or World host operations.
+ * - `canvasRef` / `frameRef` / `nodeRef` — created only by legacy World host operations.
  */
 export const AGENT_CREATABLE_NODE_TYPES = [
   'note',
@@ -69,7 +72,11 @@ export type NodeOrigin =
   | { type: 'user-from-library' }
   | { type: 'user-from-chat'; threadId?: string }
   | { type: 'user-excerpt'; excerptFromNodeId?: string }
-  // Sketch recognition
+  /**
+   * Legacy only — stamped by the sketch gesture recogniser, which was
+   * removed. Kept so nodes saved before that removal still deserialize;
+   * nothing produces it today.
+   */
   | { type: 'sketch-recognized' };
 
 /** All possible values of `NodeOrigin['type']`. */
@@ -96,6 +103,91 @@ export function normalizeOrigin(raw: unknown): NodeOrigin | undefined {
 
 /** Who set the node label — controls whether auto-title may overwrite it */
 export type LabelSource = 'auto' | 'user' | 'agent';
+
+export type SpaceInstructionFrameKind = 'prompt' | 'skill';
+
+/**
+ * Classify a label that opts a Frame into a Space-level instruction channel.
+ *
+ * Instruction Frames are intentionally label-based so users and agents can
+ * create them through existing canvas operations.
+ */
+export function classifySpaceInstructionFrameLabel(
+  label: unknown,
+): SpaceInstructionFrameKind | null {
+  if (typeof label !== 'string') return null;
+  const match = /^(prompt|skill)(?:\s*:\s*\S[\s\S]*)?$/i.exec(
+    label.trim().normalize('NFC'),
+  );
+  const kind = match?.[1]?.toLowerCase();
+  return kind === 'prompt' || kind === 'skill' ? kind : null;
+}
+
+/** Only explicitly authored labels may activate instruction Frame semantics. */
+export function classifySpaceInstructionFrame(
+  label: unknown,
+  labelSource: unknown,
+): SpaceInstructionFrameKind | null {
+  if (labelSource !== 'user' && labelSource !== 'agent') return null;
+  return classifySpaceInstructionFrameLabel(label);
+}
+
+export function isPromptFrameLabel(label: unknown): boolean {
+  return classifySpaceInstructionFrameLabel(label) === 'prompt';
+}
+
+export function isPromptFrame(label: unknown, labelSource: unknown): boolean {
+  return classifySpaceInstructionFrame(label, labelSource) === 'prompt';
+}
+
+export function isSkillFrameLabel(label: unknown): boolean {
+  return classifySpaceInstructionFrameLabel(label) === 'skill';
+}
+
+export function isSkillFrame(label: unknown, labelSource: unknown): boolean {
+  return classifySpaceInstructionFrame(label, labelSource) === 'skill';
+}
+
+interface AgentNodeCandidate {
+  readonly id: string;
+  readonly type?: unknown;
+  readonly data?: unknown;
+}
+
+interface EdgeCandidate {
+  readonly source: string;
+  readonly target: string;
+}
+
+/** Agent Nodes are Question Nodes that already own a durable thread identity. */
+export function isAgentNode(node: AgentNodeCandidate): boolean {
+  if (node.type !== 'question') return false;
+  if (!node.data || typeof node.data !== 'object') return false;
+  const threadId = (node.data as { threadId?: unknown }).threadId;
+  return typeof threadId === 'string' && threadId.length > 0;
+}
+
+/** Return valid Agent Nodes joined directly to a Frame, ignoring edge styling. */
+export function directAgentNodeIdsForFrame(
+  nodes: readonly AgentNodeCandidate[],
+  edges: readonly EdgeCandidate[],
+  frameId: string,
+): ReadonlySet<string> {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const agentNodeIds = new Set<string>();
+  for (const edge of edges) {
+    const otherId =
+      edge.source === frameId && edge.target !== frameId
+        ? edge.target
+        : edge.target === frameId && edge.source !== frameId
+          ? edge.source
+          : null;
+    if (!otherId) continue;
+    const node = nodeById.get(otherId);
+    if (node && isAgentNode(node)) agentNodeIds.add(otherId);
+  }
+  return agentNodeIds;
+}
 
 /** Font family logical names. CSS font stacks are resolved on the UI side. */
 export const NODE_FONT_FAMILIES = ['default', 'serif', 'mono', 'hand'] as const;
@@ -164,10 +256,16 @@ export interface BlockProvenance {
    */
   kind?: 'modified' | 'inserted';
   /**
-   * Markdown of the block as it was right before the AI edit. Empty
-   * string for `kind === 'inserted'`.
+   * Markdown of the block at its last user-owned state. Sequential AI edits
+   * preserve this original baseline. Empty string for `kind === 'inserted'`.
    */
   baselineMarkdown: string;
+  /**
+   * Original normalized block fingerprint, without a duplicate occurrence
+   * suffix, captured with the full document's reference definitions.
+   * Preserved across AI rewrites; absent for insertions and legacy records.
+   */
+  baselineKey?: string;
   /** ISO timestamp when the AI edit was stamped. */
   at: string;
 }
@@ -179,7 +277,7 @@ export interface BlockProvenance {
 export interface DeletedBlockInfo {
   /** Fingerprint the deleted block had at the time of deletion. */
   key: string;
-  /** Markdown of the block before deletion. */
+  /** Markdown of the block at its last user-owned state. */
   baselineMarkdown: string;
   /**
    * Fingerprint of the surviving block this tombstone hangs after.
@@ -216,6 +314,7 @@ export interface BaseNodeData {
    * Who last set the label.
    * - 'auto': derived from content (H1 / first line). May be overwritten automatically.
    * - 'user': manually set by the user. Auto-title will not overwrite this.
+   * - 'agent': agent-authored or copied from a nonmanual Chat title. Auto-title will not overwrite this.
    * Absent means the label was generated at node creation time (treated like 'auto').
    */
   labelSource?: LabelSource;
@@ -401,6 +500,10 @@ export interface TextNodeData extends BaseNodeData {
 export interface WebNodeData extends BaseNodeData {
   type: 'web';
   src: string;
+  /** Host-validated capability bridge definition for a local HTML artifact. */
+  interactiveView?: InteractiveViewDefinitionV1;
+  /** Optional Agent-defined discovery hint scoped to the owning Canvas. */
+  viewKey?: string;
 }
 
 /** A single highlight annotation on a PDF page. */
@@ -567,6 +670,12 @@ export interface CanvasRefNodeData extends BaseNodeData {
   targetCanvasId: string;
 }
 
+/** A view-only projection of another ordinary Space. */
+export interface SpacePreviewNodeData extends BaseNodeData {
+  type: 'spacePreview';
+  targetCanvasId: string;
+}
+
 /** A World-owned symbolic reference to a node in an ordinary Space. */
 export interface NodeRefNodeData extends BaseNodeData {
   type: 'nodeRef';
@@ -655,6 +764,15 @@ export interface SketchNodeData extends BaseNodeData {
 /** Execution status of a question node. */
 export type QuestionNodeStatus = 'idle' | 'running' | 'done' | 'error';
 
+/** Whether an idle question thread may be rebound before its first turn. */
+export type AgentBindingPolicy = 'selectable' | 'fixed';
+
+/** Bounded per-thread overrides applied when an external Agent is realized. */
+export interface AgentLaunchOverrides {
+  workingDirPath?: string;
+  additionalInitialPreamble?: string;
+}
+
 /** Resolve the sparse persisted question status; absent means idle. */
 export function getQuestionNodeStatus(data: unknown): QuestionNodeStatus {
   const status =
@@ -695,12 +813,19 @@ export interface QuestionNodeData extends BaseNodeData {
    */
   agentBinding?: AgentBinding;
   /**
+   * Whether the binding may change before the first turn. Absent means
+   * `selectable` for compatibility with user-created Question Nodes.
+   */
+  agentBindingPolicy?: AgentBindingPolicy;
+  /**
    * Bind-time avatar fallback for this question's external agent. The UI
    * prefers the current Profile icon while that Profile exists, then uses this
    * snapshot if the Profile is deleted or unavailable. Internal agents use the
    * built-in Huabu identity instead.
    */
   agentIcon?: AgentIcon;
+  /** External-Agent launch overrides fixed when this node is created. */
+  agentLaunchOverrides?: AgentLaunchOverrides;
   /**
    * Built-in agent mode when `agentBinding` is internal or omitted.
    * Defaults to `'ask'`. Ignored for external bindings.
@@ -722,6 +847,7 @@ export type NodeData =
   | ImageNodeData
   | AudioNodeData
   | FrameNodeData
+  | SpacePreviewNodeData
   | CanvasRefNodeData
   | FrameRefNodeData
   | NodeRefNodeData
@@ -766,6 +892,12 @@ export function isFrameNode(data: NodeData): data is FrameNodeData {
 
 export function isCanvasRefNode(data: NodeData): data is CanvasRefNodeData {
   return data.type === 'canvasRef';
+}
+
+export function isSpacePreviewNode(
+  data: NodeData,
+): data is SpacePreviewNodeData {
+  return data.type === 'spacePreview';
 }
 
 export function isNodeRefNode(data: NodeData): data is NodeRefNodeData {

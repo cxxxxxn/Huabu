@@ -15,9 +15,14 @@ import { useTextNodeSurface } from '@/hooks/useTextNodeSurface';
 import { useAcpProfilesStore } from '@/store/acpProfilesStore.ts';
 import { useAcpThreadChangesStore } from '@/store/acpThreadChangesStore.ts';
 import useCanvasStore from '@/store/canvasStore.ts';
-import { useChatStore } from '@/store/chatStore.ts';
+import {
+  selectThreadBinding,
+  selectThreadLastAction,
+  selectThreadMessages,
+  useChatStore,
+} from '@/store/chatStore.ts';
 import { findPendingPermissionRequestId } from '@/store/chatTypes.ts';
-import { usePanelStore } from '@/store/panelStore.ts';
+import { usePreviewWorkspaceStore } from '@/store/previewWorkspace/store';
 import {
   getQuestionFontOpts,
   QUESTION_FONT_FAMILY,
@@ -29,7 +34,10 @@ import { resolveQuestionAgentPresentation } from '@/utils/questionAgentPresentat
 
 import { MissingFileBanner } from '../MissingFileBanner';
 import { NodeWrapper } from '../NodeWrapper';
-import { enterQuestionCompose } from './questionCompose.ts';
+import {
+  enterQuestionCompose,
+  enterQuestionConversation,
+} from './questionCompose.ts';
 import { QuestionTakeoverMark } from './QuestionTakeoverMark.tsx';
 import { TextNodeBody } from '../shared/TextNodeBody';
 
@@ -117,8 +125,11 @@ export const QuestionNode = memo(
       data.threadId ? s.pendingForkThreadIds[data.threadId] === true : false,
     );
 
-    /** Whether this node has been executed at least once. */
+    /** Whether this node has an explicit terminal execution state. */
     const hasRun = status === 'done' || status === 'error';
+    const hasConversation =
+      !!data.threadId &&
+      (hasRun || status === 'running' || displayText.trim().length > 0);
 
     /**
      * Whether the chat panel can be opened to this question's thread —
@@ -126,34 +137,36 @@ export const QuestionNode = memo(
      * or finished (replay). A pending paste-fork blocks opening until its
      * history has finished copying.
      */
-    const canOpenInChat =
-      !!data.threadId && (hasRun || status === 'running') && !isForkPending;
+    const canOpenInChat = hasConversation && !isForkPending;
 
-    const openQuestionThread = useChatStore((s) => s.openQuestionThread);
     const needsApproval = useChatStore((s) => {
       if (!data.threadId) return false;
       return (
         findPendingPermissionRequestId(
-          s.messagesByThread[data.threadId] ?? [],
+          selectThreadMessages(s, data.threadId),
         ) !== null
       );
     });
-    const showChatAnchor = useChatStore(
-      (s) =>
-        s.viewingQuestionThread?.presentationAnchor.nodeId === id &&
-        s.viewingQuestionThread.conversationOwner.nodeId === id,
+    const showChatAnchor = usePreviewWorkspaceStore((state) =>
+      Object.values(state.workspace.tabs).some(
+        (tab) => tab.target.kind === 'node' && tab.target.nodeId === id,
+      ),
     );
     // Composing = this node is the chat anchor AND it has never been
     // authored/run yet (`idle`). Derived from the node's status, not a stored
     // `compose` flag.
     const isOpenForQuestion = showChatAnchor && status === 'idle';
-    const composeAgentBinding = useChatStore((s) => s.agentBinding);
-    // While composing a brand-new question, the mode follows the user's inline
-    // Chat/Agent pick (`lastAction`) rather than the node's not-yet-written
-    // `agentMode` (mirrors ChatPanel's compose logic).
-    const composeAgentMode = useChatStore((s) => s.lastAction);
+    // Compose-time binding lives on the node's own thread, so it stays correct
+    // even while another Chat is mounted on a different thread.
+    const composeAgentBinding = useChatStore((s) =>
+      data.threadId ? selectThreadBinding(s, data.threadId) : undefined,
+    );
+    // While composing a brand-new question, the mode follows this thread's
+    // inline Chat/Agent pick rather than the not-yet-written node field.
+    const composeAgentMode = useChatStore((s) =>
+      data.threadId ? selectThreadLastAction(s, data.threadId) : 'ask',
+    );
     const agentProfiles = useAcpProfilesStore((s) => s.profiles);
-    const requestOpenRightPanel = usePanelStore((s) => s.requestOpenRightPanel);
     // True only while this node's conversation is open AND the chat panel is
     // expanded — the badge shows `open` only then; a collapsed panel falls
     // back to the node's real status.
@@ -163,62 +176,68 @@ export const QuestionNode = memo(
     // ------------------------------------------------------------------
     // Open an already-run question's conversation (live or replay).
     // ------------------------------------------------------------------
-    const openInChat = useCallback(() => {
-      if (!data.threadId) return;
-      openQuestionThread(
-        {
-          presentationAnchor: { canvasId, nodeId: id },
-          conversationOwner: {
-            canvasId,
-            nodeId: id,
-            threadId: data.threadId,
+    const openInChat = useCallback(
+      (transient = false) => {
+        if (!data.threadId) return;
+        enterQuestionConversation(
+          {
+            presentationAnchor: { canvasId, nodeId: id },
+            conversationOwner: {
+              canvasId,
+              nodeId: id,
+              threadId: data.threadId,
+            },
           },
-        },
+          data.agentBinding,
+          canvasId,
+          needsApproval
+            ? 'bottom'
+            : hasRun && !data.viewed
+              ? 'last-user'
+              : 'bottom',
+          { transient },
+        );
+        // Mark as viewed only once the run has finished.
+        if (hasRun && !data.viewed) {
+          patchNodeSilent(id, { viewed: true });
+        }
+      },
+      [
+        id,
+        data.threadId,
         data.agentBinding,
-        canvasId || undefined,
-        needsApproval
-          ? 'bottom'
-          : hasRun && !data.viewed
-            ? 'last-user'
-            : 'bottom',
-      );
-      requestOpenRightPanel(id);
-      // Mark as viewed only once the run has finished.
-      if (hasRun && !data.viewed) {
-        patchNodeSilent(id, { viewed: true });
-      }
-    }, [
-      id,
-      data.threadId,
-      data.agentBinding,
-      data.viewed,
-      needsApproval,
-      hasRun,
-      canvasId,
-      openQuestionThread,
-      requestOpenRightPanel,
-      patchNodeSilent,
-    ]);
+        data.viewed,
+        needsApproval,
+        hasRun,
+        canvasId,
+        patchNodeSilent,
+      ],
+    );
 
     // ------------------------------------------------------------------
     // Open this node for composition: switch the chat panel to the
     // node's (empty) thread, expand it, and focus the input. Mints a
     // thread id on first use so the node + its conversation are bound.
     // ------------------------------------------------------------------
-    const openInCompose = useCallback(() => {
-      let threadId = data.threadId;
-      if (!threadId) {
-        threadId = createId('thread');
-        patchNodeSilent(id, { threadId });
-      }
-      enterQuestionCompose(
-        {
-          presentationAnchor: { canvasId, nodeId: id },
-          conversationOwner: { canvasId, nodeId: id, threadId },
-        },
-        canvasId,
-      );
-    }, [id, data.threadId, canvasId, patchNodeSilent]);
+    const openInCompose = useCallback(
+      (transient = false) => {
+        let threadId = data.threadId;
+        if (!threadId) {
+          threadId = createId('thread');
+          patchNodeSilent(id, { threadId });
+        }
+        enterQuestionCompose(
+          {
+            presentationAnchor: { canvasId, nodeId: id },
+            conversationOwner: { canvasId, nodeId: id, threadId },
+          },
+          canvasId,
+          data.agentBinding,
+          { transient },
+        );
+      },
+      [id, data.threadId, data.agentBinding, canvasId, patchNodeSilent],
+    );
 
     // ------------------------------------------------------------------
     // Double-click:
@@ -231,9 +250,9 @@ export const QuestionNode = memo(
         e.stopPropagation();
         if (isForkPending) return;
         if (canOpenInChat) {
-          openInChat();
+          openInChat(true);
         } else {
-          openInCompose();
+          openInCompose(true);
         }
       },
       [isForkPending, canOpenInChat, openInChat, openInCompose],
@@ -253,14 +272,14 @@ export const QuestionNode = memo(
                 ? t('node.watchLiveConversation')
                 : t('node.viewConversation')
             }
-            onClick={openInChat}
+            onClick={() => openInChat(true)}
           >
             <MessageSquare size={14} />
           </FloatingToolbar.ActionButton>
         ) : (
           <FloatingToolbar.ActionButton
             title={t('node.ask')}
-            onClick={openInCompose}
+            onClick={() => openInCompose(true)}
           >
             <MessageSquare size={14} />
           </FloatingToolbar.ActionButton>
@@ -270,9 +289,10 @@ export const QuestionNode = memo(
 
     const isDoneUnviewed = status === 'done' && !viewed;
     const isErrorUnviewed = status === 'error' && !viewed;
-    const effectiveBinding = isOpenForQuestion
+    const effectiveBinding = (isOpenForQuestion
       ? composeAgentBinding
-      : (data.agentBinding ?? { kind: 'internal' as const });
+      : data.agentBinding) ??
+      data.agentBinding ?? { kind: 'internal' as const };
     const agentPresentation = resolveQuestionAgentPresentation({
       binding: effectiveBinding,
       fallbackIcon: data.agentIcon,
@@ -345,10 +365,12 @@ export const QuestionNode = memo(
                         : status === 'error' && data.errorMessage
                           ? data.errorMessage
                           : canOpenInChat
-                            ? status === 'running'
-                              ? t('node.watchLiveConversation')
-                              : t('node.openConversation')
-                            : undefined
+                            ? `${agentPresentation.alias} · ${
+                                status === 'running'
+                                  ? t('node.watchLiveConversation')
+                                  : t('node.openConversation')
+                              }`
+                            : agentPresentation.alias
                     }
                   />
                 ),

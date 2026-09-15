@@ -7,20 +7,14 @@ import {
   type CanvasNodeCreateInput,
   type CanvasNodeId,
 } from '@huabu/shared';
-import {
-  PORTAL_DEFAULT_HEIGHT,
-  PORTAL_DEFAULT_WIDTH,
-} from '@huabu/shared/canvas-engine';
+import { getNodeDefaultSize } from '@huabu/shared/canvas-engine';
 
 import { executeOnServer } from './canvas-executor.js';
-import {
-  listCanvasDirEntries,
-  requireWorldCanvasId,
-} from '../storage/canvas-dirs.js';
-import { getCanvasStore } from '../storage/index.js';
+import { getStructuredStore, space } from '../storage/index.js';
 
-const PORTAL_WIDTH = PORTAL_DEFAULT_WIDTH;
-const PORTAL_HEIGHT = PORTAL_DEFAULT_HEIGHT;
+const PREVIEW_SIZE = getNodeDefaultSize('spacePreview');
+const PORTAL_WIDTH = PREVIEW_SIZE.width ?? 480;
+const PORTAL_HEIGHT = PREVIEW_SIZE.height ?? 320;
 const PORTAL_GAP = 80;
 const PORTAL_COLUMNS = 4;
 
@@ -109,41 +103,52 @@ function absolutePosition(
  */
 interface WorldPortalReconciliationPlan {
   worldCanvasId: string;
-  nodes: StoredWorldNode[];
+  deleteNodeIds: CanvasNodeId[];
   inputs: CanvasNodeCreateInput[];
 }
 
-function planWorldPortalReconciliation(): WorldPortalReconciliationPlan {
-  const worldCanvasId = requireWorldCanvasId();
-  const world = getCanvasStore(worldCanvasId).read();
+async function planWorldPortalReconciliation(): Promise<WorldPortalReconciliationPlan> {
+  // One repository instance spans World resolution and membership, so a
+  // Workspace switch between them is rejected by the handle rather than
+  // reconciling one Workspace's Portals against another's Space list.
+  const spaces = getStructuredStore().spaces();
+  const worldCanvasId = await spaces.worldId();
+  const world = await space(worldCanvasId).read();
   if (!world) {
     throw new WorldPortalIntegrityError('World Canvas is not readable');
   }
 
   const nodes = world.state.nodes as StoredWorldNode[];
-  const portalByTarget = new Map<string, StoredWorldNode>();
+  const previewByTarget = new Map<string, StoredWorldNode>();
+  const legacyPortalByTarget = new Map<string, StoredWorldNode>();
 
   for (const node of nodes) {
-    if (node.type !== 'canvasRef') continue;
+    if (node.type !== 'spacePreview' && node.type !== 'canvasRef') continue;
     const targetCanvasId = (
       node.data as { targetCanvasId?: unknown } | undefined
     )?.targetCanvasId;
     if (typeof targetCanvasId !== 'string' || targetCanvasId.length === 0) {
       throw new WorldPortalIntegrityError(
-        `Portal ${node.id} has no valid targetCanvasId`,
+        `World Space entry ${node.id} has no valid targetCanvasId`,
       );
     }
-    if (portalByTarget.has(targetCanvasId)) {
+    const targetMap =
+      node.type === 'spacePreview' ? previewByTarget : legacyPortalByTarget;
+    if (targetMap.has(targetCanvasId)) {
       throw new WorldPortalIntegrityError(
-        `World contains duplicate Portals for Canvas ${targetCanvasId}`,
+        `World contains duplicate ${node.type} nodes for Canvas ${targetCanvasId}`,
       );
     }
-    portalByTarget.set(targetCanvasId, node);
+    targetMap.set(targetCanvasId, node);
   }
 
-  const spaces = listCanvasDirEntries()
-    .filter((entry) => !portalByTarget.has(entry.id))
-    .sort((a, b) => a.id.localeCompare(b.id));
+  // `list()` promises no order, and slot allocation is positional, so the
+  // deterministic layout comes from sorting here rather than from a backend
+  // happening to scan in a stable order.
+  const members = (await spaces.list()).sort((a, b) =>
+    a.canvasId.localeCompare(b.canvasId),
+  );
+  const liveCanvasIds = new Set(members.map((member) => member.canvasId));
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const occupied: Rect[] = nodes.map((node) => {
     const position = absolutePosition(node, byId);
@@ -155,43 +160,66 @@ function planWorldPortalReconciliation(): WorldPortalReconciliationPlan {
     };
   });
 
-  const inputs: CanvasNodeCreateInput[] = spaces.map((space) => {
-    const position = findOpenPortalSlot(occupied);
+  const deleteNodeIds = nodes
+    .filter(
+      (node) =>
+        node.type === 'canvasRef' ||
+        (node.type === 'spacePreview' &&
+          typeof node.data?.targetCanvasId === 'string' &&
+          !liveCanvasIds.has(node.data.targetCanvasId)),
+    )
+    .map((node) => node.id as CanvasNodeId);
+
+  const inputs: CanvasNodeCreateInput[] = members.flatMap((member) => {
+    if (previewByTarget.has(member.canvasId)) return [];
+    const legacy = legacyPortalByTarget.get(member.canvasId);
+    const position = legacy?.position ?? findOpenPortalSlot(occupied);
+    const size = {
+      width: dimension(legacy?.style?.width, PORTAL_WIDTH),
+      height: dimension(legacy?.style?.height, PORTAL_HEIGHT),
+    };
     occupied.push({
       ...position,
-      width: PORTAL_WIDTH,
-      height: PORTAL_HEIGHT,
+      ...size,
     });
-    return {
-      id: createId('node') as CanvasNodeId,
-      nodeType: 'canvasRef' as const,
-      position,
-      size: { width: PORTAL_WIDTH, height: PORTAL_HEIGHT },
-      data: {
-        targetCanvasId: space.id,
+    return [
+      {
+        id: (legacy?.id ?? createId('node')) as CanvasNodeId,
+        nodeType: 'spacePreview' as const,
+        position,
+        size,
+        data: {
+          targetCanvasId: member.canvasId,
+        },
+        selectOnCreate: false,
       },
-      selectOnCreate: false,
-    };
+    ];
   });
 
-  return { worldCanvasId, nodes, inputs };
+  return { worldCanvasId, deleteNodeIds, inputs };
 }
 
 async function reconcileWorldPortalsOnce(): Promise<void> {
-  const { worldCanvasId, inputs } = planWorldPortalReconciliation();
-  if (inputs.length === 0) return;
+  const { worldCanvasId, deleteNodeIds, inputs } =
+    await planWorldPortalReconciliation();
+  if (inputs.length === 0 && deleteNodeIds.length === 0) return;
 
-  const command: CanvasCommand = {
-    type: 'CREATE_NODES',
-    nodes: inputs,
-  };
+  const commands: CanvasCommand[] = [];
+  if (deleteNodeIds.length > 0) {
+    commands.push({ type: 'DELETE_NODES', nodeIds: deleteNodeIds });
+  }
+  if (inputs.length > 0) {
+    commands.push({ type: 'CREATE_NODES', nodes: inputs });
+  }
   const result = await executeOnServer({
     canvasId: worldCanvasId,
-    commands: [command],
+    commands,
     originator: { source: 'system' },
   });
-  if (!result.results[0]?.applied) {
-    throw new WorldPortalIntegrityError('Failed to create canonical Portals');
+  if (result.results.some((commandResult) => !commandResult.applied)) {
+    throw new WorldPortalIntegrityError(
+      'Failed to reconcile canonical Space previews',
+    );
   }
 }
 

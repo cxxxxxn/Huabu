@@ -2,14 +2,7 @@
 // Licensed under the MIT license.
 
 import clsx from 'clsx';
-import {
-  ArrowLeft,
-  ArrowRight,
-  Bot,
-  Columns2,
-  TableOfContents,
-  X,
-} from 'lucide-react';
+import { ArrowLeft, ArrowRight, TableOfContents, X } from 'lucide-react';
 import {
   useCallback,
   useEffect,
@@ -29,10 +22,19 @@ import {
   isExpandedNodeNavigationBlocked,
   type ExpandedNodeDirection,
 } from './navigation';
+import { PreviewSearchAdapterProvider } from './PreviewSearchAdapterContext';
 import { useSwipeNavigation } from './swipeNavigation';
 import useCanvasStore from '../../../store/canvasStore.ts';
 import { useChatStore } from '../../../store/chatStore.ts';
-import { usePreviewStore } from '../../../store/previewStore.ts';
+import {
+  closeActivePreviewNode,
+  openPreviewNode,
+} from '../../../store/previewWorkspace/actions.ts';
+import { nodePreviewViewKey } from '../../../store/previewWorkspace/scrollMemory.ts';
+import {
+  selectActiveNodeId,
+  usePreviewWorkspaceStore,
+} from '../../../store/previewWorkspace/store.ts';
 import { Button } from '../../Common/Button.tsx';
 import { DropdownMenu, DropdownMenuItem } from '../../Common/DropdownMenu.tsx';
 import { Input } from '../../Common/Input.tsx';
@@ -42,13 +44,30 @@ import { PreviewHeaderSlotContext } from '../../Nodes/PreviewHeaderSlot.tsx';
 import type { Node } from '@xyflow/react';
 
 /* ------------------------------------------------------------------ */
-/*  ExpandedNodePanel – inline panel that replaces or sits beside     */
-/*  the canvas.                                 */
+/*  ExpandedNodePanel – inline panel that sits beside the canvas.      */
 /* ------------------------------------------------------------------ */
 
 type ExpandedNodePanelProps = {
-  isChatCollapsed?: boolean;
-  onToggleChat?: () => void;
+  /**
+   * Node to show. Omitted by the single-panel layout, which falls back to
+   * the focused group's active tab.
+   */
+  nodeId?: string;
+  /** Closes this instance; defaults to closing the focused group's tab. */
+  onClose?: () => void;
+  /** Reports a persistent node mutation to the owning preview surface. */
+  onCommit?: () => void;
+  /** One-shot request to focus this tab's editable node surface. */
+  nodeFocusRequestNonce?: number;
+  onNodeFocusRequestHandled?: (nonce: number) => void;
+  /** Uses the compact chrome shared by Preview Workspace renderers. */
+  embedded?: boolean;
+  /**
+   * Whether this instance owns the window-level shortcuts. With two panes
+   * mounted only the focused group's may, or Escape would close both
+   * (§14, leak L10).
+   */
+  hasFocusPriority?: boolean;
 };
 
 type ConnectedNodeMenuProps = {
@@ -217,31 +236,27 @@ const ConnectedNodeMenu = ({
 };
 
 export const ExpandedNodePanel = ({
-  isChatCollapsed,
-  onToggleChat,
-}: ExpandedNodePanelProps) => {
+  nodeId,
+  onClose,
+  onCommit,
+  nodeFocusRequestNonce,
+  onNodeFocusRequestHandled,
+  embedded = false,
+  hasFocusPriority = true,
+}: ExpandedNodePanelProps = {}) => {
   const { t } = useTranslation();
   // Canvas Store State
-  const expandedNodeId = useCanvasStore((s) => s.expandedNodeId);
-  const canvasExpandMode = useCanvasStore((s) => s.expandMode);
-  const closeExpandedCanvas = useCanvasStore((s) => s.closeExpanded);
-  const setCanvasExpandMode = useCanvasStore((s) => s.setExpandMode);
+  const focusedGroupNodeId = usePreviewWorkspaceStore(selectActiveNodeId);
+  const expandedNodeId = nodeId ?? focusedGroupNodeId;
+  const closeExpandedCanvas = onClose ?? closeActivePreviewNode;
   const nodes = useCanvasStore((s) => s.nodes);
   const edges = useCanvasStore((s) => s.edges);
-  const openExpandedCanvas = useCanvasStore((s) => s.openExpanded);
-  const selectCanvasNodes = useCanvasStore((s) => s.selectNodes);
+  const canvasId = useCanvasStore((s) => s.canvasId);
   const updateNodeData = useCanvasStore((s) => s.updateNodeData);
   // Routed through `tryRename` so a sibling-label collision triggers the
   // shared alert + revert flow (same path used by the layer tree and
   // FrameNode's inline label editor).
   const tryRename = useCanvasStore((s) => s.tryRename);
-
-  // Preview Store State
-  const previewType = usePreviewStore((s) => s.previewType);
-  const previewData = usePreviewStore((s) => s.previewData);
-  const closePreview = usePreviewStore((s) => s.closePreview);
-  const previewExpandMode = usePreviewStore((s) => s.expandMode);
-  const setPreviewExpandMode = usePreviewStore((s) => s.setExpandMode);
 
   const node = useMemo(() => {
     if (!expandedNodeId) return null;
@@ -304,15 +319,13 @@ export const ExpandedNodePanel = ({
     useState<ExpandedNodeDirection | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  const selectNeighbor = useCallback(
-    (nodeId: string) => {
-      setOpenNeighborDirection(null);
-      openExpandedCanvas(nodeId);
-      selectCanvasNodes([nodeId]);
-      panelRef.current?.focus({ preventScroll: true });
-    },
-    [openExpandedCanvas, selectCanvasNodes],
-  );
+  const selectNeighbor = useCallback((nodeId: string) => {
+    setOpenNeighborDirection(null);
+    // Connected-node navigation browses, so it reuses the group's
+    // inspection slot rather than appending a tab (§9.2).
+    openPreviewNode(nodeId, { transient: true });
+    panelRef.current?.focus({ preventScroll: true });
+  }, []);
 
   // Shared by the arrow shortcuts and the touch swipe. Returns whether the
   // direction had anywhere to go, so callers can leave the input untouched.
@@ -335,60 +348,21 @@ export const ExpandedNodePanel = ({
     setOpenNeighborDirection(null);
   }, [expandedNodeId]);
 
-  // Priority: Preview > Node
-  // If preview is open, show it. Otherwise show node (if any).
-  const isPreview = !!(previewType && previewData);
-  const isNode = !!(expandedNodeId && node);
-
-  // Handling conflicts:
-  // If preview is newly opened, we want to ensure canvas expand is closed?
-  // Probably better handled at the trigger site (the component that opens
-  // the preview). Here we just render based on priority.
-
   const activeItem = useMemo(() => {
-    if (isPreview && previewType && previewData) {
-      return {
-        type: previewType,
-        data: previewData,
-        readOnly: true,
-        isNode: false,
-        expandMode: previewExpandMode,
-        close: closePreview,
-        setMode: setPreviewExpandMode,
-      };
-    }
-    if (isNode && node) {
-      return {
-        type: node.type || 'text',
-        data: node.data as Record<string, unknown>,
-        readOnly: false,
-        isNode: true,
-        expandMode: canvasExpandMode,
-        close: closeExpandedCanvas,
-        setMode: setCanvasExpandMode,
-      };
-    }
-    return null;
-  }, [
-    isPreview,
-    previewType,
-    previewData,
-    previewExpandMode,
-    closePreview,
-    setPreviewExpandMode,
-    isNode,
-    node,
-    canvasExpandMode,
-    closeExpandedCanvas,
-    setCanvasExpandMode,
-  ]);
+    if (!expandedNodeId || !node) return null;
+    return {
+      type: node.type || 'text',
+      data: node.data as Record<string, unknown>,
+      close: closeExpandedCanvas,
+    };
+  }, [expandedNodeId, node, closeExpandedCanvas]);
 
   // If the node was removed while expanded, close the panel.
   useEffect(() => {
-    if (expandedNodeId && !node && !isPreview) {
+    if (expandedNodeId && !node) {
       closeExpandedCanvas();
     }
-  }, [closeExpandedCanvas, expandedNodeId, node, isPreview]);
+  }, [closeExpandedCanvas, expandedNodeId, node]);
 
   // Global Escape key handler.
   // Bubble phase (no capture flag) so child components (e.g. inline editor menus)
@@ -396,14 +370,14 @@ export const ExpandedNodePanel = ({
   // panel. Note: Escape inside a cross-origin iframe won't reach this handler
   // due to browser security boundaries – that's an acceptable limitation.
   useEffect(() => {
-    if (!activeItem) return;
+    if (!activeItem || !hasFocusPriority) return;
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         activeItem.close();
         return;
       }
-      if (!activeItem.isNode || isExpandedNodeNavigationBlocked(e.target)) {
+      if (isExpandedNodeNavigationBlocked(e.target)) {
         return;
       }
 
@@ -419,7 +393,7 @@ export const ExpandedNodePanel = ({
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activeItem, navigateDirection]);
+  }, [activeItem, navigateDirection, hasFocusPriority]);
 
   // Scroll container of the preview body. Stored in component state
   // (not a plain ref) so that mounting the div triggers a re-render —
@@ -436,8 +410,7 @@ export const ExpandedNodePanel = ({
   // instead of paying for a non-passive touchmove listener.
   useSwipeNavigation(
     previewBodyEl,
-    activeItem?.isNode &&
-      (incomingNeighbors.length > 0 || outgoingNeighbors.length > 0)
+    activeItem && (incomingNeighbors.length > 0 || outgoingNeighbors.length > 0)
       ? navigateDirection
       : undefined,
   );
@@ -461,12 +434,9 @@ export const ExpandedNodePanel = ({
   // whenever we're not actively editing — covers external renames
   // (e.g. via the layer tree) and switches between expanded nodes.
   const liveLabel = useMemo(() => {
-    if (isPreview && previewData)
-      return typeof previewData.label === 'string' ? previewData.label : '';
-    if (isNode && node)
-      return typeof node.data.label === 'string' ? node.data.label : '';
-    return '';
-  }, [isPreview, previewData, isNode, node]);
+    if (!node) return '';
+    return typeof node.data.label === 'string' ? node.data.label : '';
+  }, [node]);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [draftTitle, setDraftTitle] = useState(liveLabel);
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -486,7 +456,7 @@ export const ExpandedNodePanel = ({
   // so an unsubmitted draft never leaks onto the next node's title.
   useEffect(() => {
     setIsEditingTitle(false);
-  }, [expandedNodeId, previewType]);
+  }, [expandedNodeId]);
 
   // Listen for text selection inside the panel and auto-attach as pending
   const handleSelectionChange = useCallback(() => {
@@ -528,18 +498,16 @@ export const ExpandedNodePanel = ({
     document.addEventListener('selectionchange', handleSelectionChange);
     return () => {
       document.removeEventListener('selectionchange', handleSelectionChange);
-      // Clear selection attachment when panel unmounts or item changes
-      useChatStore.getState().setSelectionAttachment(null);
+      const chat = useChatStore.getState();
+      if (chat.selectionAttachment?.originNodeId === expandedNodeId) {
+        chat.setSelectionAttachment(null);
+      }
     };
-  }, [handleSelectionChange]);
+  }, [expandedNodeId, handleSelectionChange]);
 
   if (!activeItem) return null;
 
-  const isReplace = activeItem.expandMode === 'replace';
-
-  // Inline rename is available only when the panel is hosting a real
-  // canvas node (previews are intentionally read-only).
-  const canEditTitle = activeItem.isNode && !!expandedNodeId;
+  const canEditTitle = !!expandedNodeId;
   const commitTitle = () => {
     if (!canEditTitle || !expandedNodeId) {
       setIsEditingTitle(false);
@@ -553,22 +521,16 @@ export const ExpandedNodePanel = ({
       return;
     }
     void tryRename('node', expandedNodeId, next).then((ok) => {
-      if (!ok) setDraftTitle(liveLabel);
+      if (ok) onCommit?.();
+      else setDraftTitle(liveLabel);
     });
     setIsEditingTitle(false);
   };
 
   // Search node id — the find bar's scope dispatcher (see
   // `useGlobalSearchHotkey`) requires a non-empty value to open the
-  // in-preview find bar. Canvas-node previews always have one;
-  // free-floating previews (e.g. raw file preview) may not, in which
-  // case `previewNodeId` falls back to `''` and Cmd+F routes to the
-  // canvas-wide search overlay instead of the in-preview bar.
-  const previewNodeId = (() => {
-    if (activeItem.isNode && expandedNodeId) return expandedNodeId;
-    const id = previewData?.nodeId;
-    return typeof id === 'string' ? id : '';
-  })();
+  // in-preview find bar.
+  const previewNodeId = expandedNodeId ?? '';
 
   return (
     <div
@@ -576,18 +538,18 @@ export const ExpandedNodePanel = ({
       tabIndex={-1}
       data-search-scope="node"
       data-search-node-id={previewNodeId}
-      className="border-edge-default bg-surface flex h-full w-full flex-col overflow-hidden border-l"
+      className={`bg-surface flex h-full w-full flex-col overflow-hidden ${embedded ? '' : 'border-edge-default border-l'}`}
     >
       {/* Header bar */}
-      <div className="border-edge-default bg-surface flex h-12 shrink-0 items-center justify-between gap-3 border-b px-3">
-        {/* Left: node identity and node-specific actions, followed by
-            connected-node navigation. Content-sized so short
-            labels hug their text — the title region must not stretch,
-            otherwise the trailing divider gets pushed far away from
-            the action group and the header reads as having a giant
-            empty middle. */}
-        <div className="flex min-w-0 items-center gap-2">
-          {activeItem.isNode && connectedNodeGroups.length > 0 && (
+      <div
+        data-testid="expanded-node-header"
+        className={`bg-surface flex shrink-0 items-center justify-between ${embedded ? 'h-9 gap-2 px-2' : 'border-edge-default h-12 gap-3 border-b px-3'}`}
+      >
+        {/* Left: connected-node navigation and rename editing. The workspace
+          tab already shows node identity, so embedded previews expose an
+          icon until editing begins instead of repeating the title. */}
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          {connectedNodeGroups.length > 0 && (
             <ConnectedNodeMenu
               groups={connectedNodeGroups}
               open={openNeighborDirection !== null}
@@ -607,7 +569,7 @@ export const ExpandedNodePanel = ({
             />
           )}
 
-          <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
+          <div className="flex min-w-0 flex-1 items-center gap-2 text-sm font-medium">
             {canEditTitle && isEditingTitle ? (
               <Input
                 ref={titleInputRef}
@@ -632,96 +594,60 @@ export const ExpandedNodePanel = ({
                   }
                 }}
               />
-            ) : (
-              <span
+            ) : canEditTitle ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                title={t('node.rename')}
+                aria-label={t('node.rename')}
+                tooltipPlacement="bottom"
+                tooltipWrapperClassName="inline-flex min-w-0 max-w-full"
                 className={clsx(
-                  'text-fg-muted max-w-lg truncate rounded border border-transparent px-1 py-0.5',
-                  canEditTitle && 'hover:text-fg-default cursor-text',
+                  'hover:text-fg-default max-w-full cursor-text justify-start truncate rounded border border-transparent py-0.5',
+                  embedded
+                    ? 'text-fg-subtle hover:bg-hover px-1.5 text-xs font-normal'
+                    : 'text-fg-muted px-1 text-sm font-medium',
                 )}
-                title={canEditTitle ? t('node.rename') : undefined}
-                {...(canEditTitle
-                  ? {
-                      role: 'button' as const,
-                      tabIndex: 0,
-                      onClick: () => setIsEditingTitle(true),
-                      onKeyDown: (e: ReactKeyboardEvent) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          setIsEditingTitle(true);
-                        }
-                      },
-                    }
-                  : {})}
+                onClick={() => setIsEditingTitle(true)}
               >
                 {liveLabel || t('node.untitled')}
-              </span>
-            )}
-            {activeItem.readOnly && (
-              <span className="bg-bg-default text-fg-muted rounded px-1.5 py-0.5 text-xs uppercase">
-                {t('node.preview')}
+              </Button>
+            ) : (
+              <span className="text-fg-muted max-w-lg truncate px-1 py-0.5">
+                {liveLabel || t('node.untitled')}
               </span>
             )}
           </div>
         </div>
 
         {/* Right: node-specific actions followed by view-level controls. */}
-        <div className="text-fg-muted flex items-center gap-1">
+        <div className="text-fg-muted flex shrink-0 items-center gap-1">
           <div
             ref={setHeaderSlotEl}
             className="peer flex items-center gap-1 empty:hidden"
           />
-          <div
-            aria-hidden="true"
-            className="bg-edge-default mx-1 h-5 w-px peer-empty:hidden"
-          />
+          {!embedded && (
+            <div
+              aria-hidden="true"
+              className="bg-edge-default mx-1 h-5 w-px peer-empty:hidden"
+            />
+          )}
 
-          {isReplace && onToggleChat && (
+          {!embedded && (
             <Button
               variant="ghost"
               iconOnly
-              size="md"
-              className={
-                !isChatCollapsed
-                  ? 'text-info bg-info-bg enabled:hover:bg-info-bg-hover'
-                  : ''
-              }
-              title={isChatCollapsed ? t('chat.open') : t('chat.close')}
+              size="sm"
+              title={t('actions.close')}
               tooltipPlacement="bottom"
-              aria-label={
-                isChatCollapsed ? t('chat.openPanel') : t('chat.closePanel')
-              }
-              aria-pressed={!isChatCollapsed}
-              onClick={onToggleChat}
+              onClick={(e) => {
+                e.stopPropagation();
+                activeItem.close();
+              }}
             >
-              <Bot />
+              <X />
             </Button>
           )}
-
-          <Button
-            variant="ghost"
-            iconOnly
-            size="sm"
-            className={!isReplace ? 'text-fg-default bg-bg-default' : ''}
-            title={isReplace ? t('node.splitView') : t('node.fullView')}
-            tooltipPlacement="bottom"
-            onClick={() => activeItem.setMode(isReplace ? 'split' : 'replace')}
-          >
-            <Columns2 />
-          </Button>
-
-          <Button
-            variant="ghost"
-            iconOnly
-            size="sm"
-            title={t('actions.close')}
-            tooltipPlacement="bottom"
-            onClick={(e) => {
-              e.stopPropagation();
-              activeItem.close();
-            }}
-          >
-            <X />
-          </Button>
         </div>
       </div>
 
@@ -730,25 +656,37 @@ export const ExpandedNodePanel = ({
           preview document underneath fully visible instead of
           pushing it down with an inline find row. */}
       <div ref={setPreviewBodyEl} className="relative flex-1 overflow-hidden">
-        {/* In-preview find bar — renders nothing unless search scope
-            is `'node'`. Wires the highlight walk to the body element
-            (via state-as-ref) so only the visible preview gets
-            `::highlight()` ranges. */}
-        <InPreviewSearchBar scopeEl={previewBodyEl} />
-        <PreviewHeaderSlotContext.Provider value={headerSlotValue}>
-          <NodePreviewContent
-            key={expandedNodeId ?? previewType}
-            id={expandedNodeId ?? undefined}
-            type={activeItem.type}
-            data={activeItem.data}
-            readOnly={activeItem.readOnly}
-            onDataChange={
-              activeItem.isNode && expandedNodeId
-                ? (patch) => updateNodeData(expandedNodeId, patch)
-                : undefined
-            }
-          />
-        </PreviewHeaderSlotContext.Provider>
+        <PreviewSearchAdapterProvider>
+          {/* In-preview find bar — renders nothing unless search scope
+              is `'node'`. Wires the highlight walk to the body element
+              (via state-as-ref) so only the visible preview gets
+              `::highlight()` ranges. */}
+          <InPreviewSearchBar scopeEl={previewBodyEl} nodeId={expandedNodeId} />
+          <PreviewHeaderSlotContext.Provider value={headerSlotValue}>
+            <NodePreviewContent
+              key={expandedNodeId}
+              id={expandedNodeId ?? undefined}
+              scrollViewKey={
+                canvasId && expandedNodeId
+                  ? nodePreviewViewKey(canvasId, expandedNodeId)
+                  : undefined
+              }
+              type={activeItem.type}
+              data={activeItem.data}
+              readOnly={false}
+              focusRequestNonce={nodeFocusRequestNonce}
+              onFocusRequestHandled={onNodeFocusRequestHandled}
+              onDataChange={
+                expandedNodeId
+                  ? (patch) => {
+                      updateNodeData(expandedNodeId, patch);
+                      onCommit?.();
+                    }
+                  : undefined
+              }
+            />
+          </PreviewHeaderSlotContext.Provider>
+        </PreviewSearchAdapterProvider>
       </div>
     </div>
   );

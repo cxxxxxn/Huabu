@@ -58,6 +58,7 @@ export type {
   ImageNodeData,
   AudioNodeData,
   FrameNodeData,
+  SpacePreviewNodeData,
   CanvasRefNodeData,
   FrameRefNodeData,
   NodeRefNodeData,
@@ -65,9 +66,12 @@ export type {
   FrameSizing,
   SketchNodeData,
   SketchStroke,
+  AgentBindingPolicy,
+  AgentLaunchOverrides,
   QuestionNodeData,
   QuestionNodeStatus,
   LabelSource,
+  SpaceInstructionFrameKind,
   NodeData,
 } from './node.js';
 
@@ -89,6 +93,7 @@ export {
   isAudioNode,
   isOfficeNode,
   isFrameNode,
+  isSpacePreviewNode,
   isCanvasRefNode,
   isFrameRefNode,
   isNodeRefNode,
@@ -96,6 +101,14 @@ export {
   isQuestionNode,
   getQuestionNodeStatus,
   normalizeOrigin,
+  classifySpaceInstructionFrameLabel,
+  classifySpaceInstructionFrame,
+  isAgentNode,
+  directAgentNodeIdsForFrame,
+  isPromptFrameLabel,
+  isPromptFrame,
+  isSkillFrameLabel,
+  isSkillFrame,
 } from './node.js';
 
 // Edge types

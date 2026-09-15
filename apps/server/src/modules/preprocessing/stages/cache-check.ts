@@ -17,7 +17,7 @@
  * when src is unchanged.
  */
 
-import type { CanvasStore } from '../../storage/canvas-store.js';
+import type { SpaceNodes } from '../../storage/index.js';
 import type {
   PipelineContext,
   PreprocessDiagnostic,
@@ -34,13 +34,13 @@ export type CacheCheckResult = { hit: boolean };
  *
  * Callers should `return project(...)` immediately when this returns `true`.
  */
-export function tryCacheShortCircuit(
+export async function tryCacheShortCircuit(
   request: PreprocessNodeRequest,
   resolved: ResolvedInput,
   ctx: PipelineContext,
   diagnostics: PreprocessDiagnostic[],
-  store: CanvasStore,
-): boolean {
+  nodes: SpaceNodes,
+): Promise<boolean> {
   if (request.options?.force) return false;
   if (request.nodeType !== 'web' && request.nodeType !== 'pdf') return false;
 
@@ -52,7 +52,15 @@ export function tryCacheShortCircuit(
       : resolved.artifactUri;
   if (!targetSrc) return false;
 
-  const existing = store.readNode(request.nodeId);
+  // Remote PDF URLs pre-date canvas-local PDF snapshots. Let them pass
+  // through Extract once so the fetched bytes can be stored in BlobStore and
+  // `src` migrated to an artifact key. Once migrated, normal cache reuse
+  // resumes because the source is no longer remote.
+  if (request.nodeType === 'pdf' && /^https?:\/\//i.test(targetSrc)) {
+    return false;
+  }
+
+  const existing = (await nodes.read(request.nodeId))?.record ?? null;
   if (
     !existing ||
     existing.content.length === 0 ||

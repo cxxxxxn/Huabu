@@ -18,7 +18,9 @@ import {
   ConversationIntegrityError,
   conversationRequestScope,
   conversationViewFromWorldReference,
+  filterClientOwnedQuestionPatch,
   patchConversationOwnerNode,
+  resolveConversationAgentBinding,
   shouldComposeConversationOwner,
   validateConversationView,
 } from './conversationOwner';
@@ -77,14 +79,55 @@ beforeEach(() => {
     edges: [],
   });
   useChatStore.setState({
-    threadId: 'thread-world',
-    viewingQuestionThread: null,
-    loadingThreadIds: new Set(),
-    questionReplayByCanvas: {},
+    threadsById: {},
   });
 });
 
 describe('conversation owner routing', () => {
+  it('uses the durable owner binding when a refreshed send still has the cache default', () => {
+    const externalBinding = {
+      kind: 'external' as const,
+      alias: 'Copilot',
+      profileId: 'profile-copilot',
+    };
+
+    expect(
+      resolveConversationAgentBinding(
+        { agentBinding: externalBinding },
+        { kind: 'internal' },
+      ),
+    ).toEqual(externalBinding);
+    expect(
+      resolveConversationAgentBinding(undefined, { kind: 'internal' }),
+    ).toEqual({ kind: 'internal' });
+  });
+
+  it('limits fixed Agent Node client patches to viewed state', () => {
+    expect(
+      filterClientOwnedQuestionPatch(
+        { agentBindingPolicy: 'fixed' },
+        {
+          content: 'Prompt',
+          status: 'running',
+          errorMessage: undefined,
+          viewed: false,
+        },
+      ),
+    ).toEqual({ viewed: false });
+    expect(
+      filterClientOwnedQuestionPatch(
+        { agentBindingPolicy: 'fixed' },
+        { status: 'done' },
+      ),
+    ).toBeNull();
+    expect(
+      filterClientOwnedQuestionPatch(
+        { agentBindingPolicy: 'selectable' },
+        { status: 'done' },
+      ),
+    ).toEqual({ status: 'done' });
+  });
+
   it('routes headless requests to the source owner without World selection', () => {
     expect(conversationRequestScope(worldView, 'canvas-world')).toEqual({
       canvasId: 'canvas-source',
@@ -118,7 +161,7 @@ describe('conversation owner routing', () => {
     });
   });
 
-  it('keeps ordinary same-Canvas question lifecycle updates local', async () => {
+  it('persists ordinary same-Canvas question lifecycle updates', async () => {
     const view: AgentConversationView = {
       presentationAnchor: {
         canvasId: 'canvas-source',
@@ -145,7 +188,15 @@ describe('conversation owner routing', () => {
     await patchConversationOwnerNode(view, { status: 'running' });
 
     expect(useCanvasStore.getState().nodes[0]?.data.status).toBe('running');
-    expect(postCanvasExecute).not.toHaveBeenCalled();
+    expect(postCanvasExecute).toHaveBeenCalledWith('canvas-source', {
+      commands: [
+        {
+          type: 'MERGE_NODE_DATA',
+          patches: [{ nodeId: 'node-source', patch: { status: 'running' } }],
+        },
+      ],
+      originator: { source: 'ui' },
+    });
   });
 
   it('rejects a resolved source question that has no thread', () => {
@@ -169,6 +220,12 @@ describe('conversation owner routing', () => {
   it('does not compose over authored source content with stale idle status', () => {
     expect(
       shouldComposeConversationOwner(
+        { status: 'idle', content: 'Existing question' },
+        false,
+      ),
+    ).toBe(false);
+    expect(
+      shouldComposeConversationOwner(
         { status: 'idle', hasAuthoredContent: true },
         true,
       ),
@@ -178,6 +235,9 @@ describe('conversation owner routing', () => {
         { status: 'idle', hasAuthoredContent: false },
         true,
       ),
+    ).toBe(true);
+    expect(
+      shouldComposeConversationOwner({ status: 'idle', content: '' }, false),
     ).toBe(true);
   });
 
@@ -260,71 +320,6 @@ describe('conversation owner routing', () => {
 
     expect(useCanvasStore.getState().version).toBe(2);
     expect(useCanvasStore.getState().nodes[0]?.data.status).toBe('running');
-  });
-
-  it('switches foreground owners without stopping an existing run', () => {
-    useChatStore
-      .getState()
-      .openQuestionThread(worldView, { kind: 'internal' }, 'canvas-world');
-    useChatStore.getState().setThreadLoading('thread-source', true);
-
-    const second: AgentConversationView = {
-      presentationAnchor: {
-        canvasId: 'canvas-world',
-        nodeId: 'node-ref-second',
-      },
-      conversationOwner: {
-        canvasId: 'canvas-second',
-        nodeId: 'node-second',
-        threadId: 'thread-second',
-      },
-    };
-    useChatStore
-      .getState()
-      .openQuestionThread(second, { kind: 'internal' }, 'canvas-world');
-
-    const state = useChatStore.getState();
-    expect(state.threadId).toBe('thread-second');
-    expect(state.viewingQuestionThread?.conversationOwner).toEqual(
-      second.conversationOwner,
-    );
-    expect(state.loadingThreadIds.has('thread-source')).toBe(true);
-  });
-
-  it('preserves the owner Canvas chat when moving a headless replay into it', () => {
-    useChatStore.setState({
-      threadMap: {
-        'canvas-world': 'thread-world',
-        'canvas-source': 'thread-source-canvas',
-      },
-      bindingMap: {
-        'canvas-world': { kind: 'internal' },
-        'canvas-source': {
-          kind: 'external',
-          profileId: 'profile-source',
-          alias: 'Source Agent',
-        },
-      },
-      lastAction: 'operate',
-    });
-    useChatStore
-      .getState()
-      .openQuestionThread(worldView, { kind: 'internal' }, 'canvas-world');
-
-    useChatStore
-      .getState()
-      .openQuestionThreadInOwnerCanvas(worldView, { kind: 'internal' });
-    useChatStore.getState().switchToCanvas('canvas-source');
-    useChatStore.getState().closeQuestionThread('canvas-source');
-
-    const state = useChatStore.getState();
-    expect(state.threadId).toBe('thread-source-canvas');
-    expect(state.threadMap['canvas-source']).toBe('thread-source-canvas');
-    expect(state.agentBinding).toEqual({
-      kind: 'external',
-      profileId: 'profile-source',
-      alias: 'Source Agent',
-    });
   });
 
   it('serializes lifecycle writes for the same source owner', async () => {

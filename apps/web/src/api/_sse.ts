@@ -2,8 +2,7 @@
 // Licensed under the MIT license.
 
 /**
- * Server-Sent Events (SSE) parser shared by the agent and intent
- * streaming clients.
+ * Server-Sent Events (SSE) parser used by the agent streaming client.
  *
  * The protocol used by Huabu endpoints is:
  *
@@ -50,7 +49,11 @@ export async function readSSEStream<T = Record<string, unknown>>(
 
       for (const part of parts) {
         const event = parseSSEChunk<T>(part);
-        if (event) onEvent(event);
+        if (event) {
+          onEvent(event);
+        } else if (part.includes('event:') || part.includes('data:')) {
+          throw new Error('Malformed SSE event');
+        }
       }
     }
   } finally {

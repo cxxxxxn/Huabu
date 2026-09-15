@@ -33,12 +33,15 @@ import { imageSize } from 'image-size';
 
 import {
   createId,
+  interactiveViewDefinitionV1Schema,
+  interactiveViewRevision,
   type CanvasCommand,
   type CanvasCommandFailureReason,
   type CanvasEdgeId,
   type CanvasNodeId,
   type ExecuteConflict,
   type ExecuteOriginator,
+  type InteractiveViewJsonValue,
 } from '@huabu/shared';
 import {
   applySharedPostEffectsFromWriteResult,
@@ -53,26 +56,30 @@ import {
   type Delta,
 } from '@huabu/shared/canvas-engine';
 
-import { runCanvasPersistenceTransaction } from './canvas-persistence-transaction.js';
 import { publishCanvasUpdate } from './canvas-sync.js';
 import { importForeignNodeSources } from './import-node-src.js';
 import {
   assertWorldPortalMutationsAllowed,
   assertWorldPortalResultAllowed,
+  readLiveSpaceIds,
 } from './world-portal-policy.js';
 import { getLogger } from '../../utils/logger.js';
+import { getAgentChangeReviewConfig } from '../agent/change-review-config.js';
+import { isLabelProtected } from '../preprocessing/label-policy.js';
 import {
-  canvasBlobs,
-  getCanvasStore,
+  isWorldCanvasId,
+  space,
   withCanvasMutex,
-  applyNodeUpdate,
   type BlobScope,
   type CanvasFile,
-  type CanvasStore,
   type DeltaLogEntry,
   type NodeContent,
-  type UpdateNodeOutcome,
+  type NodeSnapshot,
+  type SpaceNodeMutation,
 } from '../storage/index.js';
+
+/** Reused for every Space that cannot hold a Portal, which is all but one. */
+const EMPTY_CANVAS_IDS: ReadonlySet<string> = new Set<string>();
 
 const log = getLogger('canvas.executor');
 
@@ -81,23 +88,6 @@ function insertedNodeIds(deltas: readonly Delta[]): Set<string> {
     deltas.flatMap((delta) =>
       delta.type === 'INSERT_NODE' ? [delta.node.id] : [],
     ),
-  );
-}
-
-/** Executor persistence never accepts a partial/quiet sidecar outcome. */
-function requireNodeWrite(nodeId: string, outcome: UpdateNodeOutcome): void {
-  if (outcome.status === 'ok') return;
-  if (outcome.status === 'rejected') {
-    const detail =
-      outcome.result.reason === 'conflict'
-        ? `label conflicts with existing node "${outcome.result.conflictWith.filename}"`
-        : outcome.result.reason;
-    throw new Error(
-      `[canvas-executor] writeNode rejected ${nodeId}: ${detail}`,
-    );
-  }
-  throw new Error(
-    `[canvas-executor] writeNode did not commit ${nodeId}: ${outcome.status}`,
   );
 }
 
@@ -154,8 +144,8 @@ function stripNodesForCanvas(nodes: readonly CanvasNode[]): CanvasNode[] {
   });
 }
 
-function hydrateNodes(
-  store: CanvasStore,
+export function hydrateCanvasNodes(
+  records: ReadonlyMap<string, NodeSnapshot>,
   nodes: readonly CanvasNode[],
 ): CanvasNode[] {
   return nodes.map((node) => {
@@ -164,12 +154,7 @@ function hydrateNodes(
     const nodeType = typeof node.type === 'string' ? node.type : '';
     if (!MD_BACKED_NODE_TYPES.has(nodeType)) return { ...node };
 
-    let content: NodeContent | null = null;
-    try {
-      content = store.readNode(nodeId);
-    } catch {
-      content = null;
-    }
+    const content = records.get(nodeId)?.record ?? null;
     if (!content) return { ...node };
 
     const data: Record<string, unknown> = { ...(node.data ?? {}) };
@@ -237,6 +222,47 @@ function collectMergeConflicts(
             : {}),
           currentRev,
           ...(currentContent !== undefined ? { currentContent } : {}),
+        });
+      }
+    }
+  }
+  return conflicts;
+}
+
+export interface InteractiveViewConflict {
+  nodeId: string;
+  expectedRevision: string;
+  currentRevision: string;
+  currentState: InteractiveViewJsonValue;
+}
+
+function collectInteractiveViewConflicts(
+  commands: readonly CanvasCommand[],
+  prestateNodes: readonly CanvasNode[],
+): InteractiveViewConflict[] {
+  const byId = new Map(prestateNodes.map((node) => [node.id, node]));
+  const conflicts: InteractiveViewConflict[] = [];
+  for (const command of commands) {
+    if (command.type !== 'MERGE_NODE_DATA') continue;
+    for (const entry of command.patches) {
+      if (
+        entry.expectViewRev === undefined ||
+        !Object.prototype.hasOwnProperty.call(entry.patch, 'interactiveView')
+      ) {
+        continue;
+      }
+      const node = byId.get(entry.nodeId);
+      const parsed = interactiveViewDefinitionV1Schema.safeParse(
+        node?.data?.interactiveView,
+      );
+      if (!node || node.type !== 'web' || !parsed.success) continue;
+      const currentRevision = interactiveViewRevision(parsed.data);
+      if (entry.expectViewRev !== currentRevision) {
+        conflicts.push({
+          nodeId: entry.nodeId,
+          expectedRevision: entry.expectViewRev,
+          currentRevision,
+          currentState: parsed.data.state.value,
         });
       }
     }
@@ -349,7 +375,7 @@ async function aspectHeightForWidth(
   width: number,
 ): Promise<number | null> {
   try {
-    const dim = await readImageDimensions(canvasBlobs(canvasId), src);
+    const dim = await readImageDimensions(space(canvasId).artifacts, src);
     if (!dim?.width || !dim?.height || dim.width <= 0 || dim.height <= 0) {
       return null;
     }
@@ -568,6 +594,8 @@ export interface ExecuteOnServerInput {
    * (ACP agents) opts in so the built-in agent path pays no cost.
    */
   computeChanges?: boolean;
+  /** Internal coordination hook; ordinary callers always publish. */
+  publish?: boolean;
 }
 
 export interface ExecuteOnServerOutput {
@@ -628,6 +656,7 @@ export interface ExecuteOnServerOutput {
    * caller reconciles from `currentContent` / `currentRev`.
    */
   conflicts?: ExecuteConflict[];
+  viewConflicts?: InteractiveViewConflict[];
 }
 
 export class CanvasNotFoundError extends Error {
@@ -652,7 +681,7 @@ export class CanvasNotFoundError extends Error {
 export async function executeOnServer(
   input: ExecuteOnServerInput,
 ): Promise<ExecuteOnServerOutput> {
-  const { canvasId, originator, runId } = input;
+  const { canvasId, originator } = input;
   let commands = preAssignIds(input.commands);
 
   // Normalize agent-authored `data.src` values into artifact keys BEFORE the
@@ -665,345 +694,429 @@ export async function executeOnServer(
   // writes to the same canvas. Idempotent for values that are already artifact
   // keys / `/api/` URLs / `data:` URIs.
   if (originator.source === 'agent') {
-    commands = await importForeignNodeSources(
-      getCanvasStore(canvasId),
-      canvasId,
-      commands,
-    );
+    commands = await importForeignNodeSources(canvasId, commands);
 
     // For image nodes with only width specified, calculate height from actual
     // image aspect ratio. This ensures correct proportions for all image sources.
     commands = await normalizeImageNodeSizes(canvasId, commands);
   }
 
-  return await withCanvasMutex(canvasId, async () => {
-    const store = getCanvasStore(canvasId);
-    const canvas = store.read();
-    if (!canvas) throw new CanvasNotFoundError(canvasId);
+  return await withCanvasMutex(canvasId, () =>
+    executeOnServerAlreadyLocked({ ...input, commands }),
+  );
+}
 
-    const fromVersion = canvas.version;
+/**
+ * Execute against a Canvas whose write mutex is already held by the caller.
+ *
+ * Cross-Canvas application services use this entry to keep both Canvas locks
+ * across a coordinated operation. Ordinary callers must use
+ * {@link executeOnServer}.
+ */
+export async function executeOnServerAlreadyLocked(
+  input: ExecuteOnServerInput,
+): Promise<ExecuteOnServerOutput> {
+  const { canvasId, originator, runId } = input;
+  let commands = [...input.commands];
 
-    // Hydrate per-node content from .md sidecars before the engine sees
-    // the prestate — handlers like MERGE_NODE_DATA need the current
-    // `data.content` to merge against, but topology never carries it.
-    const prestateNodes = hydrateNodes(
-      store,
-      canvas.state.nodes as CanvasNode[],
-    );
-    const prestateEdges = (canvas.state.edges ?? []) as CanvasEdge[];
+  const handle = space(canvasId);
+  const canvas = await handle.read();
+  if (!canvas) throw new CanvasNotFoundError(canvasId);
 
-    assertWorldPortalMutationsAllowed(
+  // Executor prestate is whole-Space work: every md-backed node in the
+  // topology needs its stored content before the engine sees it.
+  const records = await handle.nodes.list();
+
+  const fromVersion = canvas.version;
+
+  // Hydrate per-node content from .md sidecars before the engine sees
+  // the prestate — handlers like MERGE_NODE_DATA need the current
+  // `data.content` to merge against, but topology never carries it.
+  const prestateNodes = hydrateCanvasNodes(
+    records,
+    canvas.state.nodes as CanvasNode[],
+  );
+  const prestateEdges = (canvas.state.edges ?? []) as CanvasEdge[];
+
+  // Automatic preprocessing can arrive after an agent or user rename.
+  // Filter only its label fields at the actual commit, not at request time.
+  commands = commands.map((command) =>
+    command.type !== 'MERGE_NODE_DATA'
+      ? command
+      : {
+          ...command,
+          patches: command.patches.map((entry) => {
+            const node = prestateNodes.find(
+              (candidate) => candidate.id === entry.nodeId,
+            );
+            if (
+              entry.patch.labelSource !== 'auto' ||
+              !isLabelProtected(node?.data.labelSource, node?.data.label)
+            )
+              return entry;
+            const {
+              label: _label,
+              labelSource: _source,
+              ...patch
+            } = entry.patch;
+            return { ...entry, patch };
+          }),
+        },
+  );
+
+  // Only the World's rules consult it, and only the World can hold Portals,
+  // so an ordinary Space never pays for the catalogue read.
+  const liveCanvasIds = isWorldCanvasId(canvasId)
+    ? await readLiveSpaceIds()
+    : EMPTY_CANVAS_IDS;
+
+  assertWorldPortalMutationsAllowed(
+    canvasId,
+    commands,
+    prestateNodes,
+    originator.source,
+    liveCanvasIds,
+  );
+
+  if (originator.source === 'agent') {
+    // Order matters: fix explicit image resizes first (edits items in
+    // place), then let the merge pass append geometry for src-swaps that
+    // have no explicit resize. The two target disjoint node sets.
+    commands = await normalizeSetGeometryImageSizes(
       canvasId,
       commands,
       prestateNodes,
-      originator.source,
     );
-
-    if (originator.source === 'agent') {
-      // Order matters: fix explicit image resizes first (edits items in
-      // place), then let the merge pass append geometry for src-swaps that
-      // have no explicit resize. The two target disjoint node sets.
-      commands = await normalizeSetGeometryImageSizes(
-        canvasId,
-        commands,
-        prestateNodes,
-      );
-      commands = await normalizeMergeImageGeometry(
-        canvasId,
-        commands,
-        prestateNodes,
-      );
-    }
-
-    // Compare-and-swap pre-flight (agent writes only). A stale or
-    // never-read content rewrite mutates NOTHING — the whole batch is a
-    // no-op and the agent reconciles from the echoed `currentContent`.
-    // ui / system writes are trusted and skip the guard.
-    if (originator.source === 'agent') {
-      const conflicts = collectMergeConflicts(commands, prestateNodes);
-      if (conflicts.length > 0) {
-        const conflictIds = new Set(conflicts.map((c) => c.nodeId));
-        return {
-          canvasId,
-          fromVersion,
-          toVersion: fromVersion,
-          deltas: [],
-          results: commands.map((command) => ({
-            command,
-            applied: false,
-            ...(command.type === 'MERGE_NODE_DATA' &&
-            command.patches.some((p) => conflictIds.has(p.nodeId))
-              ? { reason: 'conflict' as const }
-              : {}),
-          })),
-          commands,
-          pendingEffects: {
-            mutatedNodes: [],
-            deletedNodeIds: [],
-            contentEditedNodeIds: [],
-            deferredFitFrameIds: [],
-          },
-          conflicts,
-        };
-      }
-    }
-
-    const { writeResult, commandResults, pendingEffects } =
-      executeCanvasCommands(
-        { source: originator.source, commands },
-        {
-          nodes: prestateNodes,
-          edges: prestateEdges,
-          canvasId,
-        },
-        { forceFitFrames: originator.source === 'agent' },
-      );
-
-    // Pure host-agnostic cleanups (edge handle reroute) — same path the
-    // web's `executeCommands` runs before its set().
-    const sharedOut = applySharedPostEffectsFromWriteResult(writeResult);
-    const finalNodes = writeResult.nodes;
-    const finalEdges = sharedOut.edges;
-    assertWorldPortalResultAllowed(canvasId, prestateNodes, finalNodes);
-
-    const deltas = diffCanvasState(
-      { nodes: prestateNodes, edges: prestateEdges },
-      { nodes: finalNodes, edges: finalEdges },
+    commands = await normalizeMergeImageGeometry(
+      canvasId,
+      commands,
+      prestateNodes,
     );
+  }
 
-    // Built once: id → final node, used to echo image dimensions back so
-    // agents can lay out follow-up nodes with exact geometry.
-    const finalById = new Map<string, CanvasNode>();
-    for (const node of finalNodes) finalById.set(node.id as string, node);
-
-    const results = commandResults.map((r) => {
-      const result: ExecuteOnServerOutput['results'][0] = {
-        command: r.command,
-        applied: r.applied,
-        ...(r.reason ? { reason: r.reason } : {}),
-      };
-
-      // Echo created node ids (+labels) so the agent can wire them up in a
-      // follow-up CONNECT_NODES / SET_NODE_PARENT call with the real,
-      // server-assigned ids instead of inventing ids that collide across
-      // runs. Image nodes also carry server-derived dimensions/src.
-      if (r.applied && r.command.type === 'CREATE_NODES') {
-        const nodes = r.command.nodes
-          .map((n) => {
-            const node = finalById.get(n.id as string);
-            if (!node) return null;
-            const style = (node.style ?? {}) as Record<string, unknown>;
-            const label = node.data?.label;
-            return {
-              nodeId: node.id as string,
-              ...(typeof label === 'string' ? { label } : {}),
-              width: typeof style.width === 'number' ? style.width : 0,
-              height: typeof style.height === 'number' ? style.height : 0,
-              ...(node.type === 'image' && typeof node.data?.src === 'string'
-                ? { src: node.data.src }
-                : {}),
-            };
-          })
-          .filter((n): n is NonNullable<typeof n> => n !== null);
-
-        if (nodes.length > 0) result.nodes = nodes;
-      } else if (r.applied && r.command.type === 'CONNECT_NODES') {
-        const edges = r.command.edges.flatMap((edge) =>
-          edge.id
-            ? [
-                {
-                  edgeId: edge.id,
-                  source: edge.source,
-                  target: edge.target,
-                },
-              ]
-            : [],
-        );
-        if (edges.length > 0) result.edges = edges;
-      } else if (r.applied && r.command.type === 'MERGE_NODE_DATA') {
-        // Echo final image dimensions when a MERGE rewrote an image src.
-        const nodes = r.command.patches
-          .filter((p) => typeof p.patch?.['src'] === 'string')
-          .map((p) => {
-            const node = finalById.get(p.nodeId);
-            if (node?.type !== 'image') return null;
-            const style = (node.style ?? {}) as Record<string, unknown>;
-            return {
-              nodeId: p.nodeId,
-              width: typeof style.width === 'number' ? style.width : 0,
-              height: typeof style.height === 'number' ? style.height : 0,
-              src: (node.data?.src as string) || '',
-            };
-          })
-          .filter((n): n is NonNullable<typeof n> => n !== null);
-
-        if (nodes.length > 0) result.nodes = nodes;
-      }
-
-      return result;
-    });
-
-    // Detect order-only mutations that `diffCanvasState` cannot see.
-    //
-    // `diffCanvasState` is id-keyed: it returns INSERT/DELETE/REPLACE rows
-    // by comparing id sets and per-id reference identity. Commands whose
-    // only effect is to reshuffle the nodes/edges array (today only
-    // `REORDER_NODES`, which rebuilds the array with the same refs in a
-    // new order) therefore emit zero structural deltas. Without this
-    // guard the no-op fast path below would skip persistence entirely,
-    // leaving the agent with `applied: true` while persisted topology
-    // is unchanged.
-    //
-    // We do NOT synthesise a delta — Phase A has no order-aware delta
-    // type, and cross-tab broadcast (M3) is not shipped yet. We just
-    // fall through to the persistence branch so topology and the
-    // delta-log version both reflect that something happened. Catch-up
-    // clients on M3 will see the version bump and need to refetch the
-    // full canvas; that's an acceptable Phase-A trade-off.
-    const orderChanged =
-      prestateNodes.length !== finalNodes.length ||
-      prestateEdges.length !== finalEdges.length ||
-      prestateNodes.some((n, i) => n.id !== finalNodes[i]?.id) ||
-      prestateEdges.some((e, i) => e.id !== finalEdges[i]?.id);
-
-    // No-op fast path. Returning early preserves the invariant that
-    // `toVersion === fromVersion` IFF no row was appended to the log.
-    if (deltas.length === 0 && !orderChanged) {
+  // Compare-and-swap pre-flight (agent writes only). A stale or
+  // never-read content rewrite mutates NOTHING — the whole batch is a
+  // no-op and the agent reconciles from the echoed `currentContent`.
+  // ui / system writes are trusted and skip the guard.
+  if (originator.source === 'agent') {
+    const conflicts = collectMergeConflicts(commands, prestateNodes);
+    if (conflicts.length > 0) {
+      const conflictIds = new Set(conflicts.map((c) => c.nodeId));
       return {
         canvasId,
         fromVersion,
         toVersion: fromVersion,
-        deltas,
-        results,
+        deltas: [],
+        results: commands.map((command) => ({
+          command,
+          applied: false,
+          ...(command.type === 'MERGE_NODE_DATA' &&
+          command.patches.some((p) => conflictIds.has(p.nodeId))
+            ? { reason: 'conflict' as const }
+            : {}),
+        })),
         commands,
         pendingEffects: {
-          mutatedNodes: pendingEffects.mutatedNodes,
-          deletedNodeIds: pendingEffects.deletedNodeIds,
-          contentEditedNodeIds: pendingEffects.contentEditedNodeIds,
-          deferredFitFrameIds: pendingEffects.deferredFitFrameIds,
+          mutatedNodes: [],
+          deletedNodeIds: [],
+          contentEditedNodeIds: [],
+          deferredFitFrameIds: [],
         },
+        conflicts,
       };
     }
+  }
 
-    const toVersion = fromVersion + 1;
-
-    // Persist .md sidecars first so topology never references a markdown
-    // file that does not exist on disk. The synchronous commit section is
-    // wrapped in a before-image rollback: if topology or delta-log persistence
-    // fails, the sidecars, record, and log prefix all return to `fromVersion`.
-    //
-    // `writeNode` throws `CanvasStoreIOError` on environmental failures
-    // (ENOSPC, EACCES, …); we deliberately do NOT catch it so the
-    // batch aborts before topology is mutated. The exception bubbles
-    // through `handleCanvasCommands` and surfaces as an `isError: true`
-    // tool result to the LLM (and as a 500 / error event upstream).
-    // Structural `conflict` / `not-found` results are programmer errors
-    // in the agent path (engine should have rejected them upstream and
-    // `strictRename` is rarely set for agent-authored labels); we throw
-    // a regular Error rather than letting the in-memory mutation drift
-    // away from disk.
-    // Pending effects preserve command order and can mention the same id in
-    // both collections (DELETE then CREATE, or mutate then DELETE). Persist
-    // only the effect matching the authoritative final topology so a
-    // re-created node is not written and then immediately unlinked.
-    const finalNodeIds = new Set(finalNodes.map((node) => node.id));
-    const mutatedNodesToPersist = pendingEffects.mutatedNodes.filter((node) =>
-      finalNodeIds.has(node.id),
+  const viewConflicts = collectInteractiveViewConflicts(
+    commands,
+    prestateNodes,
+  );
+  if (viewConflicts.length > 0) {
+    const conflictIds = new Set(
+      viewConflicts.map((conflict) => conflict.nodeId),
     );
-    const nodeIdsToDelete = pendingEffects.deletedNodeIds.filter(
-      (nodeId) => !finalNodeIds.has(nodeId),
-    );
-    const affectedNodeIds = new Set<string>([
-      ...mutatedNodesToPersist.map((node) => node.id),
-      ...nodeIdsToDelete,
-    ]);
-    const insertedIds = insertedNodeIds(deltas);
-    store.withValidatedNodeMutationTransaction(
-      { affectedNodeIds, insertedNodeIds: insertedIds },
-      () => {
-        runCanvasPersistenceTransaction({
-          canvasId,
-          affectedNodeIds,
-          nodeIdForFilename: (filename) => store.nodeIdForFilename(filename),
-          // Rollback restores exact record bytes without inferring a second
-          // tombstone transition; the enclosing transaction restores its
-          // captured process-local tombstone state after rollback completes.
-          resetRecordState: () => store.writeNodeMutationRollback(canvas),
-          commit: () => {
-            for (const node of mutatedNodesToPersist) {
-              const nodeContent = buildNodeContent(node);
-              if (!nodeContent) continue;
-              // Already inside `withCanvasMutex` (this whole batch holds the
-              // canvas lock), so use the non-locking core to avoid a
-              // re-entrant deadlock. The batch prestate CAS is the freshness
-              // guard.
-              const outcome = applyNodeUpdate(store, nodeContent.nodeId, {
-                apply: () => nodeContent,
-                strictRename: nodeContent['labelSource'] === 'user',
-              });
-              requireNodeWrite(nodeContent.nodeId, outcome);
-            }
-            for (const nodeId of nodeIdsToDelete) {
-              store.deleteNode(nodeId);
-            }
-
-            const slimNodes = stripNodesForCanvas(finalNodes);
-            const nextCanvas: CanvasFile = {
-              ...canvas,
-              version: toVersion,
-              state: {
-                ...canvas.state,
-                nodes: slimNodes,
-                edges: finalEdges,
-              },
-              updatedAt: Date.now(),
-            };
-            store.write(nextCanvas);
-            const logEntry: DeltaLogEntry = {
-              version: toVersion,
-              ts: Date.now(),
-              ...(runId ? { runId } : {}),
-              commands: commands as unknown[],
-              deltas: deltas as unknown[],
-              originator,
-            };
-            store.appendDeltaLogEntry(logEntry);
-          },
-        });
+    return {
+      canvasId,
+      fromVersion,
+      toVersion: fromVersion,
+      deltas: [],
+      results: commands.map((command) => ({
+        command,
+        applied: false,
+        ...(command.type === 'MERGE_NODE_DATA' &&
+        command.patches.some((patch) => conflictIds.has(patch.nodeId))
+          ? { reason: 'conflict' as const }
+          : {}),
+      })),
+      commands,
+      pendingEffects: {
+        mutatedNodes: [],
+        deletedNodeIds: [],
+        contentEditedNodeIds: [],
+        deferredFitFrameIds: [],
       },
+      viewConflicts,
+    };
+  }
+
+  const { writeResult, commandResults, pendingEffects } = executeCanvasCommands(
+    { source: originator.source, commands },
+    {
+      nodes: prestateNodes,
+      edges: prestateEdges,
+      canvasId,
+    },
+    { forceFitFrames: originator.source === 'agent' },
+  );
+
+  // Pure host-agnostic cleanups (edge handle reroute) — same path the
+  // web's `executeCommands` runs before its set().
+  const sharedOut = applySharedPostEffectsFromWriteResult(writeResult);
+  const finalNodes = writeResult.nodes;
+  const finalEdges = sharedOut.edges;
+  assertWorldPortalResultAllowed(
+    canvasId,
+    prestateNodes,
+    finalNodes,
+    liveCanvasIds,
+  );
+
+  const deltas = diffCanvasState(
+    { nodes: prestateNodes, edges: prestateEdges },
+    { nodes: finalNodes, edges: finalEdges },
+  );
+
+  // Built once: id → final node, used to echo image dimensions back so
+  // agents can lay out follow-up nodes with exact geometry.
+  const finalById = new Map<string, CanvasNode>();
+  for (const node of finalNodes) finalById.set(node.id as string, node);
+
+  const results = commandResults.map((r) => {
+    const result: ExecuteOnServerOutput['results'][0] = {
+      command: r.command,
+      applied: r.applied,
+      ...(r.reason ? { reason: r.reason } : {}),
+    };
+
+    // Echo created node ids (+labels) so the agent can wire them up in a
+    // follow-up CONNECT_NODES / SET_NODE_PARENT call with the real,
+    // server-assigned ids instead of inventing ids that collide across
+    // runs. Image nodes also carry server-derived dimensions/src.
+    if (r.applied && r.command.type === 'CREATE_NODES') {
+      const nodes = r.command.nodes
+        .map((n) => {
+          const node = finalById.get(n.id as string);
+          if (!node) return null;
+          const style = (node.style ?? {}) as Record<string, unknown>;
+          const label = node.data?.label;
+          return {
+            nodeId: node.id as string,
+            ...(typeof label === 'string' ? { label } : {}),
+            width: typeof style.width === 'number' ? style.width : 0,
+            height: typeof style.height === 'number' ? style.height : 0,
+            ...(node.type === 'image' && typeof node.data?.src === 'string'
+              ? { src: node.data.src }
+              : {}),
+          };
+        })
+        .filter((n): n is NonNullable<typeof n> => n !== null);
+
+      if (nodes.length > 0) result.nodes = nodes;
+    } else if (r.applied && r.command.type === 'CONNECT_NODES') {
+      const edges = r.command.edges.flatMap((edge) =>
+        edge.id
+          ? [
+              {
+                edgeId: edge.id,
+                source: edge.source,
+                target: edge.target,
+              },
+            ]
+          : [],
+      );
+      if (edges.length > 0) result.edges = edges;
+    } else if (r.applied && r.command.type === 'MERGE_NODE_DATA') {
+      // Echo final image dimensions when a MERGE rewrote an image src.
+      const nodes = r.command.patches
+        .filter((p) => typeof p.patch?.['src'] === 'string')
+        .map((p) => {
+          const node = finalById.get(p.nodeId);
+          if (node?.type !== 'image') return null;
+          const style = (node.style ?? {}) as Record<string, unknown>;
+          return {
+            nodeId: p.nodeId,
+            width: typeof style.width === 'number' ? style.width : 0,
+            height: typeof style.height === 'number' ? style.height : 0,
+            src: (node.data?.src as string) || '',
+          };
+        })
+        .filter((n): n is NonNullable<typeof n> => n !== null);
+
+      if (nodes.length > 0) result.nodes = nodes;
+    }
+
+    return result;
+  });
+
+  // Detect order-only mutations that `diffCanvasState` cannot see.
+  //
+  // `diffCanvasState` is id-keyed: it returns INSERT/DELETE/REPLACE rows
+  // by comparing id sets and per-id reference identity. Commands whose
+  // only effect is to reshuffle the nodes/edges array (today only
+  // `REORDER_NODES`, which rebuilds the array with the same refs in a
+  // new order) therefore emit zero structural deltas. Without this
+  // guard the no-op fast path below would skip persistence entirely,
+  // leaving the agent with `applied: true` while persisted topology
+  // is unchanged.
+  //
+  // We do NOT synthesise a delta — Phase A has no order-aware delta
+  // type, and cross-tab broadcast (M3) is not shipped yet. We just
+  // fall through to the persistence branch so topology and the
+  // delta-log version both reflect that something happened. Catch-up
+  // clients on M3 will see the version bump and need to refetch the
+  // full canvas; that's an acceptable Phase-A trade-off.
+  const orderChanged =
+    prestateNodes.length !== finalNodes.length ||
+    prestateEdges.length !== finalEdges.length ||
+    prestateNodes.some((n, i) => n.id !== finalNodes[i]?.id) ||
+    prestateEdges.some((e, i) => e.id !== finalEdges[i]?.id);
+
+  // No-op fast path. Returning early preserves the invariant that
+  // `toVersion === fromVersion` IFF no row was appended to the log.
+  if (deltas.length === 0 && !orderChanged) {
+    return {
+      canvasId,
+      fromVersion,
+      toVersion: fromVersion,
+      deltas,
+      results,
+      commands,
+      pendingEffects: {
+        mutatedNodes: pendingEffects.mutatedNodes,
+        deletedNodeIds: pendingEffects.deletedNodeIds,
+        contentEditedNodeIds: pendingEffects.contentEditedNodeIds,
+        deferredFitFrameIds: pendingEffects.deferredFitFrameIds,
+      },
+    };
+  }
+
+  const toVersion = fromVersion + 1;
+
+  // Persist .md sidecars first so topology never references a markdown
+  // file that does not exist on disk. The synchronous commit section is
+  // wrapped in a before-image rollback: if topology or delta-log persistence
+  // fails, the sidecars, record, and log prefix all return to `fromVersion`.
+  //
+  // `writeNode` throws `CanvasStoreIOError` on environmental failures
+  // (ENOSPC, EACCES, …); we deliberately do NOT catch it so the
+  // batch aborts before topology is mutated. The exception bubbles
+  // through `handleCanvasCommands` and surfaces as an `isError: true`
+  // tool result to the LLM (and as a 500 / error event upstream).
+  // Structural `conflict` / `not-found` results are programmer errors
+  // in the agent path (engine should have rejected them upstream and
+  // `strictRename` is rarely set for agent-authored labels); we throw
+  // a regular Error rather than letting the in-memory mutation drift
+  // away from disk.
+  // Pending effects preserve command order and can mention the same id in
+  // both collections (DELETE then CREATE, or mutate then DELETE). Persist
+  // only the effect matching the authoritative final topology so a
+  // re-created node is not written and then immediately unlinked.
+  const finalNodeIds = new Set(finalNodes.map((node) => node.id));
+  const mutatedNodesToPersist = pendingEffects.mutatedNodes.filter((node) =>
+    finalNodeIds.has(node.id),
+  );
+  const nodeIdsToDelete = pendingEffects.deletedNodeIds.filter(
+    (nodeId) => !finalNodeIds.has(nodeId),
+  );
+  const insertedIds = insertedNodeIds(deltas);
+  const nodeMutations: SpaceNodeMutation[] = [];
+  for (const node of mutatedNodesToPersist) {
+    const record = buildNodeContent(node);
+    if (!record) continue;
+    nodeMutations.push({
+      kind: 'put',
+      nodeId: record.nodeId,
+      record,
+      strictLabel: record['labelSource'] === 'user',
+      authoritativeInsert: insertedIds.has(record.nodeId),
+    });
+  }
+  for (const nodeId of nodeIdsToDelete) {
+    nodeMutations.push({ kind: 'delete', nodeId });
+  }
+
+  const nextCanvas: CanvasFile = {
+    ...canvas,
+    version: toVersion,
+    state: {
+      ...canvas.state,
+      nodes: stripNodesForCanvas(finalNodes),
+      edges: finalEdges,
+    },
+    updatedAt: Date.now(),
+  };
+  const logEntry: DeltaLogEntry = {
+    version: toVersion,
+    ts: Date.now(),
+    ...(runId ? { runId } : {}),
+    commands: commands as unknown[],
+    deltas: deltas as unknown[],
+    originator,
+  };
+  const write = await handle.write({
+    expectedVersion: fromVersion,
+    nextRecord: nextCanvas,
+    nodeMutations,
+    delta: logEntry,
+  });
+  if (!write.ok) {
+    if (write.reason === 'not-found') {
+      throw new CanvasNotFoundError(canvasId);
+    }
+    throw new Error(
+      `[canvas-executor] ordered Space write rejected: ${write.reason}`,
     );
+  }
 
-    // Derive review records (ACP change cards) only when asked. Edge
-    // endpoint labels are resolved against the post-state nodes.
-    let changes: CanvasChangeRecord[] | undefined;
-    if (input.computeChanges) {
-      const labelById = new Map<string, string>();
-      for (const node of finalNodes) {
-        const lbl = (node.data as Record<string, unknown> | undefined)?.[
-          'label'
-        ];
-        if (typeof lbl === 'string' && lbl) labelById.set(node.id, lbl);
-      }
-      changes = extractCanvasChanges(deltas, { nodeLabelById: labelById });
+  // Derive review records (ACP change cards) only when asked. Edge
+  // endpoint labels are resolved against the post-state nodes.
+  const shouldComputeChanges =
+    input.computeChanges === true &&
+    !(
+      originator.source === 'agent' &&
+      getAgentChangeReviewConfig().autoAcceptSpaceChanges
+    );
+  let changes: CanvasChangeRecord[] | undefined;
+  if (shouldComputeChanges) {
+    const labelById = new Map<string, string>();
+    for (const node of finalNodes) {
+      const lbl = (node.data as Record<string, unknown> | undefined)?.['label'];
+      if (typeof lbl === 'string' && lbl) labelById.set(node.id, lbl);
     }
+    changes = extractCanvasChanges(deltas, { nodeLabelById: labelById });
+  }
 
-    // Broadcast the delta to live frontends and persist review records to
-    // the originating thread's sidecar. Every accepted write broadcasts —
-    // the initiating tab applies it from the sync stream, not the tool
-    // result. No-op fast path above already returned for empty diffs.
-    //
-    // When attributed to a thread, fold this batch's records into the
-    // thread's coalesced change list (one net record per entity) and
-    // broadcast that full list so live cards replace their state with it —
-    // matching what GET /changes returns.
-    let broadcastChanges = changes;
-    if (originator.threadId && changes && changes.length > 0) {
-      try {
-        broadcastChanges = store.appendChanges(originator.threadId, changes);
-      } catch {
-        /* sidecar persistence is best-effort — never fail the write */
-      }
+  // Broadcast the delta to live frontends and persist review records to
+  // the originating thread's sidecar. Every accepted write broadcasts —
+  // the initiating tab applies it from the sync stream, not the tool
+  // result. No-op fast path above already returned for empty diffs.
+  //
+  // When attributed to a thread, fold this batch's records into the
+  // thread's coalesced change list (one net record per entity) and
+  // broadcast that full list so live cards replace their state with it —
+  // matching what GET /changes returns.
+  let broadcastChanges = changes;
+  if (originator.threadId && changes && changes.length > 0) {
+    try {
+      broadcastChanges = await handle.changes.append(
+        originator.threadId,
+        changes,
+      );
+    } catch {
+      /* sidecar persistence is best-effort — never fail the write */
     }
+  }
+  if (input.publish !== false) {
     publishCanvasUpdate(canvasId, {
       type: 'update',
       data: {
@@ -1020,23 +1133,23 @@ export async function executeOnServer(
         ...(broadcastChanges ? { changes: broadcastChanges } : {}),
       },
     });
+  }
 
-    return {
-      canvasId,
-      fromVersion,
-      toVersion,
-      deltas,
-      results,
-      commands,
-      pendingEffects: {
-        mutatedNodes: pendingEffects.mutatedNodes,
-        deletedNodeIds: pendingEffects.deletedNodeIds,
-        contentEditedNodeIds: pendingEffects.contentEditedNodeIds,
-        deferredFitFrameIds: pendingEffects.deferredFitFrameIds,
-      },
-      ...(changes ? { changes } : {}),
-    };
-  });
+  return {
+    canvasId,
+    fromVersion,
+    toVersion,
+    deltas,
+    results,
+    commands,
+    pendingEffects: {
+      mutatedNodes: pendingEffects.mutatedNodes,
+      deletedNodeIds: pendingEffects.deletedNodeIds,
+      contentEditedNodeIds: pendingEffects.contentEditedNodeIds,
+      deferredFitFrameIds: pendingEffects.deferredFitFrameIds,
+    },
+    ...(changes ? { changes } : {}),
+  };
 }
 
 /**
@@ -1067,121 +1180,76 @@ export async function applyDeltasOnServer(input: {
     deferredFitFrameIds: string[];
   };
 }> {
+  const { canvasId } = input;
+
+  return await withCanvasMutex(canvasId, () =>
+    applyDeltasOnServerAlreadyLocked(input),
+  );
+}
+
+/**
+ * Apply inverse or forward deltas while the caller already owns the Canvas
+ * mutex. This is the compensation counterpart of
+ * {@link executeOnServerAlreadyLocked}.
+ */
+export async function applyDeltasOnServerAlreadyLocked(input: {
+  canvasId: string;
+  deltas: readonly Delta[];
+  originator: ExecuteOriginator;
+  runId?: string;
+}): Promise<{
+  canvasId: string;
+  fromVersion: number;
+  toVersion: number;
+  deltas: Delta[];
+  pendingEffects: {
+    mutatedNodes: CanvasNode[];
+    deletedNodeIds: string[];
+    contentEditedNodeIds: string[];
+    deferredFitFrameIds: string[];
+  };
+}> {
   const { canvasId, originator, runId } = input;
 
-  return await withCanvasMutex(canvasId, async () => {
-    const store = getCanvasStore(canvasId);
-    const canvas = store.read();
-    if (!canvas) throw new CanvasNotFoundError(canvasId);
+  const handle = space(canvasId);
+  const canvas = await handle.read();
+  if (!canvas) throw new CanvasNotFoundError(canvasId);
 
-    const fromVersion = canvas.version;
-    const prestateNodes = hydrateNodes(
-      store,
-      canvas.state.nodes as CanvasNode[],
-    );
-    const prestateEdges = (canvas.state.edges ?? []) as CanvasEdge[];
+  // Executor prestate is whole-Space work: every md-backed node in the
+  // topology needs its stored content before the engine sees it.
+  const records = await handle.nodes.list();
 
-    const final = applyDeltas(
-      { nodes: prestateNodes, edges: prestateEdges },
-      input.deltas,
-    );
-    const finalNodes = final.nodes;
-    const finalEdges = final.edges;
+  const fromVersion = canvas.version;
+  const prestateNodes = hydrateCanvasNodes(
+    records,
+    canvas.state.nodes as CanvasNode[],
+  );
+  const prestateEdges = (canvas.state.edges ?? []) as CanvasEdge[];
 
-    // Recompute the authoritative diff so the log row and broadcast
-    // reflect exactly what landed (tolerates already-applied / missing
-    // targets in the input deltas).
-    const deltas = diffCanvasState(
-      { nodes: prestateNodes, edges: prestateEdges },
-      { nodes: finalNodes, edges: finalEdges },
-    );
+  const final = applyDeltas(
+    { nodes: prestateNodes, edges: prestateEdges },
+    input.deltas,
+  );
+  const finalNodes = final.nodes;
+  const finalEdges = final.edges;
 
-    const mutatedNodes: CanvasNode[] = [];
-    const deletedNodeIds: string[] = [];
-    const contentEditedNodeIds: string[] = [];
+  // Recompute the authoritative diff so the log row and broadcast
+  // reflect exactly what landed (tolerates already-applied / missing
+  // targets in the input deltas).
+  const deltas = diffCanvasState(
+    { nodes: prestateNodes, edges: prestateEdges },
+    { nodes: finalNodes, edges: finalEdges },
+  );
 
-    if (deltas.length === 0) {
-      return {
-        canvasId,
-        fromVersion,
-        toVersion: fromVersion,
-        deltas,
-        pendingEffects: {
-          mutatedNodes,
-          deletedNodeIds,
-          contentEditedNodeIds,
-          deferredFitFrameIds: [],
-        },
-      };
-    }
+  const mutatedNodes: CanvasNode[] = [];
+  const deletedNodeIds: string[] = [];
+  const contentEditedNodeIds: string[] = [];
 
-    const toVersion = fromVersion + 1;
-
-    for (const d of deltas) {
-      if (d.type === 'INSERT_NODE' || d.type === 'REPLACE_NODE') {
-        const node = d.type === 'INSERT_NODE' ? d.node : d.next;
-        mutatedNodes.push(node);
-        if (d.type === 'REPLACE_NODE') contentEditedNodeIds.push(node.id);
-      } else if (d.type === 'DELETE_NODE') {
-        deletedNodeIds.push(d.node.id);
-      }
-    }
-    const affectedNodeIds = new Set<string>([
-      ...mutatedNodes.map((node) => node.id),
-      ...deletedNodeIds,
-    ]);
-    const insertedIds = insertedNodeIds(deltas);
-    store.withValidatedNodeMutationTransaction(
-      { affectedNodeIds, insertedNodeIds: insertedIds },
-      () => {
-        runCanvasPersistenceTransaction({
-          canvasId,
-          affectedNodeIds,
-          nodeIdForFilename: (filename) => store.nodeIdForFilename(filename),
-          resetRecordState: () => store.writeNodeMutationRollback(canvas),
-          commit: () => {
-            for (const d of deltas) {
-              if (d.type === 'INSERT_NODE' || d.type === 'REPLACE_NODE') {
-                const node = d.type === 'INSERT_NODE' ? d.node : d.next;
-                const content = buildNodeContent(node);
-                if (content) {
-                  // Inside `withCanvasMutex` already → non-locking core.
-                  const outcome = applyNodeUpdate(store, content.nodeId, {
-                    apply: () => content,
-                    strictRename: content['labelSource'] === 'user',
-                  });
-                  requireNodeWrite(content.nodeId, outcome);
-                }
-              } else if (d.type === 'DELETE_NODE') {
-                store.deleteNode(d.node.id);
-              }
-            }
-
-            const slimNodes = stripNodesForCanvas(finalNodes);
-            store.write({
-              ...canvas,
-              version: toVersion,
-              state: { ...canvas.state, nodes: slimNodes, edges: finalEdges },
-              updatedAt: Date.now(),
-            });
-
-            store.appendDeltaLogEntry({
-              version: toVersion,
-              ts: Date.now(),
-              ...(runId ? { runId } : {}),
-              commands: [],
-              deltas: deltas as unknown[],
-              originator,
-            });
-          },
-        });
-      },
-    );
-
+  if (deltas.length === 0) {
     return {
       canvasId,
       fromVersion,
-      toVersion,
+      toVersion: fromVersion,
       deltas,
       pendingEffects: {
         mutatedNodes,
@@ -1190,5 +1258,81 @@ export async function applyDeltasOnServer(input: {
         deferredFitFrameIds: [],
       },
     };
+  }
+
+  const toVersion = fromVersion + 1;
+
+  for (const d of deltas) {
+    if (d.type === 'INSERT_NODE' || d.type === 'REPLACE_NODE') {
+      const node = d.type === 'INSERT_NODE' ? d.node : d.next;
+      mutatedNodes.push(node);
+      if (d.type === 'REPLACE_NODE') contentEditedNodeIds.push(node.id);
+    } else if (d.type === 'DELETE_NODE') {
+      deletedNodeIds.push(d.node.id);
+    }
+  }
+  const insertedIds = insertedNodeIds(deltas);
+  const nodeMutations: SpaceNodeMutation[] = [];
+  for (const d of deltas) {
+    if (d.type === 'INSERT_NODE' || d.type === 'REPLACE_NODE') {
+      const node = d.type === 'INSERT_NODE' ? d.node : d.next;
+      const record = buildNodeContent(node);
+      if (record) {
+        nodeMutations.push({
+          kind: 'put',
+          nodeId: record.nodeId,
+          record,
+          strictLabel: record['labelSource'] === 'user',
+          authoritativeInsert: insertedIds.has(record.nodeId),
+        });
+      }
+    } else if (d.type === 'DELETE_NODE') {
+      nodeMutations.push({ kind: 'delete', nodeId: d.node.id });
+    }
+  }
+
+  const nextRecord: CanvasFile = {
+    ...canvas,
+    version: toVersion,
+    state: {
+      ...canvas.state,
+      nodes: stripNodesForCanvas(finalNodes),
+      edges: finalEdges,
+    },
+    updatedAt: Date.now(),
+  };
+  const write = await handle.write({
+    expectedVersion: fromVersion,
+    nextRecord,
+    nodeMutations,
+    delta: {
+      version: toVersion,
+      ts: Date.now(),
+      ...(runId ? { runId } : {}),
+      commands: [],
+      deltas: deltas as unknown[],
+      originator,
+    },
   });
+  if (!write.ok) {
+    if (write.reason === 'not-found') {
+      throw new CanvasNotFoundError(canvasId);
+    }
+    throw new Error(
+      `[canvas-executor] ordered Space write rejected: ${write.reason}`,
+    );
+  }
+
+  return {
+    canvasId,
+    fromVersion,
+    toVersion,
+    deltas,
+    pendingEffects: {
+      mutatedNodes,
+      deletedNodeIds,
+      contentEditedNodeIds,
+      deferredFitFrameIds: [],
+    },
+  };
 }

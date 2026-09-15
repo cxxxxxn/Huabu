@@ -8,9 +8,9 @@
  * dropped into `<Space>/nodes/` from outside the app so the layer panel can
  * offer them for import.
  *
- * One native `fs.watch` handle per **active Space session** observes
- * `<Space>/nodes/`. A session exists only while at least one external-note SSE
- * subscriber is attached, so watcher count equals the number of open streams.
+ * At most one native `fs.watch` handle per **active Space session** observes
+ * `<Space>/nodes/` in steady state. Subscribers to the same Space share that
+ * session, so watcher count follows distinct active Spaces, not open streams.
  * Inactive Spaces hold no watcher and no in-memory state; their eventual state
  * is rebuilt by the first lazy scan when they are next opened. There is no
  * workspace-level watcher: `canvas-dirs.ts` invalidates its directory index
@@ -21,17 +21,19 @@
  * rename or delete of that Space can release and re-acquire it.
  */
 
-import { watch as watchFs, type FSWatcher as NativeFSWatcher } from 'node:fs';
+import {
+  statSync,
+  watch as watchFs,
+  type FSWatcher as NativeFSWatcher,
+  type Stats,
+} from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { getLogger } from '../../utils/logger.js';
 import { parseFrontmatter } from '../../utils/markdown-frontmatter.js';
-import { listAllCanvasDirEntries } from '../storage/canvas-dirs.js';
-import { getCanvasStore } from '../storage/index.js';
-import { SPACE_JSON_FILENAME } from '../storage/paths.js';
-import { registerSpaceDirHandleOwner } from '../workspace/disk/space-dir-handles.js';
-import { getWorkspacePath, isWorkspaceConfigured } from '../workspace.js';
+import { registerSpaceDirHandleOwner, space } from '../storage/index.js';
+import { isWorkspaceConfigured } from '../workspace.js';
 
 import type { CanvasFile } from '../storage/index.js';
 import type { ExternalNoteEvent, ExternalNoteItem } from '@huabu/shared';
@@ -42,6 +44,8 @@ type Listener = (event: ExternalNoteEvent) => void;
 const INITIAL_SCAN_CONCURRENCY = 8;
 /** Debounce applied to raw native events before `stat` + `readFile`. */
 const NODE_EVENT_SETTLE_MS = 170;
+/** Windows fallback while `nodes/` is absent; avoids locking the Space root. */
+const MISSING_NODES_POLL_MS = 1_000;
 
 export interface ExternalNoteSession {
   /** Merged initial state at acquisition time, newest first. */
@@ -62,6 +66,12 @@ interface ActiveSpaceWatch {
   holders: number;
   pendingItems: Map<string, ExternalNoteItem>;
   pendingEvents: Map<string, NodeJS.Timeout>;
+  /** True while the Space root is watched for a not-yet-created `nodes/`. */
+  watchingParent: boolean;
+  /** True while Windows probes for `nodes/` without holding a directory handle. */
+  pollingForNodes: boolean;
+  /** Coalesces identity/existence checks and owns the Windows probe timer. */
+  nodesProbeTimer: NodeJS.Timeout | null;
   /**
    * Paths a native event already resolved while the initial scan is in
    * flight. Non-null only during that window; scan results for these paths
@@ -100,11 +110,13 @@ function isSessionCurrent(session: ActiveSpaceWatch, stamp?: string): boolean {
 
 function nodesPathFor(canvasId: string): string | null {
   if (!isWorkspaceConfigured()) return null;
-  const entry = listAllCanvasDirEntries().find(
-    (candidate) => candidate.id === canvasId,
-  );
-  if (!entry) return null;
-  return path.join(getWorkspacePath(), entry.filename, 'nodes');
+  // `null` when the Space has no directory to watch, which covers both an
+  // unknown id and a backend that keeps Spaces in tables. Watching for
+  // documents that arrived without going through the application is the
+  // declared `external-note-discovery` capability, and this is where its
+  // absence becomes "there is nothing to watch".
+  const directory = space(canvasId).diskTree?.existingDirectory() ?? null;
+  return directory === null ? null : path.join(directory, 'nodes');
 }
 
 function noteIdsFromCanvas(canvas: CanvasFile | null): Set<string> {
@@ -117,19 +129,24 @@ function noteIdsFromCanvas(canvas: CanvasFile | null): Set<string> {
   return ids;
 }
 
-function canvasNoteIds(canvasId: string): Set<string> {
-  return noteIdsFromCanvas(getCanvasStore(canvasId).read());
+async function canvasNoteIds(canvasId: string): Promise<Set<string>> {
+  return noteIdsFromCanvas(await space(canvasId).read());
 }
 
+/**
+ * The scan's view of which notes the Space already knows.
+ *
+ * Read through the port rather than off the record file beside `nodes/`. The
+ * path read was equivalent only because Disk keeps the two together, and this
+ * question — what does the Space contain — is one every backend answers.
+ * Failure degrades to "knows nothing", as before: a scan that cannot read
+ * topology surfaces every file rather than silently hiding some.
+ */
 async function readInitialCanvasNoteIds(
-  nodesPath: string,
+  canvasId: string,
 ): Promise<Set<string>> {
   try {
-    const raw = await readFile(
-      path.join(path.dirname(nodesPath), SPACE_JSON_FILENAME),
-      'utf8',
-    );
-    return noteIdsFromCanvas(JSON.parse(raw) as CanvasFile);
+    return await canvasNoteIds(canvasId);
   } catch {
     return new Set();
   }
@@ -182,8 +199,16 @@ function forgetItem(session: ActiveSpaceWatch, relativePath: string): void {
   emit(session, { type: 'removed', data: { relativePath } });
 }
 
-function snapshotOf(session: ActiveSpaceWatch): ExternalNoteItem[] {
-  const known = canvasNoteIds(session.canvasId);
+/**
+ * `known` is passed in rather than read here because this must stay
+ * synchronous: it both reads and prunes `pendingItems`, and the caller relies
+ * on registering its listener and taking the snapshot without an await
+ * between them, so no event can slip through.
+ */
+function snapshotOf(
+  session: ActiveSpaceWatch,
+  known: ReadonlySet<string>,
+): ExternalNoteItem[] {
   const out: ExternalNoteItem[] = [];
   for (const [rel, item] of session.pendingItems) {
     if (item.noteId && known.has(item.noteId)) {
@@ -215,7 +240,7 @@ function scheduleNodeEvent(session: ActiveSpaceWatch, basename: string): void {
         .then(async (fileStat) => {
           if (!fileStat.isFile()) return;
           const item = await buildItem(absPath, relativePath, () =>
-            Promise.resolve(canvasNoteIds(session.canvasId)),
+            canvasNoteIds(session.canvasId),
           );
           if (!item || !isSessionCurrent(session, stamp)) return;
           recordItem(session, item);
@@ -229,36 +254,319 @@ function scheduleNodeEvent(session: ActiveSpaceWatch, basename: string): void {
   );
 }
 
+function isMissingPathError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
+function directoryIdentity(
+  st: Pick<Stats, 'dev' | 'ino' | 'birthtimeMs'>,
+): string {
+  return `${st.dev}:${st.ino}:${st.birthtimeMs}`;
+}
+
+function isWaitingForNodes(session: ActiveSpaceWatch): boolean {
+  return session.watchingParent || session.pollingForNodes;
+}
+
+function scanNewNodesDirectory(session: ActiveSpaceWatch): void {
+  session.scanFailed = false;
+  session.initialScan = null;
+  void ensureInitialScan(session).catch((err: unknown) => {
+    getLogger('external-note-watcher').warn(
+      { err, canvasId: session.canvasId, nodesPath: session.nodesPath },
+      'external note initial scan after directory creation failed (ignored)',
+    );
+  });
+}
+
+/** Reset a stale child watcher and wait for the current `nodes/` path. */
+function recoverDeletedNodesDirectory(
+  session: ActiveSpaceWatch,
+  staleWatcher: NativeFSWatcher,
+): void {
+  if (
+    !isSessionCurrent(session) ||
+    isWaitingForNodes(session) ||
+    session.watcher !== staleWatcher
+  ) {
+    return;
+  }
+
+  // Invalidate scans/events tied to the deleted inode before rearming. The
+  // same session and subscribers survive; only its discovered filesystem
+  // state is reset.
+  session.sessionGeneration = nextSessionGeneration++;
+  disarmSessionWatcher(session);
+  session.pendingItems.clear();
+  session.scanOverrides = null;
+  session.initialScan = null;
+  session.scanFailed = false;
+  emit(session, { type: 'snapshot', data: { items: [] } });
+
+  armSessionWatcher(session);
+  if (session.watcher && !isWaitingForNodes(session)) {
+    scanNewNodesDirectory(session);
+  }
+}
+
+async function verifyNodesWatcherIdentity(
+  session: ActiveSpaceWatch,
+  staleWatcher: NativeFSWatcher,
+  watchedIdentity: string,
+): Promise<void> {
+  const stamp = stampOf(session);
+  let current: Awaited<ReturnType<typeof stat>>;
+  try {
+    current = await stat(session.nodesPath);
+  } catch (err) {
+    if (isMissingPathError(err)) {
+      if (
+        isSessionCurrent(session, stamp) &&
+        session.watcher === staleWatcher
+      ) {
+        // A Finder-side Space rename moves `nodes/` with the Space. Re-resolve
+        // by canvasId before rearming so the active session follows it.
+        session.nodesPath = nodesPathFor(session.canvasId) ?? session.nodesPath;
+      }
+      recoverDeletedNodesDirectory(session, staleWatcher);
+    } else {
+      getLogger('external-note-watcher').warn(
+        { err, canvasId: session.canvasId, nodesPath: session.nodesPath },
+        'external note directory identity could not be verified (ignored)',
+      );
+    }
+    return;
+  }
+
+  if (
+    !isSessionCurrent(session, stamp) ||
+    session.watcher !== staleWatcher ||
+    isWaitingForNodes(session)
+  ) {
+    return;
+  }
+  if (
+    !current.isDirectory() ||
+    directoryIdentity(current) !== watchedIdentity
+  ) {
+    recoverDeletedNodesDirectory(session, staleWatcher);
+  }
+}
+
+function scheduleNodesWatcherIdentityCheck(
+  session: ActiveSpaceWatch,
+  staleWatcher: NativeFSWatcher,
+  watchedIdentity: string,
+): void {
+  if (session.nodesProbeTimer) clearTimeout(session.nodesProbeTimer);
+  session.nodesProbeTimer = setTimeout(() => {
+    session.nodesProbeTimer = null;
+    if (
+      !isSessionCurrent(session) ||
+      session.watcher !== staleWatcher ||
+      isWaitingForNodes(session)
+    ) {
+      return;
+    }
+    void verifyNodesWatcherIdentity(session, staleWatcher, watchedIdentity);
+  }, NODE_EVENT_SETTLE_MS);
+}
+
+function createNodesWatcher(
+  session: ActiveSpaceWatch,
+  nodesPath: string,
+): NativeFSWatcher {
+  let watchedIdentity = '';
+  const nativeWatcher = watchFs(
+    nodesPath,
+    { persistent: true, encoding: 'utf8' },
+    (eventType, filename) => {
+      // Native watchers stay attached to the deleted inode on platforms such
+      // as Linux. Self-renames and filename-less events are ambiguous, so
+      // verify the watched directory identity before resetting session state.
+      if (
+        !filename ||
+        (eventType === 'rename' &&
+          path.basename(filename) === path.basename(nodesPath))
+      ) {
+        scheduleNodesWatcherIdentityCheck(
+          session,
+          nativeWatcher,
+          watchedIdentity,
+        );
+        return;
+      }
+      const basename = path.basename(filename);
+      if (basename !== filename || !basename.endsWith('.md')) return;
+      scheduleNodeEvent(session, basename);
+    },
+  );
+  try {
+    const current = statSync(nodesPath);
+    if (!current.isDirectory()) {
+      throw Object.assign(new Error('nodes path is not a directory'), {
+        code: 'ENOTDIR',
+      });
+    }
+    watchedIdentity = directoryIdentity(current);
+  } catch (err) {
+    nativeWatcher.close();
+    throw err;
+  }
+  nativeWatcher.on('error', (err: unknown) => {
+    getLogger('external-note-watcher').warn(
+      { err, canvasId: session.canvasId, nodesPath },
+      'external note directory watcher error (ignored)',
+    );
+  });
+  return nativeWatcher;
+}
+
+/**
+ * Promote a temporary Space-root watcher or Windows probe to `nodes/`.
+ *
+ * A parent handle remains live until the child handle has opened. Windows uses
+ * a single periodic probe instead because a Space-root handle blocks external
+ * rename.
+ */
+function promoteWaitingNodesWatcher(session: ActiveSpaceWatch): void {
+  if (!isSessionCurrent(session) || !isWaitingForNodes(session)) return;
+  const parentWatcher = session.watchingParent ? session.watcher : null;
+  let nodesWatcher: NativeFSWatcher;
+  try {
+    nodesWatcher = createNodesWatcher(session, session.nodesPath);
+  } catch (err) {
+    // The directory can disappear during promotion. A parent watcher remains
+    // armed; a Windows polling session schedules its next probe below.
+    if (!isMissingPathError(err)) {
+      getLogger('external-note-watcher').warn(
+        { err, canvasId: session.canvasId, nodesPath: session.nodesPath },
+        'external note directory watcher could not start (ignored)',
+      );
+    }
+    if (session.pollingForNodes) {
+      scheduleNodesDirectoryProbe(session, MISSING_NODES_POLL_MS);
+    }
+    return;
+  }
+
+  if (!isSessionCurrent(session) || !isWaitingForNodes(session)) {
+    nodesWatcher.close();
+    return;
+  }
+  session.watcher = nodesWatcher;
+  session.watchingParent = false;
+  session.pollingForNodes = false;
+  parentWatcher?.close();
+
+  // The original acquisition returned an empty snapshot while `nodes/` was
+  // absent. Scan once now; recordItem emits files that landed during handoff.
+  scanNewNodesDirectory(session);
+}
+
+async function probeNodesDirectory(session: ActiveSpaceWatch): Promise<void> {
+  const stamp = stampOf(session);
+  try {
+    const current = await stat(session.nodesPath);
+    if (
+      current.isDirectory() &&
+      isSessionCurrent(session, stamp) &&
+      isWaitingForNodes(session)
+    ) {
+      promoteWaitingNodesWatcher(session);
+    }
+  } catch {
+    // Still absent. The parent watcher or periodic Windows probe retries.
+    if (isSessionCurrent(session, stamp) && session.pollingForNodes) {
+      session.nodesPath = nodesPathFor(session.canvasId) ?? session.nodesPath;
+    }
+  } finally {
+    if (
+      isSessionCurrent(session, stamp) &&
+      session.pollingForNodes &&
+      !session.nodesProbeTimer
+    ) {
+      scheduleNodesDirectoryProbe(session, MISSING_NODES_POLL_MS);
+    }
+  }
+}
+
+function scheduleNodesDirectoryProbe(
+  session: ActiveSpaceWatch,
+  delay = NODE_EVENT_SETTLE_MS,
+): void {
+  if (session.nodesProbeTimer) clearTimeout(session.nodesProbeTimer);
+  session.nodesProbeTimer = setTimeout(() => {
+    session.nodesProbeTimer = null;
+    if (!isSessionCurrent(session) || !isWaitingForNodes(session)) return;
+    void probeNodesDirectory(session);
+  }, delay);
+}
+
 /**
  * Register the Space's native watcher. Failure is non-fatal: the caller still
  * gets a lazy snapshot, it simply will not receive live updates until the next
  * first subscription retries registration.
  */
 function armSessionWatcher(session: ActiveSpaceWatch): void {
-  if (session.watcher || !session.nodesPath) return;
+  if (session.watcher || session.pollingForNodes || !session.nodesPath) return;
   const { nodesPath } = session;
   try {
-    const nativeWatcher = watchFs(
-      nodesPath,
-      { persistent: true, encoding: 'utf8' },
-      (_eventType, filename) => {
-        if (!filename) return;
-        const basename = path.basename(filename);
-        if (basename !== filename || !basename.endsWith('.md')) return;
-        scheduleNodeEvent(session, basename);
-      },
-    );
-    nativeWatcher.on('error', (err: unknown) => {
+    session.watcher = createNodesWatcher(session, nodesPath);
+    session.watchingParent = false;
+    session.pollingForNodes = false;
+    return;
+  } catch (err) {
+    if (!isMissingPathError(err)) {
       getLogger('external-note-watcher').warn(
         { err, canvasId: session.canvasId, nodesPath },
-        'external note directory watcher error (ignored)',
+        'external note directory watcher could not start (ignored)',
+      );
+      return;
+    }
+  }
+
+  // A Space-root fs.watch handle blocks external rename/delete on Windows.
+  // Probe only while this active session is missing `nodes/`; the final close
+  // cancels the timer, and successful creation promotes to the child watcher.
+  if (process.platform === 'win32') {
+    session.pollingForNodes = true;
+    scheduleNodesDirectoryProbe(session);
+    return;
+  }
+
+  // A valid existing Space need not have written a sidecar yet, so `nodes/`
+  // may legitimately be absent. Watch the existing Space root for its first
+  // appearance instead of logging/retrying ENOENT on every subscription.
+  const spacePath = path.dirname(nodesPath);
+  try {
+    const parentWatcher = watchFs(
+      spacePath,
+      { persistent: true, encoding: 'utf8' },
+      (_eventType, filename) => {
+        if (!filename || path.basename(filename) !== path.basename(nodesPath)) {
+          return;
+        }
+        scheduleNodesDirectoryProbe(session);
+      },
+    );
+    parentWatcher.on('error', (err: unknown) => {
+      getLogger('external-note-watcher').warn(
+        { err, canvasId: session.canvasId, nodesPath, spacePath },
+        'external note Space watcher error (ignored)',
       );
     });
-    session.watcher = nativeWatcher;
+    session.watcher = parentWatcher;
+    session.watchingParent = true;
+    session.pollingForNodes = false;
+    // Close the narrow race where `nodes/` appeared after the failed child
+    // watch but before the parent handle was registered.
+    void probeNodesDirectory(session);
   } catch (err) {
     getLogger('external-note-watcher').warn(
-      { err, canvasId: session.canvasId, nodesPath },
-      'external note directory watcher could not start (ignored)',
+      { err, canvasId: session.canvasId, nodesPath, spacePath },
+      'external note Space watcher could not start (ignored)',
     );
   }
 }
@@ -266,8 +574,12 @@ function armSessionWatcher(session: ActiveSpaceWatch): void {
 function disarmSessionWatcher(session: ActiveSpaceWatch): void {
   for (const timer of session.pendingEvents.values()) clearTimeout(timer);
   session.pendingEvents.clear();
+  if (session.nodesProbeTimer) clearTimeout(session.nodesProbeTimer);
+  session.nodesProbeTimer = null;
   session.watcher?.close();
   session.watcher = null;
+  session.watchingParent = false;
+  session.pollingForNodes = false;
 }
 
 function destroySession(session: ActiveSpaceWatch): void {
@@ -301,7 +613,12 @@ function resyncSession(session: ActiveSpaceWatch): void {
     emit(session, { type: 'snapshot', data: { items: [] } });
     return;
   }
-  if (nodesPath === session.nodesPath && session.watcher) return;
+  if (
+    nodesPath === session.nodesPath &&
+    (session.watcher || session.pollingForNodes)
+  ) {
+    return;
+  }
   disarmSessionWatcher(session);
   session.nodesPath = nodesPath;
   armSessionWatcher(session);
@@ -369,7 +686,7 @@ async function runInitialScan(session: ActiveSpaceWatch): Promise<void> {
 
     let topology: Promise<Set<string>> | null = null;
     const knownNoteIds = (): Promise<Set<string>> =>
-      (topology ??= readInitialCanvasNoteIds(session.nodesPath));
+      (topology ??= readInitialCanvasNoteIds(session.canvasId));
 
     let nextIndex = 0;
     const worker = async (): Promise<void> => {
@@ -440,6 +757,9 @@ export async function openExternalNoteSession(
       holders: 0,
       pendingItems: new Map(),
       pendingEvents: new Map(),
+      watchingParent: false,
+      pollingForNodes: false,
+      nodesProbeTimer: null,
       scanOverrides: null,
       initialScan: null,
       scanFailed: false,
@@ -469,13 +789,23 @@ export async function openExternalNoteSession(
     if (active.holders <= 0) destroySession(active);
   };
 
-  if (active.nodesPath) await ensureInitialScan(active);
+  // A session whose `nodes/` does not exist holds a parent watcher (or a
+  // Windows probe) and an empty snapshot. It promotes itself and performs one
+  // scan when the directory appears; subscribers share the same wait state.
+  if (!active.watcher && !active.pollingForNodes && active.nodesPath) {
+    armSessionWatcher(active);
+  }
+  if (active.nodesPath && !isWaitingForNodes(active)) {
+    await ensureInitialScan(active);
+  }
+
+  const known = await canvasNoteIds(active.canvasId);
 
   // Registering the listener and reading the snapshot must stay in one
   // synchronous block so no event can slip between them.
   if (released || !isSessionCurrent(active)) return { snapshot: [], close };
   active.listeners.add(listener);
-  return { snapshot: snapshotOf(active), close };
+  return { snapshot: snapshotOf(active, known), close };
 }
 
 /** Remove and return a pending item — used by the import endpoint. */

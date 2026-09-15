@@ -13,13 +13,13 @@
  *     row per group with the canonical node icon (Spline for edges),
  *     and indent match rows beneath their header.
  *   - ↑ / ↓ navigates the flat (header + visible match) list, live-
- *     follows on the canvas (`fitView` + `openExpanded` when the
+ *     follows on the canvas (`fitView` + a preview open when the
  *     target has a real preview).
- *   - Enter on a header toggles collapse; Enter on a match seeks
- *     inside the open preview.
+ *   - Enter on a header toggles collapse; Enter on a match opens the
+ *     owning node without injecting search state into its preview.
  *   - ←/→ collapse / expand the current group.
- *   - Highlight ranges painted via CSS Custom Highlight on both the
- *     canvas DOM and the (optional) expanded preview body.
+ *   - Highlight ranges are painted on the canvas DOM only; expanded
+ *     previews own an independent search layer.
  *
  * What changed vs the overlay:
  *   - No drag handling, no `position: fixed`. The list fills the
@@ -36,14 +36,17 @@ import { Spline, ChevronDown, ChevronRight, TriangleAlert } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 
+import { shouldCanvasSearchOwnKeyboard } from './canvasSearchKeyboard';
 import { focusNodesOnCanvas } from './focusNodesOnCanvas';
 import { getNodeIcon } from '../../../config/nodeIcons';
 import { scheduleScrollToMatch } from '../../../hooks/searchDom';
 import { useTextHighlight } from '../../../hooks/useTextHighlight';
 import useCanvasStore from '../../../store/canvasStore';
-import { useChatStore } from '../../../store/chatStore';
-import { usePanelStore } from '../../../store/panelStore';
-import { usePreviewStore } from '../../../store/previewStore';
+import { openPreviewNode } from '../../../store/previewWorkspace/actions';
+import {
+  selectActiveNodeId,
+  usePreviewWorkspaceStore,
+} from '../../../store/previewWorkspace/store';
 import {
   useSearchStore,
   type SearchResultRow,
@@ -51,8 +54,6 @@ import {
 import { cn } from '../../Common/cn';
 import { toast } from '../../Common/Toast';
 import { NodePreviews } from '../../Nodes/previews';
-
-import type { AgentBinding } from '@huabu/shared';
 
 const ROW_HEIGHT = 52;
 
@@ -68,7 +69,7 @@ const ROW_HEIGHT = 52;
  */
 const hasNodePreview = (nodeType: string): boolean => nodeType in NodePreviews;
 
-export const CanvasSearchResults = (): JSX.Element => {
+export const CanvasSearchResults = (): React.JSX.Element => {
   const query = useSearchStore((s) => s.query);
   const results = useSearchStore((s) => s.results);
   const isStreaming = useSearchStore((s) => s.isStreaming);
@@ -80,31 +81,18 @@ export const CanvasSearchResults = (): JSX.Element => {
   const scope = useSearchStore((s) => s.scope);
 
   const selectNodes = useCanvasStore((s) => s.selectNodes);
-  const openExpanded = useCanvasStore((s) => s.openExpanded);
-  const closeExpanded = useCanvasStore((s) => s.closeExpanded);
-  const expandedNodeId = useCanvasStore((s) => s.expandedNodeId);
+  const expandedNodeId = usePreviewWorkspaceStore(selectActiveNodeId);
   const rfInstance = useCanvasStore((s) => s.rfInstance);
-  // Surfaces the existence of an expanded preview panel (drives the
-  // "also highlight + scroll inside the preview" follow-up below).
-  // We don't read the payload — just need a render tick when it
-  // mounts / unmounts so we can re-query the DOM for the panel root.
-  const previewType = usePreviewStore((s) => s.previewType);
 
   // Conversation-tier results open the owning question node's chat
   // thread in the right panel (instead of an expanded preview), then
-  // highlight + scroll to the matched message there. `viewingQuestionThread`
+  // highlight + scroll to the matched message there. The active preview node
   // gives us a render tick when the thread mounts / swaps so we can
   // re-query the chat DOM for the highlight + scroll roots.
-  const openQuestionThread = useChatStore((s) => s.openQuestionThread);
-  const viewingQuestionThread = useChatStore((s) => s.viewingQuestionThread);
-  const requestOpenRightPanel = usePanelStore((s) => s.requestOpenRightPanel);
 
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const [activeIdx, setActiveIdx] = useState(0);
   const [canvasRoot, setCanvasRoot] = useState<HTMLElement | null>(null);
-  const [previewPanelEl, setPreviewPanelEl] = useState<HTMLElement | null>(
-    null,
-  );
   const [chatThreadEl, setChatThreadEl] = useState<HTMLElement | null>(null);
 
   // Resolve the canvas highlight root once on mount and whenever the
@@ -121,41 +109,30 @@ export const CanvasSearchResults = (): JSX.Element => {
     );
   }, [scope]);
 
-  // Resolve the expanded-preview panel root in lock-step with the
-  // canvas / preview stores. Reading `document` inside this effect
-  // (after the React commit phase) guarantees the panel's DOM is
-  // already mounted when an `openExpanded` / `openPreview` call from
-  // `jumpToResult` flips the relevant store flag.
-  useEffect(() => {
-    setPreviewPanelEl(
-      document.querySelector<HTMLElement>('[data-search-scope="node"]') ?? null,
-    );
-  }, [expandedNodeId, previewType]);
-
   // Resolve the chat-thread scroll root whenever a question node's
-  // conversation is open. Only resolved while `viewingQuestionThread`
+  // conversation is open. Only resolved while its preview tab
   // is set so we never paint search highlights over the unrelated
   // canvas chat; cleared otherwise. Re-runs on `activeIdx` so the
   // element is re-read after the thread swaps to a different node.
   useEffect(() => {
-    if (!viewingQuestionThread) {
+    if (!expandedNodeId) {
       setChatThreadEl(null);
       return;
     }
     setChatThreadEl(
       document.querySelector<HTMLElement>('[data-chat-thread-root]') ?? null,
     );
-  }, [viewingQuestionThread, activeIdx]);
+  }, [expandedNodeId, activeIdx]);
 
-  // Paint the same `::highlight(huabu-search)` ranges over node
-  // labels and Milkdown bodies that are visible on the canvas *and*,
-  // when an expanded preview is open, over its body, *and* — for
-  // conversation matches — over the open question-node chat thread.
+  // Paint the same `::highlight(huabu-search)` ranges over node labels
+  // and Milkdown bodies visible on the canvas and, for conversation
+  // matches, over the open question-node chat thread. Expanded previews
+  // own a separate search layer and are deliberately excluded.
   // The hook's MutationObserver picks up nodes that mount lazily (e.g.
   // a note's editor surface, pdf.js text-layer spans, chat messages
   // hydrated from history).
   useTextHighlight({
-    container: [canvasRoot, previewPanelEl, chatThreadEl],
+    container: [canvasRoot, chatThreadEl],
     query,
     maxRanges: 800,
   });
@@ -281,27 +258,14 @@ export const CanvasSearchResults = (): JSX.Element => {
    * gracefully when the node has no thread (e.g. it was deleted
    * mid-search). Returns whether a thread was actually opened.
    */
-  const openConversationForNode = useCallback(
-    (nodeId: string): boolean => {
-      const { nodes, canvasId } = useCanvasStore.getState();
-      const node = nodes.find((n) => n.id === nodeId);
-      const data = node?.data as
-        | { threadId?: string; agentBinding?: AgentBinding }
-        | undefined;
-      if (!data?.threadId) return false;
-      openQuestionThread(
-        {
-          presentationAnchor: { canvasId, nodeId },
-          conversationOwner: { canvasId, nodeId, threadId: data.threadId },
-        },
-        data.agentBinding,
-        canvasId || undefined,
-      );
-      requestOpenRightPanel();
-      return true;
-    },
-    [openQuestionThread, requestOpenRightPanel],
-  );
+  const openConversationForNode = useCallback((nodeId: string): boolean => {
+    const { nodes } = useCanvasStore.getState();
+    const node = nodes.find((n) => n.id === nodeId);
+    const data = node?.data as { threadId?: string } | undefined;
+    if (!data?.threadId) return false;
+    openPreviewNode(nodeId);
+    return true;
+  }, []);
 
   const jumpToResult = useCallback(
     (row: SearchResultRow) => {
@@ -323,7 +287,6 @@ export const CanvasSearchResults = (): JSX.Element => {
           rows: [row],
           edgeEndpoints: endpoints,
         });
-        closeExpanded();
         return;
       }
       focusNodeOnCanvas(nodeId);
@@ -332,121 +295,40 @@ export const CanvasSearchResults = (): JSX.Element => {
       // preview); the dedicated effect below highlights + scrolls to
       // the matched message inside it.
       if (row.match.field === 'conversation') {
-        closeExpanded();
-        openConversationForNode(nodeId);
+        if (openConversationForNode(nodeId) && query) {
+          scheduleScrollToMatch(
+            () =>
+              document.querySelector<HTMLElement>('[data-chat-thread-root]'),
+            query,
+            row.match.occurrenceIndex,
+            {
+              onTimeout: () =>
+                toast(
+                  'Match not visible in the conversation — scroll manually to find it.',
+                  { tone: 'info', duration: 4000 },
+                ),
+            },
+          );
+        }
         return;
       }
-      // Only auto-expand when the node type renders real preview
-      // content. Types without a `NodePreviews` entry (frame, group,
-      // prompt, plain text, …) would otherwise pop up the "Preview
-      // not available for {type}" placeholder, which adds nothing
-      // beyond what's already visible on the canvas and forces the
-      // user to close it before continuing. For those, close any
-      // stale preview left over from a previous result so the user
-      // is left looking at the focused node on the canvas instead of
-      // an unrelated panel.
+      // Only open when the node type renders real preview content. Types
+      // without a `NodePreviews` entry leave the user's current preview alone.
       if (hasNodePreview(nodeType)) {
-        openExpanded(nodeId);
-      } else {
-        closeExpanded();
+        // Browsing results reuses the group's inspection slot (§9.2).
+        openPreviewNode(nodeId, { transient: true });
       }
     },
-    [
-      focusNodeOnCanvas,
-      focusGroupOnCanvas,
-      openExpanded,
-      closeExpanded,
-      openConversationForNode,
-    ],
+    [focusNodeOnCanvas, focusGroupOnCanvas, openConversationForNode, query],
   );
 
-  // Live-follow the active visible row on the canvas. Both header and
-  // match rows centre the canvas on the underlying node and (when the
-  // type has a real preview) open its expanded panel, so the gesture
-  // is consistent: ↑ / ↓ always re-anchors the viewport on the row's
-  // node. Only the *match* rows also seek inside the preview (handled
-  // by the next effect).
+  // Live-follow only on the Canvas. Browsing with ↑ / ↓ must not open,
+  // replace, or close Preview Workspace tabs; Enter or click confirms a row.
   useEffect(() => {
     const v = visibleRows[activeIdx];
     if (!v) return;
     focusGroupOnCanvas(v.group);
-    // A conversation match follows into the question node's chat
-    // thread rather than an expanded preview.
-    const isConversationRow =
-      v.kind === 'match' && v.row.match.field === 'conversation';
-    if (v.group.edgeEndpoints) {
-      closeExpanded();
-    } else if (isConversationRow) {
-      closeExpanded();
-      openConversationForNode(v.group.nodeId);
-    } else if (hasNodePreview(v.group.nodeType)) {
-      openExpanded(v.group.nodeId);
-    } else {
-      closeExpanded();
-    }
-  }, [
-    visibleRows,
-    activeIdx,
-    focusGroupOnCanvas,
-    openExpanded,
-    closeExpanded,
-    openConversationForNode,
-  ]);
-
-  // Scroll-into-view follow-up for **match rows only** — when an
-  // expanded preview is (or will be) open for the active row's node,
-  // seek to the matching text inside its body.
-  useEffect(() => {
-    const v = visibleRows[activeIdx];
-    if (!v || v.kind !== 'match' || !query) return;
-    // Edge label matches have no in-preview body to scroll — the label
-    // is already painted right on the edge by the highlight layer.
-    if (v.row.match.kind === 'edge') return;
-    // Conversation matches live in the node's chat thread, not its
-    // preview body, so there is nothing to seek to inside the preview
-    // (handled by the dedicated chat-thread effect below).
-    if (v.row.match.field === 'conversation') return;
-    const nth = v.row.match.occurrenceIndex;
-    const cancel = scheduleScrollToMatch(
-      () => document.querySelector<HTMLElement>('[data-search-scope="node"]'),
-      query,
-      nth,
-      {
-        onTimeout: () =>
-          toast(
-            'Match not visible in preview — scroll manually or press Cmd+F inside it for an in-preview search.',
-            { tone: 'info', duration: 4000 },
-          ),
-      },
-    );
-    return cancel;
-  }, [visibleRows, activeIdx, query]);
-
-  // Scroll-into-view follow-up for **conversation match rows** — seek
-  // to the matched message inside the open question-node chat thread.
-  // The thread mounts asynchronously (history is hydrated over the
-  // network after `openConversationForNode` switches the panel), so
-  // `scheduleScrollToMatch` retries on every chat subtree mutation
-  // until the n-th occurrence lands or the watchdog elapses.
-  useEffect(() => {
-    const v = visibleRows[activeIdx];
-    if (!v || v.kind !== 'match' || !query) return;
-    if (v.row.match.field !== 'conversation') return;
-    const nth = v.row.match.occurrenceIndex;
-    const cancel = scheduleScrollToMatch(
-      () => document.querySelector<HTMLElement>('[data-chat-thread-root]'),
-      query,
-      nth,
-      {
-        onTimeout: () =>
-          toast(
-            'Match not visible in the conversation — scroll manually to find it.',
-            { tone: 'info', duration: 4000 },
-          ),
-      },
-    );
-    return cancel;
-  }, [visibleRows, activeIdx, query]);
+  }, [visibleRows, activeIdx, focusGroupOnCanvas]);
 
   // Keyboard handling lives on `window` (not on a panel-scoped
   // `onKeyDown`) because the live-follow effect calls `selectNodes`,
@@ -456,14 +338,12 @@ export const CanvasSearchResults = (): JSX.Element => {
   // bar and any canvas-level Arrow / Enter handlers while a query
   // is active.
   //
-  // LOAD-BEARING — capture phase + stopPropagation here suppresses
-  // *all* canvas-level Enter / Arrow handlers while the result list
-  // is mounted. That is intentional (we own the keyboard while
-  // searching); Escape is handled by `CanvasSearchInput` (which
-  // clears the query and closes the scope — that unmounts this
-  // component and the keydown listener cleans up).
+  // Search keeps ownership while focus is in its input/results or React Flow
+  // has moved focus onto a plain Canvas node wrapper. Editors and controls in
+  // Chat, Preview, and Canvas keep their own Enter / Arrow behavior.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (!shouldCanvasSearchOwnKeyboard(e.target)) return;
       if (e.key === 'Enter') {
         e.preventDefault();
         e.stopPropagation();
@@ -547,7 +427,7 @@ export const CanvasSearchResults = (): JSX.Element => {
     !isStreaming && query.trim().length > 0 && results.length === 0 && !error;
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col" data-canvas-search-results="">
       {/* Truncation banner. VS Code-style: lives at the TOP so the
           user spots the warning before scrolling and knows the list
           is incomplete. */}
@@ -649,7 +529,7 @@ const NodeHeaderItem = ({
   collapsed,
   active,
   onClick,
-}: NodeHeaderItemProps): JSX.Element => {
+}: NodeHeaderItemProps): React.JSX.Element => {
   // Edge groups: render the connection glyph; node groups: per-type icon.
   // `getNodeIcon` falls back to the frame icon for unknown types, which
   // would mis-represent an edge as a frame in the list — short-circuit.
@@ -699,7 +579,7 @@ const NodeMatchItem = ({
   row,
   active,
   onClick,
-}: NodeMatchItemProps): JSX.Element => (
+}: NodeMatchItemProps): React.JSX.Element => (
   <button
     type="button"
     tabIndex={-1}
@@ -743,7 +623,7 @@ const SnippetLine = ({
   text: string;
   matchStart: number;
   matchLength: number;
-}): JSX.Element => {
+}): React.JSX.Element => {
   let before = text.slice(0, matchStart);
   const hit = text.slice(matchStart, matchStart + matchLength);
   const after = text.slice(matchStart + matchLength);

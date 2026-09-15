@@ -11,6 +11,7 @@ import type {
   DeleteCanvasResponse,
   GetCanvasResponse,
   GetWorldReferencesResponse,
+  GetSpacePreviewSceneResponse,
   GetNodeContentResponse,
   PutCanvasRequest,
   PutCanvasResponse,
@@ -26,6 +27,8 @@ import type {
   RevealNodesFolderResponse,
   PostCanvasExecuteRequest,
   PostCanvasExecuteResponse,
+  MoveSelectionBody,
+  MoveSelectionResponse,
 } from '@huabu/shared';
 
 /**
@@ -143,6 +146,17 @@ export async function getWorldReferences(
   );
 }
 
+export async function getSpacePreviewScene(
+  canvasId: string,
+): Promise<GetSpacePreviewSceneResponse> {
+  return apiFetch<GetSpacePreviewSceneResponse>(
+    routes.canvasPreviewScene(canvasId),
+    {
+      fallbackMessage: 'Failed to load Space preview',
+    },
+  );
+}
+
 export async function postCanvasExecute(
   canvasId: string,
   request: PostCanvasExecuteRequest,
@@ -151,6 +165,17 @@ export async function postCanvasExecute(
     method: 'POST',
     json: request,
     fallbackMessage: 'Failed to execute Space command',
+  });
+}
+
+export async function moveCanvasSelection(
+  canvasId: string,
+  request: MoveSelectionBody,
+): Promise<MoveSelectionResponse> {
+  return apiFetch<MoveSelectionResponse>(routes.canvasMoveSelection(canvasId), {
+    method: 'POST',
+    json: request,
+    fallbackMessage: 'Failed to move selection',
   });
 }
 
@@ -269,9 +294,9 @@ export async function getNodeContent(
 }
 
 /**
- * Download the canvas as a self-contained `.huabu.json` export bundle.
+ * Download the canvas as a self-contained `.huabu.zip` export bundle.
  *
- * Performs a lightweight existence check via getCanvas to catch errors early,
+ * Preflights export eligibility to surface refusals inside the application,
  * then triggers a native browser download via a temporary `<a>` link
  * so the full response body never needs to live in JS memory.
  *
@@ -279,11 +304,7 @@ export async function getNodeContent(
  * `Content-Disposition` header.
  */
 export async function exportCanvas(canvasId: string): Promise<void> {
-  // Lightweight pre-check: verify canvas exists without running the export.
-  const canvas = await getCanvas(canvasId);
-  if (!canvas) {
-    throw new Error('Canvas not found');
-  }
+  await apiFetch<void>(`${routes.canvasExport(canvasId)}?check=true`);
 
   const url = apiUrl(routes.canvasExport(canvasId));
   const a = document.createElement('a');

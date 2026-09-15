@@ -4,9 +4,12 @@
 import { marked } from 'marked';
 import sanitizeHtml from 'sanitize-html';
 
-import { webLookupQuerySchema } from '@huabu/shared';
+import {
+  interactiveViewDefinitionV1Schema,
+  webLookupQuerySchema,
+} from '@huabu/shared';
 
-import { getCanvasStore } from '../storage/index.js';
+import { space } from '../storage/index.js';
 
 import type {
   WebLookupQuery,
@@ -165,7 +168,7 @@ const webRoutes: FastifyPluginAsync = async (fastify) => {
 
       const { canvasId, nodeId } = parsed.data;
 
-      const source = getCanvasStore(canvasId).readNode(nodeId);
+      const source = (await space(canvasId).nodes.read(nodeId))?.record;
       if (!source || source.type !== 'web') {
         return reply.code(404).send({ message: 'Source not ingested' });
       }
@@ -224,7 +227,7 @@ const webRoutes: FastifyPluginAsync = async (fastify) => {
 
       const { canvasId, nodeId } = parsed.data;
 
-      const source = getCanvasStore(canvasId).readNode(nodeId);
+      const source = (await space(canvasId).nodes.read(nodeId))?.record;
       if (!source || source.type !== 'web') {
         return reply.code(404).send({ message: 'Source not ingested' });
       }
@@ -281,7 +284,7 @@ const webRoutes: FastifyPluginAsync = async (fastify) => {
 
     const { canvasId, nodeId } = parsed.data;
 
-    const source = getCanvasStore(canvasId).readNode(nodeId);
+    const source = (await space(canvasId).nodes.read(nodeId))?.record;
     if (!source || source.type !== 'web') {
       return reply.code(404).send({ message: 'Source not ingested' });
     }
@@ -336,6 +339,28 @@ const webRoutes: FastifyPluginAsync = async (fastify) => {
     // them from reaching the host page).
     if (DATA_URL_RE.test(src)) {
       const payload: WebPageResponse = { src, kind: 'html', embeddable: true };
+      return reply.send(payload);
+    }
+
+    const structuralNodes = (await space(canvasId).read())?.state.nodes as
+      | Array<{
+          id?: unknown;
+          type?: unknown;
+          data?: Record<string, unknown>;
+        }>
+      | undefined;
+    const structuralNode = structuralNodes?.find((node) => node.id === nodeId);
+    if (
+      structuralNode?.type === 'web' &&
+      interactiveViewDefinitionV1Schema.safeParse(
+        structuralNode.data?.interactiveView,
+      ).success
+    ) {
+      const payload: WebPageResponse = {
+        src: `/api/interactive-views/${encodeURIComponent(canvasId)}/${encodeURIComponent(nodeId)}/renderer`,
+        kind: 'html',
+        embeddable: true,
+      };
       return reply.send(payload);
     }
 

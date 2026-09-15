@@ -46,10 +46,12 @@ import {
   renderNodes,
 } from '../agent/conversation/prompt/node-element.js';
 import { buildAgentNodePreview } from '../agent/node-ref.js';
-import { getCanvasStore } from '../storage/index.js';
+import { space } from '../storage/index.js';
 
 import type { AgentNodePreview } from '../agent/node-ref.js';
 import type { CanvasNodeType, SpatialNode } from '@huabu/shared';
+
+const DEFAULT_NEIGHBOURHOOD_RADIUS = 400;
 
 // ─── Public entry point ─────────────────────────────────────────────────────
 
@@ -67,39 +69,39 @@ import type { CanvasNodeType, SpatialNode } from '@huabu/shared';
  * Owns the preview-extraction policy. Forwards each node through the
  * shared {@link extractAgentNodePreview} ladder
  * (`summary > content[:120] > src`) with two inputs merged in one
- * pass: the on-disk frontmatter (via `readNode` — canonical for note
- * nodes whose body lives in `nodes/<file>.md`) and the inline
- * `data.content` / `data.src` (text-on-canvas nodes whose body never
- * touches disk). Per-node disk reads are memoized.
+ * pass: the stored node record (canonical for note nodes whose body lives
+ * outside the topology) and the inline `data.content` / `data.src`
+ * (text-on-canvas nodes whose body is never a separate record).
+ *
+ * Records are read once, up front, for the whole Space. The neighbourhood
+ * is a subset, so this reads more than the old lazy per-node path did on a
+ * sparse canvas — but a lazy read cannot cross an async port without making
+ * the pure walk below async too, and the walk already visits every node to
+ * build the spatial bundle (§12.6.1).
  */
-export function getNodeNeighbourhood(
+export async function getNodeNeighbourhood(
   canvasId: string,
   anchorNodeId: string,
-): NodeNeighbourhoodContext | null {
-  const canvas = getCanvasStore(canvasId).read();
+): Promise<NodeNeighbourhoodContext | null> {
+  const handle = space(canvasId);
+  const canvas = await handle.read();
   if (!canvas) return null;
   const bundle = buildSpatialBundle(canvas);
   const target = bundle.spatialNodes.find((n) => n.id === anchorNodeId);
   if (!target) return null;
 
-  const store = getCanvasStore(canvasId);
-  const cache = new Map<string, AgentNodePreview>();
+  const records = await handle.nodes.list();
   // One assembler for every neighbour: the node carries whatever the spatial
   // bundle knows (id / type; its `data.label` is always empty), and
-  // `describeNode` fills label + body from the sidecar, then derives the
+  // `describeNode` fills label + body from the record, then derives the
   // `file=` path, preview line, and `rev` token (in lock-step with the RFS
-  // `ETag`). Memoized so a node referenced twice is read once.
-  const describe = (n: SpatialNode): AgentNodePreview => {
-    const hit = cache.get(n.id);
-    if (hit) return hit;
-    const preview = describeNode(
-      store,
+  // `ETag`).
+  const describe = (n: SpatialNode): AgentNodePreview =>
+    describeNode(
       { id: n.id, type: n.type, ...(n.label ? { label: n.label } : {}) },
       'preview',
+      records.get(n.id)?.record ?? null,
     );
-    cache.set(n.id, preview);
-    return preview;
-  };
 
   return buildNodeNeighbourhoodContext(
     target,
@@ -201,7 +203,12 @@ export function buildNodeNeighbourhoodContext(
   opts?: { maxDistance?: number },
 ): NodeNeighbourhoodContext {
   const nodeById = new Map(allNodes.map((n) => [n.id, n]));
-  const maxDistance = opts?.maxDistance ?? 2000;
+  const maxDistance = opts?.maxDistance ?? DEFAULT_NEIGHBOURHOOD_RADIUS;
+  const connectedIds = new Set<string>();
+  for (const edge of edges) {
+    if (edge.source === anchorNode.id) connectedIds.add(edge.target);
+    if (edge.target === anchorNode.id) connectedIds.add(edge.source);
+  }
 
   // All content nodes (non-frame, non-self).
   const contentNodes = allNodes.filter(
@@ -214,13 +221,15 @@ export function buildNodeNeighbourhoodContext(
   // ── Walk from inside-out, starting from the anchor node ──
   let currentRef: SpatialNode = anchorNode;
   let currentFrameId: string | null | undefined = anchorNode.parentId;
+  let isAnchorFrame = true;
 
   while (true) {
     const frame = currentFrameId ? nodeById.get(currentFrameId) : undefined;
 
     if (frame) {
       // ── Inner layer: currentRef vs siblings inside this frame ──
-      const siblings = contentNodes.filter(
+      const siblingCandidates = isAnchorFrame ? allNodes : contentNodes;
+      const siblings = siblingCandidates.filter(
         (n) => n.parentId === currentFrameId && n.id !== currentRef.id,
       );
       const siblingGroups = buildGroupsFromNodes(
@@ -228,7 +237,28 @@ export function buildNodeNeighbourhoodContext(
         siblings,
         nodeById,
         describe,
-      ).filter((g) => g._minEdgeDist <= maxDistance);
+      ).filter((g) => isAnchorFrame || g._minEdgeDist <= maxDistance);
+
+      if (isAnchorFrame) {
+        const frameCenter = rectCenter(frame.rect);
+        const refCenter = rectCenter(currentRef.rect);
+        siblingGroups.unshift({
+          dx: Math.round(frameCenter.x - refCenter.x),
+          dy: Math.round(frameCenter.y - refCenter.y),
+          _minEdgeDist: 0,
+          arrangement: 'containing frame',
+          frameId: frame.id,
+          frameLabel: frame.label,
+          nodes: [
+            describe?.(frame) ??
+              buildAgentNodePreview({
+                id: frame.id,
+                type: 'frame' as CanvasNodeType,
+                ...(frame.label ? { label: frame.label } : {}),
+              }),
+          ],
+        });
+      }
       layers.push({
         frameId: frame.id,
         frameLabel: frame.label,
@@ -239,6 +269,7 @@ export function buildNodeNeighbourhoodContext(
       // Move outward: the frame itself becomes the reference entity.
       currentRef = frame;
       currentFrameId = frame.parentId;
+      isAnchorFrame = false;
     } else {
       // ── Outermost layer: currentRef vs everything outside ──
       // Collect ancestors to exclude.
@@ -337,6 +368,29 @@ export function buildNodeNeighbourhoodContext(
 
       break; // outermost layer done
     }
+  }
+
+  // Explicit relationships outrank proximity. A connected endpoint may sit
+  // beyond the radius or inside an outer frame whose descendants are normally
+  // represented only by that frame, so append any endpoint not already shown.
+  const includedIds = new Set(
+    allGroups.flatMap((group) => group.nodes.map((node) => node.id)),
+  );
+  const missingConnectedNodes = [...connectedIds]
+    .map((id) => nodeById.get(id))
+    .filter(
+      (node): node is SpatialNode =>
+        node !== undefined && !includedIds.has(node.id),
+    );
+  if (missingConnectedNodes.length > 0) {
+    const connectedGroups = buildGroupsFromNodes(
+      anchorNode,
+      missingConnectedNodes,
+      nodeById,
+      describe,
+    );
+    layers.push({ groups: connectedGroups });
+    allGroups.push(...connectedGroups);
   }
 
   // If no layers at all, the node is isolated.

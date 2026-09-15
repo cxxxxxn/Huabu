@@ -1,7 +1,7 @@
 ---
 name: space
 description: Space mental model (the infinite work surface), tool boundaries, and command reference. The single entry point for any agent operating on a Huabu Space.
-appliesTo: [ask, operate, sketch, external]
+appliesTo: [ask, operate, external]
 version: 1
 ---
 
@@ -28,7 +28,7 @@ Node text, frontmatter, skill files, memory, history. Read with `read`, `find`, 
   memory/*.md              # long-form, agent-curated memory
   skills/<id>/SKILL.md     # per-Space skill overrides (optional)
   .artifacts/<id><ext>     # raw bytes (image / pdf / video / cover); `read` returns images inline, rejects pdf / video
-  .history/                # saved threads, intent, event log (rarely needed)
+  .history/                # saved threads, event log (rarely needed)
 ```
 
 A node's filename is deterministically derived from its `label` and kept in 1:1 sync, so when you have the label you can build the path yourself:
@@ -88,7 +88,7 @@ Behaviour the schema can't convey:
 - **Nodes in context are metadata only.** Pass a node's supplied `file` path straight to `read` for the body. Only when a node is mentioned outside your context (e.g. it appears in a Space snapshot but wasn't shown as a `<node>`) do you build the path yourself via the safeLabel rule above. For spatial / structural info (including position), call `inspect_nodes({ ids: ["<id>"] })`.
 - **Cross-Space reads are World-only.** Tools default to the conversation's Space. In a World conversation, first read the World outline, take `targetCanvasId` from a canonical `canvasRef`, then pass it to `get_space_outline`, `inspect_nodes`, `inspect_edges`, `read`, `grep`, `find`, or `ls`. The server rejects arbitrary Canvas IDs. `snapshot_nodes` remains owner-scoped because it materializes cache artifacts; use `read` with `targetCanvasId` to view source images inline. This never grants cross-Space writes; `space_commands` remains World-scoped.
 - **`read` returns image artifacts inline** as vision content: pass an image node's frontmatter `src` straight to `read`, OR — for an inline `![](<key>)` image embedded in a note body — call `read(".artifacts/<key>")` to see it. PDF / video bytes still live under `.artifacts/` but are not readable — their `src` URL is the only handle.
-- Before placing new nodes, anchor on the selection / a referenced node / a focal cluster — never pick coordinates from the global bbox alone, or new nodes land outside the user's viewport.
+- Before placing new nodes, anchor on the selection / a referenced node / a focal cluster — never pick coordinates from the global bbox alone, or new nodes land outside the user's viewport. If setting `size`, inspect and match comparable nearby nodes; with no comparable peer, omit it and use the canonical default. See `layout-recipes.md` for long-Note and per-type sizing rules.
 
 ---
 

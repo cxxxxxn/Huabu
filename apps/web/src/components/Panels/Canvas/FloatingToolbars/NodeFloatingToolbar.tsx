@@ -2,7 +2,7 @@
 // Licensed under the MIT license.
 
 import { useInternalNode } from '@xyflow/react';
-import { Pin, PinOff, Trash2 } from 'lucide-react';
+import { MoveRight, Trash2 } from 'lucide-react';
 import { memo, useCallback, useMemo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -10,8 +10,6 @@ import {
   ACCENT_NONE_TOKEN,
   ACCENT_PICKER_OPTIONS_WITH_TRANSPARENT,
   type FrameNodeData,
-  type FrameRefNodeData,
-  type NodeRefNodeData,
 } from '@huabu/shared';
 import { isAlwaysAutoHeightNodeType } from '@huabu/shared/canvas-engine';
 
@@ -24,13 +22,17 @@ import { Tooltip } from '@/components/Common/Tooltip';
 import { useHeightMode } from '@/components/Nodes/shared/height/useHeightMode';
 import { NODE_ICON } from '@/config/nodeIcons';
 import { useIsNotMouse } from '@/hooks/useInputMode';
+import { useMultiSelectModifierHeld } from '@/hooks/useMultiSelectModifier';
 import { translateColorOptions } from '@/i18n/colors';
 import useCanvasStore from '@/store/canvasStore';
 import {
   blendedMarkRect,
   useNodeCollapseStore,
 } from '@/store/nodeCollapseStore';
-import { useWorkspaceStore } from '@/store/workspaceStore';
+import {
+  selectIsNodeOpen,
+  usePreviewWorkspaceStore,
+} from '@/store/previewWorkspace/store';
 import { resolveGeometryEdit } from '@/utils/node/geometry';
 
 import type { CanvasNodeType, NodeData } from '@/components/Nodes/types';
@@ -53,8 +55,8 @@ interface NodeFloatingToolbarProps {
   /**
    * Group 4 — node actions.
    * Buttons that trigger operations on the node: open large/fullscreen
-   * view, apply AI sketch recognition, download, unframe, start/cancel
-   * AI runs, open conversation thread, etc.
+   * view, download, unframe, start/cancel AI runs, open conversation
+   * thread, etc.
    * Rendered as the last group before the optional delete button.
    */
   actions?: ReactNode;
@@ -77,8 +79,8 @@ interface NodeFloatingToolbarProps {
  *     rendered on the canvas — text formatting, sketch stroke controls, frame
  *     child layout, etc. Omitted when the prop is undefined.
  *  4. Actions (`actions` prop). Buttons that trigger operations — open
- *     large/fullscreen view, AI sketch recognition, download, unframe, run /
- *     cancel AI question, etc. Omitted when the prop is undefined.
+ *     large/fullscreen view, download, unframe, run / cancel AI question,
+ *     etc. Omitted when the prop is undefined.
  *
  * A trailing delete button is appended for non-mouse input (mouse users have
  * keyboard Delete / Backspace).
@@ -97,18 +99,23 @@ export const NodeFloatingToolbar = memo(
     const updateNodeData = useCanvasStore((s) => s.updateNodeData);
     const convertNodeType = useCanvasStore((s) => s.convertNodeType);
     const deleteNodes = useCanvasStore((s) => s.deleteNodes);
+    const setMoveSelectionDialogOpen = useCanvasStore(
+      (s) => s.setMoveSelectionDialogOpen,
+    );
     const setNodeGeometry = useCanvasStore((s) => s.setNodeGeometry);
     const setNoteHeightMode = useCanvasStore((s) => s.setNoteHeightMode);
-    const expandedNodeId = useCanvasStore((s) => s.expandedNodeId);
-    const canvasId = useCanvasStore((s) => s.canvasId);
-    const setPortalNodePins = useCanvasStore((s) => s.setPortalNodePins);
-    const worldCanvasId = useWorkspaceStore((s) => s.worldCanvasId);
-    const worldEnabled = useWorkspaceStore((s) => s.worldEnabled);
-    const isPinnedToWorld = useCanvasStore(
-      (s) => s.pinnedSourceNodeIds[id] === true,
+    const isOpenInPreview = usePreviewWorkspaceStore((s) =>
+      selectIsNodeOpen(s, id),
     );
     const ingestion = useCanvasStore((s) => s.ingestionByNodeId[id]);
     const isNotMouse = useIsNotMouse();
+    // While the user holds the multi-select modifier (Ctrl / Cmd) they are
+    // reaching for *another* node to add to the selection — this toolbar,
+    // pinned above the current node, would occlude that target. Stand it
+    // down for the duration of the hold; it returns the moment the key is
+    // released (or once the multi-selection lands, at which point the
+    // single-node toolbar is replaced by the multi-select one anyway).
+    const multiSelectModifierHeld = useMultiSelectModifierHeld();
     const isTextFlowNode = isAlwaysAutoHeightNodeType(type);
     const accentPickerOptions = useMemo(
       () => translateColorOptions(ACCENT_PICKER_OPTIONS_WITH_TRANSPARENT, t),
@@ -119,13 +126,12 @@ export const NodeFloatingToolbar = memo(
     // on this node (dirty editor state would otherwise overwrite the
     // conversion) or while an ingest is in flight.
     const isTypeToggleDisabled =
-      expandedNodeId === id || ingestion?.status === 'pending';
-    const typeToggleDisabledReason =
-      expandedNodeId === id
-        ? t('toolbar.closeEditorChangeType')
-        : ingestion?.status === 'pending'
-          ? t('toolbar.ingestionInProgress')
-          : null;
+      isOpenInPreview || ingestion?.status === 'pending';
+    const typeToggleDisabledReason = isOpenInPreview
+      ? t('toolbar.closeEditorChangeType')
+      : ingestion?.status === 'pending'
+        ? t('toolbar.ingestionInProgress')
+        : null;
 
     // Anchor rect in flow (canvas) coordinates. `useInternalNode`
     // gives us live position + measured size, so the toolbar follows
@@ -211,9 +217,6 @@ export const NodeFloatingToolbar = memo(
     const isFrame = type === 'frame';
     const isCanvasRef = type === 'canvasRef';
     const isFrameRef = type === 'frameRef';
-    const isNodeRef = type === 'nodeRef';
-    const isReference = isCanvasRef || isFrameRef || isNodeRef;
-    const isSourceReference = isFrameRef || isNodeRef;
     const frameData = isFrame ? (data as FrameNodeData) : null;
     const frameSizing = frameData?.sizing ?? 'hug';
     const frameLayoutMode = frameData?.layoutMode ?? 'free';
@@ -230,7 +233,7 @@ export const NodeFloatingToolbar = memo(
     return (
       <CanvasFloatingPopover
         anchor={anchor}
-        open
+        open={!multiSelectModifierHeld}
         offset={12}
         side="top"
         className={FLOATING_TOOLBAR_CLASS}
@@ -356,6 +359,7 @@ export const NodeFloatingToolbar = memo(
           <FloatingToolbar.NumberInput
             label="Font"
             ariaLabel="Font size"
+            name="font-size"
             value={data.style?.fontSize ?? 16}
             min={8}
             max={160}
@@ -383,52 +387,16 @@ export const NodeFloatingToolbar = memo(
           </>
         )}
 
-        {/* World Pin is a single stateful toggle: the highlighted state
-            tells the user this node already has a World reference. Only
-            meaningful while the World feature is enabled — `worldCanvasId`
-            alone is workspace metadata that exists regardless of the
-            user-facing toggle. */}
-        {worldEnabled && canvasId !== worldCanvasId && !isReference && (
-          <>
-            <FloatingToolbar.Divider />
-            <FloatingToolbar.ToggleButton
-              active={isPinnedToWorld}
-              title={
-                isPinnedToWorld ? t('world.unpinNode') : t('world.pinNode')
-              }
-              onClick={() =>
-                void setPortalNodePins([
-                  {
-                    sourceCanvasId: canvasId as `canvas-${string}`,
-                    sourceNodeIds: [id as `node-${string}`],
-                    pinned: !isPinnedToWorld,
-                  },
-                ])
-              }
-            >
-              {isPinnedToWorld ? <PinOff /> : <Pin />}
-            </FloatingToolbar.ToggleButton>
-          </>
-        )}
-
-        {isSourceReference && (
+        {!['spacePreview', 'canvasRef', 'frameRef', 'nodeRef'].includes(
+          type,
+        ) && (
           <>
             <FloatingToolbar.Divider />
             <FloatingToolbar.ActionButton
-              title={t('world.unpinSelected')}
-              onClick={() => {
-                const target = (data as FrameRefNodeData | NodeRefNodeData)
-                  .target;
-                void setPortalNodePins([
-                  {
-                    sourceCanvasId: target.canvasId as `canvas-${string}`,
-                    sourceNodeIds: [target.nodeId as `node-${string}`],
-                    pinned: false,
-                  },
-                ]);
-              }}
+              title={t('moveSelection.action')}
+              onClick={() => setMoveSelectionDialogOpen(true)}
             >
-              <PinOff />
+              <MoveRight />
             </FloatingToolbar.ActionButton>
           </>
         )}

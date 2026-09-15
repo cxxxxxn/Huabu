@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { Check, Copy, LogIn, LogOut } from 'lucide-react';
+import { Check, LogIn, LogOut } from 'lucide-react';
 import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -15,9 +15,10 @@ import { SettingControl } from '@/components/Settings/Common/SettingControl';
 import { SettingLabel } from '@/components/Settings/Common/SettingLabel';
 import { SettingRow } from '@/components/Settings/Common/SettingRow';
 import { SettingSection } from '@/components/Settings/Common/SettingSection';
+import { useDeploymentReadinessStore } from '@/store/deploymentReadinessStore';
 import { useLLMStore } from '@/store/llmStore';
-import { copyToClipboard } from '@/utils/io/clipboard';
 
+import { OAuthDeviceCodePrompt } from './OAuthDeviceCodePrompt';
 import { useDebouncedSave } from '../utils';
 
 import type { LLMConfigUpdate, LLMUtilityConfigUpdate } from '@huabu/shared';
@@ -72,8 +73,9 @@ const BaseUrlRow: React.FC<BaseUrlRowProps> = ({
  * LLM provider/model configuration section.
  *
  * Two independent sub-sections:
- *  - **LLM Provider** (chat) — drives `llmStream` / `llmComplete`. Any
- *    provider pi-ai knows about (OpenAI, Anthropic, Azure, Copilot …).
+ *  - **LLM Provider** (chat) — drives `llmComplete` and the agent
+ *    runtime. Any provider pi-ai knows about (OpenAI, Anthropic,
+ *    Azure, Copilot …).
  *  - **Image Provider** (generate_image tool) — only Azure today, but
  *    fully decoupled from the chat provider, so users can pair a
  *    Copilot chat model with an Azure image deployment.
@@ -90,6 +92,9 @@ export const LLMSettings: React.FC = () => {
   const llmError = useLLMStore((s) => s.error);
   const llmLoadModels = useLLMStore((s) => s.loadModels);
   const llmUpdateConfig = useLLMStore((s) => s.updateConfig);
+  const credentialWritesDisabled = useDeploymentReadinessStore(
+    (s) => s.readiness?.credentials.writable === false,
+  );
 
   // Utility-tier model
   const utilityConfig = useLLMStore((s) => s.utilityConfig);
@@ -105,20 +110,6 @@ export const LLMSettings: React.FC = () => {
   const startOAuth = useLLMStore((s) => s.startOAuth);
   const cancelOAuth = useLLMStore((s) => s.cancelOAuth);
   const llmLogoutOAuth = useLLMStore((s) => s.logoutOAuth);
-
-  // Brief "copied" confirmation for the device-code copy button — the copy
-  // itself is otherwise silent, so users can't tell it worked.
-  const [codeCopied, setCodeCopied] = useState(false);
-  const handleCopyCode = useCallback(async () => {
-    if (!oauthUserCode) return;
-    await copyToClipboard(oauthUserCode);
-    setCodeCopied(true);
-  }, [oauthUserCode]);
-  useEffect(() => {
-    if (!codeCopied) return;
-    const timer = setTimeout(() => setCodeCopied(false), 1600);
-    return () => clearTimeout(timer);
-  }, [codeCopied]);
 
   // ── Chat-provider form state ──
   // Azure needs deployment / API version fields that none of the other
@@ -347,6 +338,7 @@ export const LLMSettings: React.FC = () => {
               }
               saved={llmConfig?.authenticated ?? false}
               placeholder="Azure key"
+              disabled={credentialWritesDisabled}
               saving={llmSaving}
               onSave={(key) => saveChat({ apiKey: key })}
             />
@@ -362,6 +354,7 @@ export const LLMSettings: React.FC = () => {
                 tone="neutral"
                 size="sm"
                 onClick={() => void llmLogoutOAuth()}
+                disabled={credentialWritesDisabled}
               >
                 <LogOut />
                 {t('settings.logout')}
@@ -372,7 +365,7 @@ export const LLMSettings: React.FC = () => {
                 tone="info"
                 size="sm"
                 onClick={() => void startOAuth()}
-                disabled={oauthPending}
+                disabled={oauthPending || credentialWritesDisabled}
               >
                 <LogIn />
                 {t('settings.login')}
@@ -383,55 +376,11 @@ export const LLMSettings: React.FC = () => {
 
         {/* OAuth pending — full-width row */}
         {llmConfig && isOAuth && oauthPending && oauthUserCode && (
-          <div className="bg-info-bg flex flex-col gap-2.5 px-3 py-3">
-            <p className="text-fg-default text-xs font-medium">
-              {t('settings.enterCodeAtOpenedPage')}
-            </p>
-            <div className="flex items-center gap-2">
-              <code className="bg-surface border-edge-default text-fg-default rounded-md border px-3 py-1.5 font-mono text-base font-semibold tracking-[0.25em] tabular-nums">
-                {oauthUserCode}
-              </code>
-              <Button
-                variant="ghost"
-                iconOnly
-                size="sm"
-                tone={codeCopied ? 'success' : 'info'}
-                title={
-                  codeCopied ? t('settings.copied') : t('settings.copyCode')
-                }
-                tooltipPlacement="bottom"
-                onClick={() => void handleCopyCode()}
-              >
-                {codeCopied ? <Check /> : <Copy />}
-              </Button>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              {oauthVerificationUri ? (
-                <p className="text-fg-muted min-w-0 text-[11px] leading-snug">
-                  {t('settings.orVisit')}{' '}
-                  <a
-                    href={oauthVerificationUri}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-info underline underline-offset-2"
-                  >
-                    {oauthVerificationUri}
-                  </a>
-                </p>
-              ) : (
-                <span />
-              )}
-              <Button
-                variant="ghost"
-                tone="neutral"
-                size="sm"
-                onClick={cancelOAuth}
-                className="shrink-0"
-              >
-                {t('actions.cancel')}
-              </Button>
-            </div>
-          </div>
+          <OAuthDeviceCodePrompt
+            userCode={oauthUserCode}
+            verificationUri={oauthVerificationUri}
+            onCancel={cancelOAuth}
+          />
         )}
 
         {/* Generic API-key providers use the shared intentional edit flow. */}
@@ -445,6 +394,7 @@ export const LLMSettings: React.FC = () => {
             }
             saved={llmConfig.authenticated}
             placeholder="sk-…"
+            disabled={credentialWritesDisabled}
             saving={llmSaving}
             onSave={handleSaveChatKey}
           />
@@ -583,7 +533,7 @@ export const LLMSettings: React.FC = () => {
                     tone="info"
                     size="sm"
                     onClick={() => void startOAuth()}
-                    disabled={oauthPending}
+                    disabled={oauthPending || credentialWritesDisabled}
                   >
                     <LogIn />
                     {t('settings.login')}
@@ -601,6 +551,7 @@ export const LLMSettings: React.FC = () => {
                   }
                   saved={utilityConfig.authenticated}
                   placeholder="sk-…"
+                  disabled={credentialWritesDisabled}
                   saving={utilitySaving}
                   onSave={handleSaveUtilityKey}
                 />

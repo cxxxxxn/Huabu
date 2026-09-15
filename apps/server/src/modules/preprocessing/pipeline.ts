@@ -31,16 +31,15 @@ import type {
   PreprocessDiagnostic,
   PreprocessNodeResult,
 } from './types.js';
-import type { CanvasStore } from '../storage/canvas-store.js';
-import type { BlobLease, BlobScope } from '../storage/index.js';
+import type { BlobLease, BlobScope, SpaceNodes } from '../storage/index.js';
 import type { PreprocessNodeRequest } from '@huabu/shared';
 
 const log = getLogger('preprocessing.pipeline');
 
 /** Dependencies injected into the pipeline runner. */
 export interface PipelineDeps {
-  store: CanvasStore;
-  blobs: BlobScope;
+  nodes: SpaceNodes;
+  artifacts: BlobScope;
   provider: ProviderManager;
 }
 
@@ -107,7 +106,7 @@ async function runPipelineStages(
       // other blob reader takes bytes.
       const artifactName = ctx.resolved.artifactName;
       if (artifactName) {
-        const lease = await deps.blobs.materialize(artifactName);
+        const lease = await deps.artifacts.materialize(artifactName);
         if (lease) {
           leases.push(lease);
           ctx.resolved.filePath = lease.path;
@@ -138,7 +137,13 @@ async function runPipelineStages(
   // has cached content on disk and `src` is unchanged, skip Stages 2-5 and
   // project directly from the cached node. See `stages/cache-check.ts`.
   if (
-    tryCacheShortCircuit(request, ctx.resolved, ctx, diagnostics, deps.store)
+    await tryCacheShortCircuit(
+      request,
+      ctx.resolved,
+      ctx,
+      diagnostics,
+      deps.nodes,
+    )
   ) {
     return project(
       request,
@@ -157,6 +162,39 @@ async function runPipelineStages(
       if (has('extract_text')) usedCapabilities.push('extract_text');
       if (has('fetch_remote_content'))
         usedCapabilities.push('fetch_remote_content');
+
+      // PDF one-shot snapshot: the Extract stage already fetched the remote
+      // bytes for text extraction, so store that same buffer as a canvas-local
+      // artifact and make it the canonical source for Persist + rendering.
+      // Failures are non-fatal: the node keeps the remote URL and remains
+      // usable online rather than losing its extracted content.
+      if (
+        request.nodeType === 'pdf' &&
+        ctx.extracted?.rawPdf &&
+        ctx.resolved.artifactUri &&
+        /^https?:\/\//i.test(ctx.resolved.artifactUri)
+      ) {
+        try {
+          const artifactName = `${createId('artifact')}.pdf`;
+          const info = await deps.artifacts.put(
+            artifactName,
+            ctx.extracted.rawPdf,
+          );
+          ctx.resolved.artifactUri = info.name;
+          ctx.resolved.artifactName = info.name;
+        } catch (snapshotError) {
+          diagnostics.push({
+            code: 'SNAPSHOT_FAILED',
+            level: 'warning',
+            message:
+              snapshotError instanceof Error
+                ? snapshotError.message
+                : String(snapshotError),
+          });
+        }
+        const { rawPdf: _rawPdf, ...rest } = ctx.extracted;
+        ctx.extracted = rest;
+      }
 
       // Web one-shot snapshot: persist the fetched HTML as a `.mhtml`
       // artifact so subsequent renders can load from disk instead of
@@ -178,7 +216,7 @@ async function runPipelineStages(
               ? ctx.extracted.title
               : ctx.resolved.normalizedUri,
           );
-          await deps.blobs.put(artifactName, buffer);
+          await deps.artifacts.put(artifactName, buffer);
           // Inject the artifact key into metadata so the Normalize →
           // Persist chain writes it as a top-level YAML field on the
           // node sidecar. The web route reads `mhtmlArtifact` directly
@@ -266,7 +304,7 @@ async function runPipelineStages(
           ctx.normalized,
           plan,
           deps.provider,
-          deps.store.canvasId,
+          request.canvasId,
         );
         if (has('generate_label')) usedCapabilities.push('generate_label');
         if (has('generate_summary')) usedCapabilities.push('generate_summary');
@@ -349,7 +387,7 @@ async function runPipelineStages(
             placeholderNormalized,
             contentKind,
             bodyOwnership,
-            deps.store,
+            deps.nodes,
             src,
             true,
           );
@@ -365,7 +403,7 @@ async function runPipelineStages(
             ctx.normalized,
             contentKind,
             bodyOwnership,
-            deps.store,
+            deps.nodes,
             src,
             true,
           );

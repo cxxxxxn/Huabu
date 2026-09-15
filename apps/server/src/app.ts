@@ -32,7 +32,7 @@ import {
   removeProfiles as removeLegacyAcpProfiles,
 } from './modules/agent/acp/profile-store.js';
 import agentRoutes from './modules/agent/agent.route.js';
-import intentRoutes from './modules/agent/intent.route.js';
+import agentChangeReviewConfigRoutes from './modules/agent/change-review-config.route.js';
 import llmRoutes from './modules/agent/llm.route.js';
 import { registerOpCounterHook } from './modules/agent/memory/op-counter-hook.js';
 import skillsRoutes from './modules/agent/skills.route.js';
@@ -47,18 +47,24 @@ import { resetExternalNoteSessions } from './modules/canvas/external-watcher.js'
 import externalNoteRoutes from './modules/canvas/external.route.js';
 import syncRoutes from './modules/canvas/sync.route.js';
 import integrationsRoutes from './modules/integrations/integrations.route.js';
+import interactiveViewRoutes from './modules/interactive-view/interactive-view.route.js';
+import { isPublicRfsSkillBootstrapRequest } from './modules/remote_fs/public-skill.js';
 import rfsRoutes from './modules/remote_fs/rfs.route.js';
+import deploymentRoutes from './modules/security/deployment.route.js';
 import {
   hostGuardPlugin,
+  markBasicAuthenticated,
   originGuardPlugin,
   resolveAllowedHostnames,
 } from './modules/security/index.js';
+import { closeStorage } from './modules/storage/index.js';
 import webRoutes from './modules/web/web.route.js';
 import {
   initWorkspaceFromEnv,
   isWorkspaceConfigured,
 } from './modules/workspace.js';
 import workspaceRoutes from './modules/workspace.route.js';
+import workspacesRoutes from './modules/workspaces.route.js';
 import { preloadSkills } from './prompt/index.js';
 import { getPersistedSecret, setSecrets } from './security/secret-store.js';
 import { MAX_UPLOAD_BYTES } from './upload-limits.js';
@@ -170,9 +176,21 @@ if (basicAuthUser && basicAuthPass) {
   app.addHook('onRequest', async (request, reply) => {
     if (request.method === 'OPTIONS') return;
     const authHeader = request.headers.authorization || '';
+    if (
+      isPublicRfsSkillBootstrapRequest({
+        method: request.method,
+        url: request.url,
+        authorization: authHeader || undefined,
+      })
+    ) {
+      return;
+    }
 
     // Basic Auth (browser / Vite proxy)
-    if (authHeader === expectedBasic) return;
+    if (authHeader === expectedBasic) {
+      markBasicAuthenticated(request);
+      return;
+    }
 
     // Bearer token (agentlet RFS)
     if (authHeader.startsWith('Bearer ')) {
@@ -190,12 +208,21 @@ if (basicAuthUser && basicAuthPass) {
   // No Basic Auth configured — still gate Bearer-only RFS routes
   app.addHook('onRequest', async (request, reply) => {
     if (request.method === 'OPTIONS') return;
+    const authHeader = request.headers.authorization || '';
+    if (
+      isPublicRfsSkillBootstrapRequest({
+        method: request.method,
+        url: request.url,
+        authorization: authHeader || undefined,
+      })
+    ) {
+      return;
+    }
     // Without Basic Auth, all routes are open EXCEPT the Bearer-only
     // RFS routes, which always require a valid Bearer token.
     if (!request.url.startsWith('/api/rfs/')) {
       return;
     }
-    const authHeader = request.headers.authorization || '';
     if (authHeader.startsWith('Bearer ')) {
       const daemonToken = getConnectionToken();
       if (daemonToken && authHeader.slice(7) === daemonToken) return;
@@ -217,10 +244,17 @@ app.register(staticPlugin, {
 // The workspace routes themselves are always allowed so the client can set the path.
 app.addHook('preHandler', async (request, reply) => {
   const url = request.url;
+  const publicSkillBootstrap = isPublicRfsSkillBootstrapRequest({
+    method: request.method,
+    url,
+    authorization: request.headers.authorization,
+  });
   if (
     !isWorkspaceConfigured() &&
     url.startsWith('/api') &&
+    !publicSkillBootstrap &&
     !url.startsWith('/api/workspace') &&
+    !url.startsWith('/api/deployment') &&
     !url.startsWith('/api/llm') &&
     !url.startsWith('/api/integrations')
   ) {
@@ -232,17 +266,22 @@ app.addHook('preHandler', async (request, reply) => {
 });
 
 app.register(agentRoutes, { prefix: '/api/agent' });
+app.register(agentChangeReviewConfigRoutes, {
+  prefix: '/api/agent-change-review',
+});
 app.register(canvasRoutes, { prefix: '/api/canvas' });
 app.register(externalNoteRoutes, { prefix: '/api/canvas' });
 app.register(syncRoutes, { prefix: '/api/canvas' });
 app.register(webRoutes, { prefix: '/api/web' });
 app.register(artifactRoute, { prefix: '/api/canvas' });
 
-app.register(intentRoutes, { prefix: '/api/intent' });
 app.register(llmRoutes, { prefix: '/api/llm' });
 app.register(integrationsRoutes, { prefix: '/api/integrations' });
+app.register(deploymentRoutes, { prefix: '/api/deployment' });
+app.register(interactiveViewRoutes, { prefix: '/api/interactive-views' });
 app.register(skillsRoutes, { prefix: '/api/skills' });
 app.register(workspaceRoutes, { prefix: '/api/workspace' });
+app.register(workspacesRoutes, { prefix: '/api/workspaces' });
 app.register(rfsRoutes, { prefix: '/api/rfs' });
 app.register(agentTeamRoutes, { prefix: '/api/agent-team' });
 
@@ -332,6 +371,11 @@ if (bundledAgentTeamsPath) {
 // after the process is gone. Closing them here lets `app.close()` (driven
 // by the SIGTERM/SIGINT handlers in server.ts) tear them down gracefully.
 app.addHook('onClose', async () => resetExternalNoteSessions());
+// Close the storage connections on graceful shutdown. Disk holds nothing a
+// process exit would not release, so this earns its place by being the seat
+// a connection-holding backend will need — a pool nobody closes leaks on
+// every restart, and the lifecycle is where that is visible.
+app.addHook('onClose', async () => closeStorage());
 // Capture the bound TCP port for L1-owned reachback (RFS): the
 // canvas-scoped `HUABU_RFS_URL` base is built from this. RFS is
 // canvas-coupled and therefore a pure L1 concern, so the port lives in

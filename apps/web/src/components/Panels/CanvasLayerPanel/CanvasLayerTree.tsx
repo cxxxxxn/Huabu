@@ -21,9 +21,13 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { useTranslation } from 'react-i18next';
 
+import { getMissingFileKind } from '@/components/Nodes/missingFile';
 import useCanvasStore from '@/store/canvasStore.ts';
 import { useExternalImportsStore } from '@/store/externalImportsStore';
+import { usePanelStore } from '@/store/panelStore';
+import { openPreviewNode } from '@/store/previewWorkspace/actions';
 
 import {
   computeCollision as computeCollisionPure,
@@ -122,9 +126,17 @@ const SortableRow = React.memo(
     onToggleCollapse,
     onToggleLock,
   }: SortableRowProps) => {
+    const { t } = useTranslation();
     const { listeners, setNodeRef, isDragging } = useSortable({
       id: item.id,
     });
+    const missingFileKind = getMissingFileKind(item.node.data);
+    const missingFileLabel =
+      missingFileKind === 'sidecar'
+        ? t('layers.nodeContentFileMissing')
+        : missingFileKind === 'artifact'
+          ? t('layers.nodeSourceFileMissing')
+          : undefined;
 
     // Intentionally drop BOTH the active row's drag transform AND the
     // sibling rows' strategy transform: the dragged row stays in its
@@ -146,6 +158,7 @@ const SortableRow = React.memo(
         isSelected={isDirectlySelected}
         isHighlighted={isHighlighted}
         isDragging={isDragging}
+        missingFileLabel={missingFileLabel}
         isCollapsible={isCollapsible}
         isCollapsed={isCollapsed}
         isLocked={isLocked}
@@ -182,6 +195,15 @@ export interface CanvasLayerTreeProps {
    *   produce surprising z-order changes that "jump over" hidden nodes.
    */
   isFilterActive?: boolean;
+}
+
+export function shouldOpenLayerInPreview(
+  isPreviewFullscreen: boolean,
+  event: Pick<React.MouseEvent, 'shiftKey' | 'metaKey' | 'ctrlKey'>,
+): boolean {
+  return (
+    isPreviewFullscreen && !event.shiftKey && !event.metaKey && !event.ctrlKey
+  );
 }
 
 export const CanvasLayerTree = ({
@@ -682,6 +704,16 @@ export const CanvasLayerTree = ({
   const handleSelect = useCallback(
     (id: string, event: React.MouseEvent) => {
       event.stopPropagation();
+      if (
+        shouldOpenLayerInPreview(
+          usePanelStore.getState().isPreviewFullscreen,
+          event,
+        )
+      ) {
+        openPreviewNode(id);
+        selectionAnchorRef.current = id;
+        return;
+      }
       const isShift = event.shiftKey;
       const isMulti = event.metaKey || event.ctrlKey;
 

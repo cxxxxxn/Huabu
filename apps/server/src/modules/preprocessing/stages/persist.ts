@@ -15,7 +15,7 @@
 import { getLogger } from '../../../utils/logger.js';
 import { updateNode } from '../../canvas/write-coordinator.js';
 
-import type { CanvasStore, NodeContent } from '../../storage/canvas-store.js';
+import type { NodeContent, SpaceNodes } from '../../storage/index.js';
 import type {
   BodyOwnership,
   NodeContentKind,
@@ -29,7 +29,7 @@ export async function persist(
   normalized: NormalizeResult,
   contentKind: NodeContentKind | undefined,
   bodyOwnership: BodyOwnership | undefined,
-  store: CanvasStore,
+  nodes: SpaceNodes,
   src?: string,
   requireExisting = false,
 ): Promise<PersistResult> {
@@ -50,7 +50,7 @@ export async function persist(
   let isNew = false;
   let existingSrc: string | undefined;
 
-  const outcome = await updateNode(store, nodeId, {
+  const outcome = await updateNode(nodes, nodeId, {
     apply: (existing) => {
       existingSrc =
         typeof existing?.src === 'string' ? existing.src : undefined;
@@ -87,21 +87,26 @@ export async function persist(
       }
 
       // Content-based dedup: body unchanged → don't rewrite the (potentially
-      // large) body; only refresh `label` / `mhtmlArtifact` frontmatter if
-      // they drifted. Without the mhtml refresh, a legacy web node would
-      // re-fetch + re-write its snapshot forever.
+      // large) body; only refresh source metadata that drifted. Without these
+      // refreshes, legacy remote web/PDF nodes would recreate their snapshots
+      // forever without adopting the new local artifact reference.
       if (existing && existing.content === normalized.canonicalContent) {
         const labelDrifted =
           !!normalized.label && existing.label !== normalized.label;
+        const srcDrifted = !!src && existing.src !== src;
         const newMhtml = normalized.metadata?.mhtmlArtifact;
         const mhtmlDrifted =
           typeof newMhtml === 'string' &&
           newMhtml.length > 0 &&
           (existing as Record<string, unknown>).mhtmlArtifact !== newMhtml;
-        if (labelDrifted || mhtmlDrifted) {
+        if (labelDrifted || srcDrifted || mhtmlDrifted) {
           branch = 'dedup-refresh';
           const merged: NodeContent = { ...existing };
           if (labelDrifted) merged.label = normalized.label ?? null;
+          if (srcDrifted) {
+            merged.src = src;
+            existingSrc = src;
+          }
           if (mhtmlDrifted) merged.mhtmlArtifact = newMhtml;
           return merged;
         }
@@ -122,6 +127,14 @@ export async function persist(
       };
     },
   });
+
+  // The repository reports anti-resurrection suppression at put time, after
+  // `apply` has selected a branch. Preserve the legacy coordinator behavior,
+  // where suppression happened before `apply` and therefore surfaced as a
+  // quiet skipped persist rather than a retryable PERSIST_FAILED diagnostic.
+  if (outcome.status === 'skipped-deleted') {
+    return { nodeId, isNew: false, contentChanged: false };
+  }
 
   // `branch` / `isNew` / `existingSrc` are set inside `apply` above, which
   // runs synchronously within `updateNode`'s critical section — but TS's

@@ -8,10 +8,8 @@
  * The worker calls {@link runAnalysisPass}. We:
  *
  *   1. Build the system prompt from `prompt/agents/memory/AGENT.md`.
- *   2. Assemble a compact context bundle from disk: canvas snapshot,
- *      chat-thread digest, recent ops, intent-episode digest, and
- *      the current contents of every memory surface (workspace,
- *      canvas, user-skill catalogue).
+ *   2. Assemble a compact context bundle from backend-owned Space records
+ *      and logs, plus the memory surfaces.
  *   3. Run the sub-agent against that context. The agent's only way
  *      to affect the world is via the `fs_write` tool, whose handler
  *      routes by virtual path into the writers in `./writers.ts`.
@@ -26,25 +24,25 @@
  *     mutations on the same disk targets apply in declared order.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import path from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
 
-import { runAgent } from '../agent.service.js';
-import { readMemoryState } from './trigger.js';
 import { loadAgent, listSkills } from '../../../prompt/index.js';
 import {
-  canvasJsonPath,
-  chatDir,
-  eventsPath,
-  intentPath,
+  getStructuredStore,
+  type CanvasEvent,
+  type CanvasFile,
+  type SpaceHandle,
+} from '../../storage/index.js';
+import {
+  hasWorkspaceSettingDirectory,
   workspaceMemoryPath,
-  canvasMemoryPath,
-} from '../../storage/paths.js';
+} from '../../workspace/paths.js';
+import { runAgent } from '../agent.service.js';
+import { readCanvasMemory } from './read.js';
 
 import type { MemoryLogger } from './index.js';
 import type { WriteResult } from './writers.js';
 import type { Context, Message } from '@earendil-works/pi-ai';
-import type { IntentEpisode } from '@huabu/shared';
 
 /**
  * Soft caps applied while assembling the context bundle. The
@@ -54,16 +52,6 @@ import type { IntentEpisode } from '@huabu/shared';
  */
 const MAX_NODES_IN_SNAPSHOT = 60;
 const MAX_EVENTS_IN_DIGEST = 100;
-const MAX_CHAT_TURNS_IN_DIGEST = 12;
-const MAX_THREAD_SCAN = 6;
-/**
- * How many recent intent episodes the digest is allowed to surface in
- * detail. The aggregate counters (selected vs dismissed, top labels)
- * are always computed across every new episode regardless of this cap
- * — only the per-episode "examples" tail honours it. Keeps the bundle
- * bounded on canvases where the user smashes Cmd+I dozens of times.
- */
-const MAX_INTENT_EPISODES_IN_DIGEST = 20;
 
 /**
  * Run one memory analysis pass.
@@ -72,24 +60,24 @@ const MAX_INTENT_EPISODES_IN_DIGEST = 20;
  * does NOT call `markAnalyzed` (so the next trigger retries). Writer
  * rejections are *not* errors — they come back as `ok:false` tool
  * results which we surface in the returned summary.
- *
- * The returned `latestChatTs` is the maximum message timestamp the
- * pass scanned (independent of which were summarised into the
- * prompt). The worker persists it as `lastSeenThreadCursor` via
- * {@link markAnalyzed} so subsequent passes only look at strictly
- * newer turns — without it the chat digest would re-include the
- * same messages every threshold crossing.
  */
+export type AnalysisPassResult =
+  | {
+      status: 'completed';
+      results: WriteResult[];
+    }
+  | { status: 'skipped'; reason: 'space-not-found' };
+
 export async function runAnalysisPass(
   canvasId: string,
   logger?: MemoryLogger,
-): Promise<{
-  results: WriteResult[];
-  latestChatTs: number | null;
-  latestIntentTs: number | null;
-}> {
+): Promise<AnalysisPassResult> {
+  const handle = getStructuredStore().space(canvasId);
+  const record = await handle.read();
+  if (!record) return { status: 'skipped', reason: 'space-not-found' };
+
+  const bundle = await assembleContext(canvasId, handle, record);
   const agent = loadAgent('memory');
-  const bundle = assembleContext(canvasId);
   const context: Context = {
     systemPrompt: agent.systemPrompt,
     messages: bundle.messages,
@@ -134,9 +122,8 @@ export async function runAnalysisPass(
   }
 
   return {
+    status: 'completed',
     results: writeResults,
-    latestChatTs: bundle.latestChatTs,
-    latestIntentTs: bundle.latestIntentTs,
   };
 }
 
@@ -173,20 +160,6 @@ function parseWriteResult(raw: string): WriteResult | null {
 interface ContextBundle {
   messages: Message[];
   summary: string;
-  /**
-   * Max message timestamp scanned by the chat digest, or `null` when
-   * no new turns were seen. Carries to the worker so it can persist
-   * `lastSeenThreadCursor` and the next pass only looks at strictly
-   * newer turns.
-   */
-  latestChatTs: number | null;
-  /**
-   * Max `IntentEpisode.timestamp` folded into the intent digest, or
-   * `null` when no new episodes were seen. Worker persists this as
-   * `lastSeenIntentCursor` so each user intent pick is fed to the
-   * curator at most once.
-   */
-  latestIntentTs: number | null;
 }
 
 /**
@@ -198,33 +171,24 @@ interface ContextBundle {
  * sources are omitted so the prompt never carries stub "(none)"
  * lines that would waste tokens.
  */
-function assembleContext(canvasId: string): ContextBundle {
+async function assembleContext(
+  canvasId: string,
+  handle: SpaceHandle,
+  record: CanvasFile,
+): Promise<ContextBundle> {
   const messages: Message[] = [];
   const parts: string[] = [];
 
-  const snapshot = readCanvasSnapshot(canvasId);
-  if (snapshot) {
-    messages.push({
-      role: 'user',
-      content: `[SYSTEM Canvas snapshot]\n${snapshot.text}`,
-      timestamp: Date.now(),
-    });
-    parts.push(`${snapshot.nodeCount} nodes`);
-  }
+  const snapshot = readCanvasSnapshot(record);
+  messages.push({
+    role: 'user',
+    content: `[SYSTEM Canvas snapshot]\n${snapshot.text}`,
+    timestamp: Date.now(),
+  });
+  parts.push(`${snapshot.nodeCount} nodes`);
 
-  const state = readMemoryState(canvasId);
-  const chat = readChatDigest(canvasId, state.lastSeenThreadCursor);
-  if (chat) {
-    messages.push({
-      role: 'user',
-      content: `[SYSTEM Chat digest since ${
-        state.lastSeenThreadCursor ?? 'start'
-      }]\n${chat.text}`,
-      timestamp: Date.now(),
-    });
-    parts.push(`${chat.turns} chat turns`);
-  }
-  const events = readEventsDigest(canvasId);
+  const eventRows = await handle.events.read(MAX_EVENTS_IN_DIGEST);
+  const events = readEventsDigest(eventRows);
   if (events) {
     messages.push({
       role: 'user',
@@ -234,19 +198,7 @@ function assembleContext(canvasId: string): ContextBundle {
     parts.push(`${events.count} ops`);
   }
 
-  const intent = readIntentDigest(canvasId, state.lastSeenIntentCursor);
-  if (intent) {
-    messages.push({
-      role: 'user',
-      content: `[SYSTEM Intent digest since ${
-        state.lastSeenIntentCursor ?? 'start'
-      }]\n${intent.text}`,
-      timestamp: Date.now(),
-    });
-    parts.push(`${intent.episodeCount} intents`);
-  }
-
-  const memorySnapshot = readMemorySnapshot(canvasId);
+  const memorySnapshot = await readMemorySnapshot(canvasId);
   messages.push({
     role: 'user',
     content: `[SYSTEM Current memory]\n${memorySnapshot}`,
@@ -263,40 +215,29 @@ function assembleContext(canvasId: string): ContextBundle {
   return {
     messages,
     summary: parts.join(', ') || '(empty)',
-    latestChatTs: chat?.latestTs ?? null,
-    latestIntentTs: intent?.latestTs ?? null,
   };
 }
 
 // ─── Source readers ────────────────────────────────────────────────────────
 
-function readCanvasSnapshot(
-  canvasId: string,
-): { text: string; nodeCount: number } | null {
-  const file = canvasJsonPath(canvasId);
-  if (!existsSync(file)) return null;
-  try {
-    const raw = JSON.parse(readFileSync(file, 'utf8')) as {
-      title?: string | null;
-      state?: { nodes?: unknown[]; edges?: unknown[] };
-    };
-    const nodes = Array.isArray(raw.state?.nodes) ? raw.state!.nodes : [];
-    const edges = Array.isArray(raw.state?.edges) ? raw.state!.edges : [];
-    const summarisedNodes = nodes
-      .slice(0, MAX_NODES_IN_SNAPSHOT)
-      .map((n) => summariseNode(n));
-    const truncated = nodes.length > MAX_NODES_IN_SNAPSHOT;
-    const lines = [
-      `title: ${raw.title ?? '(untitled)'}`,
-      `nodes: ${nodes.length}${truncated ? ` (showing first ${MAX_NODES_IN_SNAPSHOT})` : ''}`,
-      `edges: ${edges.length}`,
-      '',
-      ...summarisedNodes,
-    ];
-    return { text: lines.join('\n'), nodeCount: nodes.length };
-  } catch {
-    return null;
-  }
+function readCanvasSnapshot(record: CanvasFile): {
+  text: string;
+  nodeCount: number;
+} {
+  const nodes = Array.isArray(record.state?.nodes) ? record.state.nodes : [];
+  const edges = Array.isArray(record.state?.edges) ? record.state.edges : [];
+  const summarisedNodes = nodes
+    .slice(0, MAX_NODES_IN_SNAPSHOT)
+    .map((node) => summariseNode(node));
+  const truncated = nodes.length > MAX_NODES_IN_SNAPSHOT;
+  const lines = [
+    `title: ${record.title ?? '(untitled)'}`,
+    `nodes: ${nodes.length}${truncated ? ` (showing first ${MAX_NODES_IN_SNAPSHOT})` : ''}`,
+    `edges: ${edges.length}`,
+    '',
+    ...summarisedNodes,
+  ];
+  return { text: lines.join('\n'), nodeCount: nodes.length };
 }
 
 function summariseNode(node: unknown): string {
@@ -319,272 +260,39 @@ function summariseNode(node: unknown): string {
   return `- [${type}] ${id} "${label.slice(0, 60)}"${pos}`;
 }
 
-interface ChatDigest {
-  text: string;
-  turns: number;
-  /**
-   * Max `timestamp` seen across every message that passed the `since`
-   * filter, regardless of whether it landed in the digest body. The
-   * worker persists this as the next pass's `lastSeenThreadCursor`
-   * so the chat digest monotonically advances.
-   */
-  latestTs: number | null;
-}
-
-/**
- * Pull a digest of recent chat turns from `<canvas>/.history/chat/`.
- *
- * Strategy:
- *   - List every thread file, sorted by `mtime` descending.
- *   - Walk up to {@link MAX_THREAD_SCAN} threads, scanning each
- *     message in turn. For each message:
- *       - drop turns older than `since` (the bookkeeping's
- *         `lastSeenThreadCursor`);
- *       - track `latestTs` = max(`timestamp`) of every survivor,
- *         so the caller can advance the cursor even when the
- *         digest body itself was capped;
- *       - skip system / non-user / non-assistant rows;
- *       - emit up to {@link MAX_CHAT_TURNS_IN_DIGEST} into the body.
- *   - For each emitted turn, render the role + the first ~200 chars
- *     of the content (or `[tool: name]` for assistant turns that
- *     only carried tool calls).
- */
-function readChatDigest(
-  canvasId: string,
-  since: number | null,
-): ChatDigest | null {
-  const dir = chatDir(canvasId);
-  if (!existsSync(dir)) return null;
-  let files: string[];
-  try {
-    files = readdirSync(dir);
-  } catch {
-    return null;
-  }
-  const threads = files
-    .filter((f) => f.endsWith('.json'))
-    .map((f) => path.join(dir, f))
-    .map((p) => ({ path: p, mtime: safeMtime(p) }))
-    .filter((t) => t.mtime !== null)
-    .sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0))
-    .slice(0, MAX_THREAD_SCAN);
-
-  const lines: string[] = [];
-  let turns = 0;
-  let latestTs: number | null = null;
-  for (const thread of threads) {
-    let ctx: { messages?: unknown[] } | null;
-    try {
-      ctx = JSON.parse(readFileSync(thread.path, 'utf8')) as {
-        messages?: unknown[];
-      };
-    } catch {
-      continue;
-    }
-    if (!ctx?.messages || !Array.isArray(ctx.messages)) continue;
-    for (const m of ctx.messages) {
-      if (!m || typeof m !== 'object') continue;
-      const msg = m as {
-        role?: string;
-        content?: unknown;
-        timestamp?: number;
-      };
-      const ts = typeof msg.timestamp === 'number' ? msg.timestamp : null;
-      if (since !== null && ts !== null && ts <= since) continue;
-
-      // Advance latestTs for every message that survived the `since`
-      // filter — not just the ones we end up emitting. That way the
-      // cursor still advances when MAX_CHAT_TURNS_IN_DIGEST has been
-      // reached, and we don't re-scan the same prefix next pass.
-      if (ts !== null && (latestTs === null || ts > latestTs)) {
-        latestTs = ts;
-      }
-
-      const role = msg.role;
-      if (role !== 'user' && role !== 'assistant') continue;
-      if (turns >= MAX_CHAT_TURNS_IN_DIGEST) continue;
-      const text = digestMessageContent(msg.content);
-      if (text.startsWith('[SYSTEM')) continue;
-      lines.push(`${role}: ${text}`);
-      turns++;
-    }
-  }
-  if (turns === 0 && latestTs === null) return null;
-  return { text: lines.join('\n'), turns, latestTs };
-}
-
-function digestMessageContent(content: unknown): string {
-  if (typeof content === 'string') return content.slice(0, 200);
-  if (!Array.isArray(content)) return '';
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== 'object') continue;
-    const b = block as { type?: string; text?: string; name?: string };
-    if (b.type === 'text' && typeof b.text === 'string') {
-      parts.push(b.text);
-    } else if (b.type === 'toolCall' && typeof b.name === 'string') {
-      parts.push(`[tool: ${b.name}]`);
-    }
-  }
-  return parts.join(' ').slice(0, 200);
-}
-
 interface EventsDigest {
   text: string;
   count: number;
 }
 
-function readEventsDigest(canvasId: string): EventsDigest | null {
-  const file = eventsPath(canvasId);
-  if (!existsSync(file)) return null;
-  let raw: string;
-  try {
-    raw = readFileSync(file, 'utf8');
-  } catch {
-    return null;
-  }
-  const lines = raw.split('\n').filter((l) => l.trim().length > 0);
-  const tail = lines.slice(-MAX_EVENTS_IN_DIGEST);
-  if (tail.length === 0) return null;
-  const summaries: string[] = [];
-  for (const line of tail) {
-    try {
-      const evt = JSON.parse(line) as {
-        ts?: number;
-        payload?: { kind?: string; description?: string };
-      };
-      const kind = evt.payload?.kind ?? 'event';
-      const desc = evt.payload?.description ?? '';
-      summaries.push(`- ${kind}: ${String(desc).slice(0, 120)}`);
-    } catch {
-      // malformed line — skip
-    }
-  }
-  return { text: summaries.join('\n'), count: tail.length };
+function readEventsDigest(events: readonly CanvasEvent[]): EventsDigest | null {
+  if (events.length === 0) return null;
+  const summaries = events.map((event) => {
+    // Preserve the existing output until the dedicated formatter issue is
+    // addressed. Canonical RecentAction payloads use `action`, so they still
+    // render as the historical "event" fallback in this storage-only slice.
+    const payload = event.payload as unknown as {
+      kind?: unknown;
+      description?: unknown;
+    };
+    return `- ${payload.kind ?? 'event'}: ${String(payload.description ?? '').slice(0, 120)}`;
+  });
+  return { text: summaries.join('\n'), count: events.length };
 }
 
-// ─── Intent digest ────────────────────────────────────────────
-// Summarize new episodes since `since`: counters + a small recent tail.
-
-interface IntentDigest {
-  text: string;
-  episodeCount: number;
-  latestTs: number | null;
-}
-
-function readIntentDigest(
-  canvasId: string,
-  since: number | null,
-): IntentDigest | null {
-  const file = intentPath(canvasId);
-  if (!existsSync(file)) return null;
-  let raw: string;
-  try {
-    raw = readFileSync(file, 'utf8');
-  } catch {
-    return null;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(parsed)) return null;
-
-  let latestTs: number | null = null;
-  let selected = 0;
-  let dismissed = 0;
-  let executedOk = 0;
-  let executedErr = 0;
-  const chosenCounts = new Map<string, number>();
-  const dismissedCandidateCounts = new Map<string, number>();
-  const fresh: IntentEpisode[] = [];
-
-  for (const item of parsed) {
-    if (!item || typeof item !== 'object') continue;
-    const ep = item as IntentEpisode;
-    if (typeof ep.timestamp !== 'number') continue;
-    if (since !== null && ep.timestamp <= since) continue;
-    if (latestTs === null || ep.timestamp > latestTs) latestTs = ep.timestamp;
-    fresh.push(ep);
-
-    if (ep.outcome?.type === 'selected') {
-      selected++;
-      const label = ep.outcome.chosenLabel?.slice(0, 80) ?? '(blank)';
-      chosenCounts.set(label, (chosenCounts.get(label) ?? 0) + 1);
-      const exec = ep.outcome.execution;
-      if (exec?.status === 'success') executedOk++;
-      else if (exec?.status === 'error') executedErr++;
-    } else if (ep.outcome?.type === 'dismissed') {
-      dismissed++;
-      for (const c of ep.candidates ?? []) {
-        const label = c.label?.slice(0, 80) ?? '(blank)';
-        if (!label) continue;
-        dismissedCandidateCounts.set(
-          label,
-          (dismissedCandidateCounts.get(label) ?? 0) + 1,
-        );
-      }
-    }
-  }
-
-  if (fresh.length === 0 && latestTs === null) return null;
-
-  const lines: string[] = [
-    `summary: ${fresh.length} new episode(s) — ${selected} selected, ${dismissed} dismissed (executed: ${executedOk} ok, ${executedErr} error)`,
-  ];
-
-  const topChosen = topN(chosenCounts, 5);
-  if (topChosen.length > 0) {
-    lines.push('top chosen labels:');
-    for (const [label, n] of topChosen) lines.push(`  - ${label} ×${n}`);
-  }
-  const topDismissed = topN(dismissedCandidateCounts, 5);
-  if (topDismissed.length > 0) {
-    lines.push('top dismissed candidates:');
-    for (const [label, n] of topDismissed) lines.push(`  - ${label} ×${n}`);
-  }
-
-  const examples = fresh.slice(-MAX_INTENT_EPISODES_IN_DIGEST);
-  if (examples.length > 0) {
-    lines.push('recent episodes (oldest → newest):');
-    for (const ep of examples) {
-      let outcome: string;
-      if (ep.outcome?.type === 'selected') {
-        const label = ep.outcome.chosenLabel?.slice(0, 80) ?? '';
-        const exec = ep.outcome.execution;
-        const execTag = exec ? ` (exec: ${exec.status})` : '';
-        outcome = `selected "${label}"${execTag}`;
-      } else {
-        outcome = 'dismissed';
-      }
-      const ctx = ep.contextSummary
-        ? ` [ctx: ${ep.contextSummary.slice(0, 80)}]`
-        : '';
-      lines.push(`- ${outcome}${ctx}`);
-    }
-  }
-
-  return {
-    text: lines.join('\n'),
-    episodeCount: fresh.length,
-    latestTs,
-  };
-}
-
-function topN(counts: Map<string, number>, n: number): Array<[string, number]> {
-  return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, n);
-}
-
-function readMemorySnapshot(canvasId: string): string {
+async function readMemorySnapshot(canvasId: string): Promise<string> {
   const parts: string[] = [];
 
-  const longTerm = readFileSafe(workspaceMemoryPath());
+  // Empty rather than missing on a backend with no Workspace folder: the
+  // curator's prompt keeps its shape, and the tier it cannot write to simply
+  // reads as empty (`workspace-user-memory` capability).
+  const longTerm = hasWorkspaceSettingDirectory()
+    ? readFileSafe(workspaceMemoryPath())
+    : '';
   parts.push('## Long-term memory');
   parts.push(longTerm.trim().length > 0 ? longTerm.trim() : '(empty)');
 
-  const canvas = readFileSafe(canvasMemoryPath(canvasId));
+  const canvas = (await readCanvasMemory(canvasId)) ?? '';
   parts.push('');
   parts.push('## Canvas memory');
   parts.push(canvas.trim().length > 0 ? canvas.trim() : '(empty)');
@@ -614,13 +322,5 @@ function readFileSafe(file: string): string {
     return readFileSync(file, 'utf8');
   } catch {
     return '';
-  }
-}
-
-function safeMtime(file: string): number | null {
-  try {
-    return statSync(file).mtimeMs;
-  } catch {
-    return null;
   }
 }

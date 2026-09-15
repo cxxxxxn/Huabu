@@ -3,6 +3,7 @@
 
 import { ArrowDown } from 'lucide-react';
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -11,8 +12,11 @@ import {
 } from 'react';
 
 import { AIMessage } from './AIMessage';
-import { IntentSelectMessage } from './IntentSelectMessage';
-import { positionMessageListOnOpen } from './messageListScroll';
+import {
+  positionMessageListOnOpen,
+  rememberMessageListScrollPosition,
+  restoreMessageListScrollPosition,
+} from './messageListScroll';
 import { StatusMessage } from './StatusMessage';
 import { UserMessage } from './UserMessage';
 import { Button } from '../Common/Button';
@@ -33,8 +37,6 @@ interface MessageListProps {
   isHistoryLoading?: boolean;
   /** Hide action buttons on AI messages (e.g. in operate mode). */
   hideAIActions?: boolean;
-  /** Called when user re-selects an intent from the intent-select message. */
-  onIntentReselect?: (messageId: string, intent: string) => void;
   /** Called when the user clicks retry on an interrupted status message. */
   onRetry?: () => void;
   /** Stable identity for the conversation currently rendered by the list. */
@@ -43,24 +45,31 @@ interface MessageListProps {
   isActive?: boolean;
   /** Where to position the list when the conversation opens. */
   openPosition?: MessageListPreferredPosition;
+  /** Identity of an explicit one-shot positioning request. */
+  openPositionRequestNonce?: number;
+  onOpenPositionHandled?: (nonce: number) => void;
 }
 
-export const MessageList = ({
+export const MessageList = memo(function MessageList({
   messages,
   isLoading,
   isHistoryLoading,
   hideAIActions,
-  onIntentReselect,
   onRetry,
   viewKey,
   isActive = true,
   openPosition = 'bottom',
-}: MessageListProps) => {
+  openPositionRequestNonce,
+  onOpenPositionHandled,
+}: MessageListProps) {
   const [hasNewMessage, setHasNewMessage] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
   const prevMessageCountRef = useRef(messages.length);
   const currentMessageCountRef = useRef(messages.length);
+  const positionedViewKeyRef = useRef<string | undefined>(undefined);
+  const hasPositionedViewRef = useRef(false);
+  const handledOpenRequestRef = useRef<number | undefined>(undefined);
   currentMessageCountRef.current = messages.length;
 
   // Opening a conversation is a deliberate navigation action. Position the
@@ -70,13 +79,55 @@ export const MessageList = ({
     if (!isActive || isHistoryLoading) return;
     const container = containerRef.current;
     if (!container) return;
+    const viewChanged =
+      !hasPositionedViewRef.current || positionedViewKeyRef.current !== viewKey;
+    const hasNewRequest =
+      openPositionRequestNonce !== undefined &&
+      handledOpenRequestRef.current !== openPositionRequestNonce;
+    if (!viewChanged && !hasNewRequest) return;
 
-    const position = positionMessageListOnOpen(container, openPosition);
-    isAtBottomRef.current = position !== 'last-user';
+    const restored = restoreMessageListScrollPosition(container, viewKey);
+    const restoredAtBottom =
+      restored &&
+      container.scrollTop >=
+        container.scrollHeight - container.clientHeight - 50;
+    const position = restored
+      ? restoredAtBottom
+        ? 'bottom'
+        : 'restored'
+      : positionMessageListOnOpen(container, openPosition);
+    isAtBottomRef.current = position !== 'last-user' && position !== 'restored';
 
-    setHasNewMessage(false);
+    setHasNewMessage(
+      restored &&
+        !restoredAtBottom &&
+        hasNewRequest &&
+        openPosition === 'last-user',
+    );
     prevMessageCountRef.current = currentMessageCountRef.current;
-  }, [viewKey, isActive, isHistoryLoading, openPosition]);
+    positionedViewKeyRef.current = viewKey;
+    hasPositionedViewRef.current = true;
+    if (openPositionRequestNonce !== undefined) {
+      handledOpenRequestRef.current = openPositionRequestNonce;
+      onOpenPositionHandled?.(openPositionRequestNonce);
+    }
+    if (!restored) return;
+    const frame = requestAnimationFrame(() => {
+      const current = containerRef.current;
+      if (!current) return;
+      restoreMessageListScrollPosition(current, viewKey);
+      isAtBottomRef.current =
+        current.scrollTop >= current.scrollHeight - current.clientHeight - 50;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [
+    viewKey,
+    isActive,
+    isHistoryLoading,
+    openPosition,
+    openPositionRequestNonce,
+    onOpenPositionHandled,
+  ]);
 
   // Find the in-flight assistant message for the *current* turn.
   //
@@ -104,12 +155,13 @@ export const MessageList = ({
   const handleScroll = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
+    rememberMessageListScrollPosition(viewKey, el.scrollTop);
     const threshold = 50;
     const atBottom =
       el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
     isAtBottomRef.current = atBottom;
     if (atBottom) setHasNewMessage(false);
-  }, []);
+  }, [viewKey]);
 
   // Scroll the thread's own container rather than `scrollIntoView` on a
   // sentinel: that walks up every scrollable ancestor, and the app root is
@@ -187,19 +239,6 @@ export const MessageList = ({
               continue;
             }
 
-            if (msg.role === 'intent-select') {
-              elements.push(
-                <IntentSelectMessage
-                  key={msg.id}
-                  candidates={msg.candidates}
-                  selectedIntent={msg.selectedIntent}
-                  onReselect={(intent) => onIntentReselect?.(msg.id, intent)}
-                />,
-              );
-              i++;
-              continue;
-            }
-
             if (msg.role === 'status') {
               elements.push(
                 <StatusMessage
@@ -247,4 +286,4 @@ export const MessageList = ({
       )}
     </div>
   );
-};
+});

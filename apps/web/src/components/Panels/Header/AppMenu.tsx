@@ -25,6 +25,7 @@ import { formatShortcut } from '../../../utils/platform';
 import {
   DropdownMenu,
   DropdownMenuItem,
+  DropdownMenuLink,
   DropdownMenuSubmenu,
 } from '../../Common/DropdownMenu';
 
@@ -107,6 +108,7 @@ export const AppMenu: React.FC<AppMenuProps> = ({
       <input
         ref={fileInputRef}
         type="file"
+        name="space-import-archive"
         accept=".zip,application/zip"
         className="hidden"
         onChange={(e) => void onFileChange(e)}
@@ -138,9 +140,9 @@ export const AppMenu: React.FC<AppMenuProps> = ({
         )}
         {showCanvasListLink && (
           <>
-            <DropdownMenuItem onClick={runAndClose(() => navigate('/spaces'))}>
+            <DropdownMenuLink to="/spaces" onClick={() => setIsOpen(false)}>
               {t('canvasPage.backToList')}
-            </DropdownMenuItem>
+            </DropdownMenuLink>
             <div className="border-edge-default my-1 border-t" />
           </>
         )}

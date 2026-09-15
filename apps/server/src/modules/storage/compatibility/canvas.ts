@@ -2,24 +2,17 @@
 // Licensed under the MIT license.
 
 /**
- * Compatibility facade — the current legacy application storage API.
+ * Compatibility facade for residual Disk reads and test fixtures.
  *
- * This layer exists so Phase 2 can make the port/adapter side correct
- * without an `await` cascade through every consumer. It owns the surface the
- * application uses today: the `CanvasStore` factory and its cache, the Space
- * catalogue (list / summaries), synchronous Space creation, and async Space
- * deletion. Those are
- * aggregate lifecycle and catalogue concerns that have no portable contract
- * yet; see docs/proposals/multi-backend-storage.md §12.2.3.
+ * Production structured mutations use the portable repositories. The
+ * `CanvasStore` factory remains temporarily available for Disk-specific read
+ * capabilities that earlier phases did not migrate. `createCanvas` and
+ * `deleteCanvas` remain direct-module test helpers; the public storage barrel
+ * deliberately does not export them.
  *
  * It delegates to the Disk legacy implementation directly rather than going
  * through `StructuredStore`, and both views resolve the *same* cached legacy
  * object, so a write through either is immediately visible through the other.
- *
- * This is also, deliberately, still a second **mutation entry point**. Until
- * its writers migrate, the repository CAS and log guarantees hold for calls
- * made through the repositories; they are not a global single-write-authority
- * guarantee for the running application.
  *
  * Nothing under `ports/` or `backends/` may import this file.
  */
@@ -28,30 +21,22 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 
 import { atomicWriteJson, mkdirp, sanitizeId } from '../../../utils/fs.js';
+import { toSafeFilename } from '../../../utils/naming.js';
+import { getWorkspacePath } from '../../workspace.js';
 import {
-  isWorldCanvasId,
   listCanvasDirEntries,
   refreshCanvasDirIndex,
   registerCanvasDir,
   suggestCanvasDir,
-} from '../../workspace/disk/canvas-dirs.js';
-import { toSafeFilename } from '../../workspace/disk/naming.js';
+} from '../backends/disk/canvas-dirs.js';
 import {
   canvasJsonPath,
   SPACE_JSON_FILENAME,
-} from '../../workspace/disk/paths.js';
-import {
-  acquireWorkspaceOperationLease,
-  getWorkspacePath,
-} from '../../workspace.js';
-import {
-  forgetCanvasStore,
-  getCanvasStore,
-} from '../backends/disk/legacy/canvas-store-cache.js';
-import { canvasBlobs, withCanvasDeletionAdmission } from '../storage.js';
+} from '../backends/disk/layout.js';
+import { getCanvasStore } from '../backends/disk/legacy/canvas-store-cache.js';
+import { deleteSpace } from '../storage.js';
 
 import type { CanvasFile } from '../../canvas/persistence-types.js';
-import type { CanvasSummary } from '@huabu/shared';
 
 export { CanvasStore } from '../backends/disk/legacy/canvas-store.js';
 export {
@@ -84,44 +69,6 @@ export function listCanvases(): CanvasFile[] {
     if (canvas) out.push(canvas);
   }
   return out;
-}
-
-/**
- * Lightweight list of canvas summaries for the list endpoint.
- *
- * Unlike {@link listCanvases}, this builds each row straight from the
- * in-memory canvas-dir index — whose entries already carry the summary
- * fields (`nodeCount` / `createdAt` / `updatedAt`) captured when
- * `scanWorkspace()` parsed each topology file. That avoids re-reading
- * and re-parsing every canvas file a second time just to render the
- * list.
- *
- * The displayed `title` mirrors `CanvasStore.read`'s Finder-rename
- * self-heal (adopt the on-disk directory name when it diverges from the
- * sanitised title) but WITHOUT the write-back — a read path must not
- * mutate disk. Persisted topology is reconciled lazily the next
- * time the canvas is opened via `read()`.
- */
-export function listCanvasSummaries(): CanvasSummary[] {
-  const ws = getWorkspacePath();
-  if (!existsSync(ws)) return [];
-  // Re-scan so external file changes are reflected, matching listCanvases.
-  refreshCanvasDirIndex();
-
-  return listCanvasDirEntries().map((entry) => {
-    const expectedDir = toSafeFilename(entry.title, entry.id);
-    const title =
-      entry.filename && entry.filename !== expectedDir
-        ? entry.filename
-        : entry.title;
-    return {
-      canvasId: entry.id,
-      title,
-      nodeCount: entry.nodeCount ?? 0,
-      createdAt: entry.createdAt ?? 0,
-      updatedAt: entry.updatedAt ?? 0,
-    };
-  });
 }
 
 /**
@@ -183,25 +130,9 @@ export function createCanvas(
  * Returns true when the Space existed.
  */
 export async function deleteCanvas(canvasId: string): Promise<boolean> {
-  // Blob deletion can yield before the synchronous record destroy. Pin the
-  // active workspace across both halves so a runtime workspace switch cannot
-  // make them operate on different roots.
-  const workspaceLease = acquireWorkspaceOperationLease();
-  try {
-    const store = getCanvasStore(canvasId);
-    // `destroy()` refuses the World canvas too, but that check has to happen
-    // before the blob sweep now that the sweep runs first — otherwise a
-    // refused deletion would still have destroyed the World's bytes.
-    if (isWorldCanvasId(store.canvasId)) {
-      throw new Error('World canvas cannot be deleted');
-    }
-    return await withCanvasDeletionAdmission(store.canvasId, async () => {
-      await canvasBlobs(store.canvasId).deleteAll();
-      const ok = store.destroy();
-      forgetCanvasStore(store.canvasId);
-      return ok;
-    });
-  } finally {
-    workspaceLease.release();
+  const result = await deleteSpace(canvasId);
+  if (!result.ok && result.reason === 'world-forbidden') {
+    throw new Error('World canvas cannot be deleted');
   }
+  return result.ok;
 }

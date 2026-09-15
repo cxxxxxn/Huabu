@@ -17,7 +17,11 @@ import {
   takeExternalNote,
 } from './external-watcher.js';
 import { parseFrontmatter } from '../../utils/markdown-frontmatter.js';
-import { canvasRoot } from '../storage/paths.js';
+import {
+  space,
+  storageServes,
+  unavailableCapabilityMessage,
+} from '../storage/index.js';
 
 import type { FastifyPluginAsync } from 'fastify';
 
@@ -95,7 +99,18 @@ const externalRoutes: FastifyPluginAsync = async (fastify): Promise<void> => {
       return reply.code(404).send({ message: 'External note not found' });
     }
 
-    const abs = path.join(canvasRoot(canvasId), item.relativePath);
+    // Disk-only, declared as `external-note-discovery` in the capability
+    // matrix: it adopts documents that arrived without going through the
+    // application, and no database backend has such an arrival path.
+    const tree = storageServes('external-note-discovery')
+      ? space(canvasId).diskTree
+      : null;
+    if (!tree) {
+      return reply.code(400).send({
+        message: unavailableCapabilityMessage('external-note-discovery'),
+      });
+    }
+    const abs = path.join(tree.directory(), item.relativePath);
     let raw: string;
     try {
       raw = await readFile(abs, 'utf8');

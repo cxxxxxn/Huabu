@@ -6,8 +6,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   canvasCommandsTool,
+  createTaskTool,
+  completeTaskRunTool,
   inspectNodesTool,
   snapshotNodesTool,
+  startTaskRunTool,
+  TOOL_REGISTRY,
 } from './definitions.js';
 
 describe('shared Zod tool schemas', () => {
@@ -100,6 +104,50 @@ describe('shared Zod tool schemas', () => {
         arguments: { ids: ['node-1'], limit: 201 },
       }),
     ).toThrow();
+  });
+
+  it('validates the canonical Task tool contracts', () => {
+    expect(TOOL_REGISTRY.create_task).toBe(createTaskTool);
+    expect(TOOL_REGISTRY.start_task_run).toBe(startTaskRunTool);
+    expect(TOOL_REGISTRY.complete_task_run).toBe(completeTaskRunTool);
+
+    expect(
+      validateToolArguments(createTaskTool, {
+        type: 'toolCall',
+        id: 'call-task-create',
+        name: 'create_task',
+        arguments: {
+          goal: 'Investigate the issue',
+          defaultRootProfileId: 'profile-a',
+          position: { x: 100, y: 200 },
+        },
+      }),
+    ).toMatchObject({ goal: 'Investigate the issue' });
+
+    expect(
+      validateToolArguments(startTaskRunTool, {
+        type: 'toolCall',
+        id: 'call-run-start',
+        name: 'start_task_run',
+        arguments: {
+          taskId: 'task-a',
+          workingDirPath: '/work/task',
+        },
+      }),
+    ).toMatchObject({ taskId: 'task-a' });
+
+    expect(
+      validateToolArguments(completeTaskRunTool, {
+        type: 'toolCall',
+        id: 'call-run-complete',
+        name: 'complete_task_run',
+        arguments: {
+          taskId: 'task-a',
+          runId: 'run-a',
+          message: 'PR merged',
+        },
+      }),
+    ).toMatchObject({ taskId: 'task-a', runId: 'run-a' });
   });
 
   it('accepts World targets only on non-materializing read schemas', () => {

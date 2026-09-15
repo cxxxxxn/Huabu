@@ -119,19 +119,19 @@ What a drop _means_ is resolved by `planStructuredDrop`: which track the dragged
 
 The drop target is resolved before the frame-fit preview pass rather than after it, so that pass can skip the frame the drop zone is about to solve anyway; the skipped frame's size is reported from the zone, and only recomputed if the zone fails to resolve. Solving it in both places was the same work twice, with the fit pass's answer discarded.
 
-The preview never touches `canvasStore.nodes`. The projected positions are published to `gesturePreviewStore.structuredReflowPositions` and folded into the node array at the render boundary only (`Canvas.tsx`'s `displayNodes`), so React Flow moves the peers — and the edges between them — while the authoritative geometry stays exactly as the user left it. Writing them onto the real nodes, even through `_setStateNoAutosave`, made a per-tick projection indistinguishable from committed geometry to everything that reads the store: an agent write or history snapshot landing mid-drag would capture a position the user never committed, and every picker had to strip the preview back off before it could reason about the drag at all.
+The preview never touches `canvasStore.nodes`. The complete future geometry is published once through `gesturePreviewStore.nodeGeometryPreviews` and folded into the node array at the render boundary only (`Canvas.tsx`'s `displayNodes`), so React Flow moves and resizes affected Frames and peers — and reroutes their edges — while the authoritative geometry stays exactly as the user left it. Selection HUD geometry builds the same transient tree before resolving nested absolute coordinates. A dragged node that is previewed leaving a Frame keeps its current `parentId` until release so React Flow retains drag ownership, but receives a compensated parent-local preview position derived from the projected detached world position and the projected source-Frame origin; its body, HUD, and eventual detach therefore share one absolute position even when a Hug source Frame moves while shrinking. Writing projections onto the real nodes, even through `_setStateNoAutosave`, made a per-tick future state indistinguishable from committed geometry to everything that reads the store: an agent write or history snapshot landing mid-drag would capture geometry the user never committed, and every picker had to strip the preview back off before it could reason about the drag at all.
 
 Two properties follow from keeping it out of the store, rather than being maintained by hand:
 
 1. **Ticks cannot compound.** The pickers and the solver always see the real pre-drag geometry, so a reflowed peer can never move the track bounds that decided where it went — the oscillation that a strip-then-apply controller had to prevent explicitly is not expressible here.
-2. **What the user saw is what commits.** `onNodeDragStop` withdraws the preview and the resolver classifies the release against the same untouched geometry the preview was derived from. Nothing has to be restored before dispatch, and drag cancellation (Esc) and canvas teardown clear the same transient field.
+2. **What the user saw is what commits.** `onNodeDragStop` withdraws the preview and the resolver classifies the release against the same untouched geometry the preview was derived from. Nothing has to be restored before dispatch, and drag cancellation (Esc) and canvas teardown clear the same transient geometry field.
 3. **One membership predicate.** A structured Frame claims a capture zone far larger than a free one's halo — its rect grown by the dragged node's own size — because appending or prepending a track means aiming at the outer padding, which drags the node's body (and the cursor with it) past the Frame edge with zero overlap left. `wouldStickToStructuredFrame` is that rule, and every stage asks it before asking `wouldUnframe`: the tick that draws the indicator, the tick that caches the membership decision, and the resolver's fresh-recomputation fallback. The drag tick's decision is replayed verbatim at drop time, so a stage that skips the predicate does not merely disagree in the abstract — it unframes the node in exactly the band where the overlay is offering a new track.
 
 The Frame itself is not resized during the preview; its projected size continues to be shown by the existing dashed frame-fit outline. Besides the footprint and the `reflow` list, the zone description carries only the simulated layout's track geometry (`context.tracks` / `context.activeTrack`, plus `context.rows` / `context.activeRow` for `grid`), sourced from the solver's `columnTracks` / `rowTracks` output so the overlay never re-derives layout. The earlier context rects — the active track rect, the Grid row band, the track / alignment peer rects, and the `swap` destination — have been deleted rather than left unrendered: the reflow shows all of it by moving the actual nodes, and keeping them meant a second full solver pass per drag tick to compute geometry nothing drew.
 
 `CONNECT_NODES`, `DISCONNECT_EDGES`, and `SET_EDGE_STYLE` report **structured** Frames joined by their affected internal edges through `affectedFrameIds`, so the executor recomputes gutters in the same batch and reroutes handles after any resulting node movement. `free` Frames are deliberately not reported: they have no gutters, so naming one would only send it through the end-of-batch fit pass and turn an edge restyle into a frame resize that saves, broadcasts, and shares the restyle's undo step. Deferred web relayouts also pass current edges into the shared solver, preventing a render-time measurement update from reverting edge-aware spacing.
 
-Frame resize previews capture the current gutter plan at gesture start. Each animation-frame tick scales those frozen X/Y sizes with the child geometry and does not recompute label measurements or lane assignments; the authoritative resize-end command omits the override and recomputes the plan from the final graph. The override is executor-local transient state and is never persisted in a command or canvas document.
+Frame resize previews capture the current gutter plan at gesture start. Each animation-frame tick scales those frozen X/Y sizes with the child geometry and does not recompute label measurements or lane assignments; the authoritative resize-end command omits the override and recomputes the plan from the final graph. A multi-selection treats every selected Frame as a scaling root and transforms its complete descendant subtree in the same coordinate space, so the Frame continues to contain nested Frames and ordinary children; a nested selected Frame is handled by its outermost selected ancestor to avoid double scaling. Multi-selection movement uses preview geometry and performs one authoritative geometry commit on completion; text fitting and height-commit suspension follow the single-node resize lifecycle. The override is executor-local transient state and is never persisted in a command or canvas document.
 
 ### Command Catalog
 
@@ -158,13 +158,14 @@ Geometry commands preserve each node type's sizing model. `text` and
 different: they may either clear top-level `style.height` for auto height or pin
 it for fixed-height notes.
 
+Agent creation adds a prompt-level sizing policy without changing executor semantics. Before emitting an explicit `CREATE_NODES.size`, an Agent inspects comparable nearby nodes and matches their representative dimensions; when no comparable peer exists it omits `size` so the engine applies the canonical type default. Long or multi-section Notes use a fixed height matching nearby Notes, or 400px when none exist; `height: "auto"` is reserved for short Notes whose complete inline expansion is intentional. The canonical procedure lives in [`layout-recipes.md`](../../apps/server/src/prompt/skills/space/references/layout-recipes.md); the executor still accepts any schema-valid size from non-Agent callers.
+
 ### IDs
 
 Node ids use `node-<uuid>`, edge ids use `edge-<uuid>`.
 
 - **Web / UI callers** mint ids up front and build the whole batch client-side, so a later command in the same batch can reference an earlier `CREATE_NODES` entry by its explicit id (each command sees prior commands' state — see Execution Semantics).
 - **The agent path is different.** The canonical agent schema rejects caller-assigned ids on `CREATE_NODES` and `CONNECT_NODES`; `preAssignIds()` in `canvas-executor.ts` assigns unique ids before execution. Results echo each created node in `results[].nodes` and each created edge in `results[].edges`. To connect or reparent freshly created nodes, the agent reads those ids and issues a follow-up call instead of self-referencing invented ids in one batch.
-- **Sketch is a normal server-applied writer.** The sketch pipeline (`origin.type === 'sketch-recognized'`) runs through `executeOnServer` + broadcast like every other agent path: `recognizeSketchCommands` attributes the batch to a synthetic `threadId` (with `computeChanges`), so the mutation is applied + persisted server-side, broadcast to every tab, and produces revertible change records. The on-canvas sketch overlay drives Keep / Revert / Preview off those records (the same machinery as the chat `ChangeReviewCard`). So sketch reads real ids from `results[].nodes` and self-references created nodes (e.g. circle-to-group's new frame) via the standard omit-id / follow-up-call pattern — there is no id carve-out.
 
 ## Layer 3: CanvasExecution
 
@@ -202,7 +203,7 @@ Web-only pieces stay in `apps/web/src/handler/canvasCommand/`: `uiIntent.ts`, `r
 
 `canvasStore.ts` exposes two internal methods:
 
-- `dispatchUiIntent(intent)` — resolves `CanvasUiIntent` → commands → `executeCommands()`, pushes trace to the module-scoped `intentActionWindow` (kept outside Zustand to avoid a second store notification per click) and mirrors it into `canvasEvents` for the server-bound log. The window itself is a stopgap that the eventual server-side memory pipeline will replace — see `apps/web/src/store/canvasStore/intentActionWindow.ts`.
+- `dispatchUiIntent(intent)` — resolves `CanvasUiIntent` → commands → `executeCommands()` and mirrors the resulting `RecentAction` trace into `canvasEvents` for the server-bound action log.
 - `executeCommands(commands)` — wraps in `CanvasExecution { source: 'ui' }`, runs executor, manages undo snapshots, commits to Zustand, runs post-effects.
 
 ## Examples
@@ -233,11 +234,13 @@ Built-in tool calls and direct RFS execution both pass their validated wire comm
 
 ### Server Executor
 
-`apps/server/src/modules/agent/tools/handlers/canvas-write.ts` handles `space_commands`: it calls the shared preparation helper and then `executeOnServer()` ([canvas-executor.ts](../../apps/server/src/modules/canvas/canvas-executor.ts)) — the **command batch executes on the server** through the shared engine, persists `space.json` + node `.md` sidecars, appends one `delta-log.jsonl` row, and returns structural deltas plus per-command results. The LLM gets real success/error feedback. (`sketch-recognized` origin is the exception: it still returns commands to the client for the Accept/Revert overlay.)
+`apps/server/src/modules/agent/tools/handlers/canvas-write.ts` handles `space_commands`: it calls the shared preparation helper and then `executeOnServer()` ([canvas-executor.ts](../../apps/server/src/modules/canvas/canvas-executor.ts)) — the **command batch executes on the server** through the shared engine, persists `space.json` + node `.md` sidecars, appends one `delta-log.jsonl` row, and returns structural deltas plus per-command results. The LLM gets real success/error feedback.
 
 Before the shared engine applies an agent batch, `importForeignNodeSources` normalizes `src` on both `CREATE_NODES` and `MERGE_NODE_DATA`. Media-node remote URLs and canvas-local files are imported into `.artifacts/`; for `web`, only canvas-local `.html` files are imported (uploads staged under `.upload/` are reclaimed), while live `http(s)://` and self-contained `data:` URLs remain verbatim. A local Web source with another extension is left unchanged and its staged file is not reclaimed.
 
 Same engine runs both sides; the only authority is the server. `POST /api/canvas/:canvasId/execute` is the shared entry, guarded by a per-canvas mutex (headless executor, M2).
+
+Cross-Space Move is the bounded exception that coordinates two otherwise independent executor batches. `SpaceMoveService` acquires both Canvas mutexes in lexical order, uses `executeOnServerAlreadyLocked()` for destination creation and the source batch, and withholds both sync publications until the complete move succeeds. The source batch always deletes the moved roots and optionally creates one `spacePreview` breadcrumb pointing to the destination; when requested, its absolute position and clamped dimensions derive from the authoritative moved-set bounds. Determinate failure applies any source and destination inverse deltas through `applyDeltasOnServerAlreadyLocked()` while the same locks remain held. The service still expresses topology changes only as ordinary `CREATE_NODES`, `CONNECT_NODES`, and `DELETE_NODES` commands; the coordinator owns selection expansion, optional destination lifecycle, artifact transfer, Agent rehome, ordering, and compensation.
 
 World `canvasRef` Portals add a host-level ownership policy before shared-engine execution. Only system reconciliation may create them; UI and agent batches cannot repoint them, manually resize them, or delete a Portal whose target is still a live Space. A broken Portal remains removable. Movement and ordinary Container parenting still use the same shared geometry and `SET_NODE_PARENT` semantics as other Canvas nodes.
 
@@ -254,7 +257,7 @@ The web client receives the server's deltas (via tool-result + SSE broadcast) an
 
 ### IntentAction Convergence
 
-The parallel `IntentAction` union has been removed from `packages/shared/src/types/intent.ts`. That module now only contains intent _recognition_ types (`IntentCandidate`, `IntentEpisode`, `IntentRequest`, `IntentResponse`).
+The parallel `IntentAction` union is gone: `RecentAction` ([context.ts](../../packages/shared/src/types/agent/context.ts)) is the single shape for "what the user just did", and the whole intent-recognition module was later removed.
 
 ## Code entry points
 

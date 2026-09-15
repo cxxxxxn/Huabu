@@ -52,6 +52,7 @@ import { NoteNode } from '@/components/Nodes/note/NoteNode';
 import { OfficeNode } from '@/components/Nodes/office/OfficeNode';
 import { PDFNode } from '@/components/Nodes/pdf/PDFNode';
 import {
+  cancelHeightCommitSuspensions,
   resumeHeightCommits,
   suspendHeightCommits,
 } from '@/components/Nodes/shared/height/commitSuspension';
@@ -73,6 +74,7 @@ import { useCanvasShortcuts } from '@/hooks/shortcuts';
 import { useAutoPanDuringSelection } from '@/hooks/useAutoPanDuringSelection';
 import { useCanvasGestures } from '@/hooks/useCanvasGestures';
 import { useCanvasLasso } from '@/hooks/useCanvasLasso';
+import { useCanvasPanReleaseGuard } from '@/hooks/useCanvasPanReleaseGuard';
 import { useCanvasPointerRouter } from '@/hooks/useCanvasPointerRouter';
 import { useFrameDragToCreate } from '@/hooks/useFrameDragToCreate';
 import {
@@ -82,9 +84,11 @@ import {
 } from '@/hooks/useInputMode';
 import { useSketchHoverRouting } from '@/hooks/useSketchHoverRouting';
 import { useSketchStrokeMove } from '@/hooks/useSketchStrokeMove';
+import { openPreviewNode } from '@/store/previewWorkspace/actions';
 import { isMac } from '@/utils/platform';
 import { getEdgeIdsBetweenSelectedNodes } from '@/utils/selection';
 
+import { applyNodeGeometryPreviews } from './applyNodeGeometryPreview';
 import {
   canDirectlyManipulateWithPointer,
   closestNodeElement,
@@ -102,7 +106,7 @@ import {
 import { EdgeStyleToolbar } from './FloatingToolbars/EdgeStyleToolbar.tsx';
 import { MultiSelectToolbar } from './FloatingToolbars/MultiSelectToolbar.tsx';
 import { StrokeSelectionToolbar } from './FloatingToolbars/StrokeSelectionToolbar.tsx';
-import { IntentPopover } from './IntentPopover.tsx';
+import { MoveSelectionModal } from './MoveSelectionModal.tsx';
 import { MultiSelectResizer } from './MultiSelectResizer.tsx';
 import { SelectionOutlines } from './SelectionOutlines.tsx';
 import { SnapGuidesOverlay } from './SnapGuidesOverlay.tsx';
@@ -114,7 +118,10 @@ import useCanvasStore from '../../../store/canvasStore.ts';
 import { useConnectPortStore } from '../../../store/connectPortStore.ts';
 import { useGesturePreviewStore } from '../../../store/gesturePreviewStore.ts';
 import { usePanelStore } from '../../../store/panelStore.ts';
-import { usePreviewStore } from '../../../store/previewStore.ts';
+import {
+  selectActiveNodeId,
+  usePreviewWorkspaceStore,
+} from '../../../store/previewWorkspace/store.ts';
 import { useToolStore } from '../../../store/toolStore.ts';
 import { useWorkspaceStore } from '../../../store/workspaceStore.ts';
 import {
@@ -135,7 +142,7 @@ import {
   CANCEL_SKETCH_GESTURE_EVENT,
   SketchOverlay,
 } from '../../Nodes/sketch/SketchOverlay.tsx';
-import { SketchProcessingOverlay } from '../../Nodes/sketch/SketchProcessingOverlay.tsx';
+import { SpacePreviewNode } from '../../Nodes/spacePreview/SpacePreviewNode.tsx';
 import { VideoNode } from '../../Nodes/video/VideoNode.tsx';
 import { WebNode } from '../../Nodes/web/WebNode.tsx';
 import {
@@ -144,6 +151,7 @@ import {
   revealBoundsInViewport,
 } from '../CanvasLayerPanel/focusNodesOnCanvas.ts';
 
+import type { CanvasNode } from '@/components/Nodes/types';
 import type { AddNodeInput } from '@/handler/canvasCommand/uiIntent';
 import type { CanvasPointerRouterContext } from '@/handler/canvasPointerRouterContext';
 import type { PointerRecognizer } from '@/handler/pointerRouter';
@@ -159,6 +167,7 @@ const nodeTypes = {
   pdf: PDFNode,
   office: OfficeNode,
   frame: FrameNode,
+  spacePreview: SpacePreviewNode,
   canvasRef: CanvasRefNode,
   frameRef: FrameRefNode,
   nodeRef: NodeRefNode,
@@ -343,7 +352,7 @@ const CanvasZoomLevel: React.FC = () => {
     <ControlButton
       className="w-6.5! p-0! text-[10px]! leading-none font-medium! tabular-nums"
       title={t('canvasControls.resetZoom')}
-      aria-label={t('canvasControls.zoomAria', { percentage })}
+      aria-label={`${multiplier}×. ${t('canvasControls.zoomAria', { percentage })}`}
       onClick={() => void zoomTo(1, { duration: 200 })}
     >
       {multiplier}×
@@ -402,8 +411,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   // action refs, which dominated initial commit work on canvas open.
   const nodes = useCanvasStore((state) => state.nodes);
   const edges = useCanvasStore((state) => state.edges);
-  const expandedNodeId = useCanvasStore((state) => state.expandedNodeId);
-  const expandMode = useCanvasStore((state) => state.expandMode);
+  const expandedNodeId = usePreviewWorkspaceStore(selectActiveNodeId);
   const canvasId = useCanvasStore((state) => state.canvasId);
   const minimapEnabled = useCanvasStore((state) => state.minimapEnabled);
   const pendingNodeType = useToolStore((state) => state.pendingNodeType);
@@ -429,12 +437,8 @@ export const Canvas: React.FC<CanvasProps> = ({
   const isStructuredReflowing = useGesturePreviewStore(
     (state) => state.structuredDropPreview !== null,
   );
-  // Where those peers slide to. Lives in the gesture-preview store rather
-  // than on `canvasStore.nodes` so a mid-drag save / undo snapshot can
-  // never capture a position the user has not committed; it is folded
-  // into the node array below, at the render boundary only.
-  const structuredReflowPositions = useGesturePreviewStore(
-    (state) => state.structuredReflowPositions,
+  const nodeGeometryPreviews = useGesturePreviewStore(
+    (state) => state.nodeGeometryPreviews,
   );
 
   // ── Non-reactive action handles ──────────────────────────────
@@ -457,8 +461,6 @@ export const Canvas: React.FC<CanvasProps> = ({
     setRfInstance,
     setCanvasWrapper,
     setViewport,
-    openExpanded,
-    closeExpanded,
     frameNodesInRect,
     selectNodes,
     refreshWorldReferences,
@@ -472,10 +474,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   const clearRightPanelAnchor = usePanelStore(
     (state) => state.clearRightPanelAnchor,
   );
-  const layoutAnchorNodeId =
-    expandedNodeId && expandMode === 'split'
-      ? expandedNodeId
-      : rightPanelAnchorNodeId;
+  const layoutAnchorNodeId = expandedNodeId ?? rightPanelAnchorNodeId;
   const layoutAnchorNodeIdRef = useRef(layoutAnchorNodeId);
   layoutAnchorNodeIdRef.current = layoutAnchorNodeId;
 
@@ -520,6 +519,10 @@ export const Canvas: React.FC<CanvasProps> = ({
   // when a tool-derived prop value changes.
   const [interactivityLocked, setInteractivityLocked] = useState(false);
 
+  const isNotMouse = useIsNotMouse();
+  const inputMode = useEffectiveInputMode();
+  const lastPointer = useInputMode();
+
   // Keyboard shortcuts + paste handler (extracted to hook).
   // Also manages tool state (select/pan) and Space-key temporary pan.
   const { tool, setTool } = useCanvasShortcuts(
@@ -531,10 +534,8 @@ export const Canvas: React.FC<CanvasProps> = ({
       disabled: shortcutsDisabled,
     },
   );
+  useCanvasPanReleaseGuard(wrapperRef, !isNotMouse && tool === 'pan');
 
-  const isNotMouse = useIsNotMouse();
-  const inputMode = useEffectiveInputMode();
-  const lastPointer = useInputMode();
   // Tap-vs-drag activation follows the pointer actually in use.
   const dragActivationDistance = isNotMouse
     ? getDragActivationDistance(lastPointer === 'pen' ? 'pen' : 'touch')
@@ -843,6 +844,11 @@ export const Canvas: React.FC<CanvasProps> = ({
     const prevCache = zWrapCacheRef.current;
     const nextCache = new Map<(typeof nodes)[number], (typeof nodes)[number]>();
 
+    const previewNodes = applyNodeGeometryPreviews(
+      nodes as CanvasNode[],
+      nodeGeometryPreviews,
+    );
+    const previewById = new Map(previewNodes.map((node) => [node.id, node]));
     const result = nodes.map((node) => {
       const z = zByNode.get(node.id) ?? 0;
       const wantsLassoClass = lassoPreviewNodeIdSet.has(node.id);
@@ -852,15 +858,19 @@ export const Canvas: React.FC<CanvasProps> = ({
         : baseClassName;
       // Transient slide-aside offset; absent for every node outside the
       // hovered structured frame, and for the dragged node itself.
-      const previewPosition = structuredReflowPositions?.get(node.id);
-      const nextPosition = previewPosition ?? node.position;
+      const previewedNode = previewById.get(node.id) ?? node;
+      const nextPosition = previewedNode.position;
+      const nextStyle = previewedNode.style;
+      const nextMeasured = previewedNode.measured;
 
       const cached = prevCache.get(node);
       if (
         cached &&
         cached.zIndex === z &&
         cached.className === nextClassName &&
-        cached.position === nextPosition
+        cached.position === nextPosition &&
+        cached.style === nextStyle &&
+        cached.measured === nextMeasured
       ) {
         nextCache.set(node, cached);
         return cached;
@@ -875,7 +885,9 @@ export const Canvas: React.FC<CanvasProps> = ({
         nextClassName !== baseClassName ||
         node.zIndex !== z ||
         node.draggable !== touchDraggable ||
-        nextPosition !== node.position;
+        nextPosition !== node.position ||
+        nextStyle !== node.style ||
+        nextMeasured !== node.measured;
       const wrapped = needsWrap
         ? {
             ...node,
@@ -883,6 +895,8 @@ export const Canvas: React.FC<CanvasProps> = ({
             zIndex: z,
             draggable: touchDraggable,
             position: nextPosition,
+            style: nextStyle,
+            measured: nextMeasured,
           }
         : node;
       nextCache.set(node, wrapped);
@@ -891,13 +905,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
     zWrapCacheRef.current = nextCache;
     return result;
-  }, [
-    isNotMouse,
-    lassoPreviewNodeIdSet,
-    nodes,
-    structuredReflowPositions,
-    zByNode,
-  ]);
+  }, [isNotMouse, lassoPreviewNodeIdSet, nodes, nodeGeometryPreviews, zByNode]);
 
   // Override marker colors on selected edges so arrows match the selection
   // highlight color (--color-info). CSS cannot style SVG <marker> referenced
@@ -1149,9 +1157,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     ];
   }, [suppressNextPaneClick]);
 
-  // Handle click-to-place for note, text, and question; otherwise dismiss
-  // any currently expanded view (preview or node) so clicking the canvas
-  // background acts as a quick close gesture in split mode.
+  // Handle click-to-place for note, text, and question.
   const handlePaneClick = useCallback(
     (event: React.MouseEvent) => {
       if (suppressNextPaneClickRef.current) {
@@ -1165,20 +1171,8 @@ export const Canvas: React.FC<CanvasProps> = ({
       //    background click belongs to that tool — leave the expanded view
       //    alone so the user doesn't lose their context mid-gesture.
       if (pendingNodeType) return;
-
-      // 3. No tool active → background click closes the expanded view.
-      //    Priority preview > node mirrors ExpandedNodePanel's Escape handler.
-      const { previewType, previewData, closePreview } =
-        usePreviewStore.getState();
-      if (previewType && previewData) {
-        closePreview();
-        return;
-      }
-      if (expandedNodeId) {
-        closeExpanded();
-      }
     },
-    [pendingNodeType, expandedNodeId, closeExpanded, placePendingNode],
+    [pendingNodeType, placePendingNode],
   );
 
   // Keep layout-driven canvas resizes spatially stable. Side panels and split
@@ -1250,7 +1244,18 @@ export const Canvas: React.FC<CanvasProps> = ({
   }, [rightPanelAnchorNodeId, clearRightPanelAnchor]);
 
   useEffect(() => {
+    const cancelHeightCommits = () => cancelHeightCommitSuspensions();
+    const cancelWhenHidden = () => {
+      if (document.visibilityState === 'hidden') cancelHeightCommits();
+    };
+    window.addEventListener('blur', cancelHeightCommits);
+    window.addEventListener('pointercancel', cancelHeightCommits, true);
+    document.addEventListener('visibilitychange', cancelWhenHidden);
     return () => {
+      window.removeEventListener('blur', cancelHeightCommits);
+      window.removeEventListener('pointercancel', cancelHeightCommits, true);
+      document.removeEventListener('visibilitychange', cancelWhenHidden);
+      cancelHeightCommits();
       rfInstanceRef.current = null;
       setRfInstance(null);
       // If the canvas is torn down mid-drag (route change, canvas
@@ -1515,10 +1520,10 @@ export const Canvas: React.FC<CanvasProps> = ({
           // Pan and zoom both arrive here. A height correction committed
           // mid-gesture would resize a node the user is moving past, so
           // corrections queue up and land once the viewport settles.
-          suspendHeightCommits();
+          suspendHeightCommits('viewport');
         }}
         onMoveEnd={(_event, viewport) => {
-          resumeHeightCommits();
+          resumeHeightCommits('viewport');
           // Mirror pan/zoom into localStorage (per canvas) so browser and
           // desktop restarts restore the same view. Does NOT participate in
           // the structure autosave.
@@ -1529,7 +1534,7 @@ export const Canvas: React.FC<CanvasProps> = ({
           e.stopPropagation();
           // Expand any expandable node type on double-click.
           if (EXPANDABLE_TYPES.has(node.type ?? '')) {
-            openExpanded(node.id);
+            openPreviewNode(node.id, { transient: true });
           }
         }}
         onEdgeDoubleClick={(e, edge) => {
@@ -1624,6 +1629,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         {!isBoxSelecting && <StrokeSelectionRegion />}
         {!isBoxSelecting && <StrokeSelectionToolbar />}
         {!isBoxSelecting && <EdgeStyleToolbar />}
+        <MoveSelectionModal />
         <ConnectedNodePicker
           anchor={connectPicker?.anchor ?? null}
           tether={
@@ -1638,7 +1644,6 @@ export const Canvas: React.FC<CanvasProps> = ({
           onSelect={handleConnectedKindPick}
           onDismiss={dismissConnectPicker}
         />
-        <IntentPopover />
         <Background color="var(--canvas-grid)" gap={GRID_SIZE} />
 
         <Controls position="bottom-left" showInteractive={false}>
@@ -1661,9 +1666,6 @@ export const Canvas: React.FC<CanvasProps> = ({
         {pendingNodeType === 'sketch' && (
           <SketchOverlay rfInstance={rfInstanceRef.current} />
         )}
-
-        {/* Sketch intent processing overlay — lives in flow space so it pans/zooms with the canvas */}
-        <SketchProcessingOverlay />
       </ReactFlow>
 
       {isInitialViewportPending && (

@@ -2,18 +2,17 @@
 // Licensed under the MIT license.
 
 import { ArrowUp, Square, X } from 'lucide-react';
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { resolveArtifactUrl, uploadImage, uploadPdf } from '@/api/artifact';
+import { useChatSession } from '@/hooks/useChatSession';
 import useCanvasStore from '@/store/canvasStore';
-import { selectCurrentMessages, useChatStore } from '@/store/chatStore';
+import {
+  selectThreadMessages,
+  selectThreadPendingAttachments,
+  useChatStore,
+} from '@/store/chatStore';
 import { usePanelStore } from '@/store/panelStore';
 
 import { ContextUsageRing } from './ContextUsageRing';
@@ -27,10 +26,12 @@ import { Tooltip } from '../../Common/Tooltip';
 import type { ContextUsageOverride } from './ContextUsageRing';
 import type { AgentMode, AvailableCommand } from '@huabu/shared';
 
-interface ChatInputProps {
+export interface ChatInputProps {
   value: string;
   onChange: (value: string) => void;
   onSubmit: (e: React.FormEvent, mode: AgentMode) => void;
+  /** Reports a persistent composer mutation to the owning preview surface. */
+  onCommit?: () => void;
   onStop: () => void;
   isStreaming?: boolean;
   /** Current built-in mode. Affects placeholder + the value submitted to `onSubmit`. */
@@ -84,6 +85,8 @@ interface ChatInputProps {
    * semantics of this prop.
    */
   contextUsageOverride?: ContextUsageOverride | undefined;
+  /** Active node shown in the other Preview split group. */
+  adjacentNodeSourceId?: string;
   disabled?: boolean;
   placeholder?: string;
   /**
@@ -94,10 +97,19 @@ interface ChatInputProps {
   connectedTop?: boolean;
 }
 
+const AttachmentTextPreview = ({ text }: { text: string }) => (
+  <div className="bg-surface flex h-12 w-12 items-center justify-center rounded-md px-1">
+    <span className="text-fg-subtle line-clamp-3 w-full text-center text-[8px] leading-tight">
+      {text}
+    </span>
+  </div>
+);
+
 export const ChatInput = ({
   value,
   onChange,
   onSubmit,
+  onCommit,
   onStop,
   isStreaming = false,
   mode,
@@ -107,6 +119,7 @@ export const ChatInput = ({
   acpSelectorsSlot,
   agentSelectorSlot,
   contextUsageOverride,
+  adjacentNodeSourceId,
   disabled = false,
   placeholder,
   connectedTop = false,
@@ -117,34 +130,43 @@ export const ChatInput = ({
   const historyIndexRef = useRef(-1);
   const draftRef = useRef('');
 
-  // Pending attachments from the store
-  const pendingAttachments = useChatStore((s) => s.pendingAttachments);
+  // Pending attachments belong to the thread this composer is sending to.
+  const { threadId, canvasId } = useChatSession();
+  const pendingAttachments = useChatStore((s) =>
+    selectThreadPendingAttachments(s, threadId),
+  );
   const selectionAttachment = useChatStore((s) => s.selectionAttachment);
+  const adjacentNode = useCanvasStore((s) =>
+    adjacentNodeSourceId
+      ? s.nodes.find((node) => node.id === adjacentNodeSourceId)
+      : undefined,
+  );
   const addPendingAttachment = useChatStore((s) => s.addPendingAttachment);
   const removePendingAttachment = useChatStore(
     (s) => s.removePendingAttachment,
   );
   const [isDragOver, setIsDragOver] = useState(false);
-  const canvasId = useCanvasStore((s) => s.canvasId);
 
-  // Focus the textarea whenever a surface requests it (e.g. opening a
-  // question node into compose mode). Keyed on a monotonic nonce so
-  // repeated requests re-fire even without an intervening blur.
-  const focusChatInputNonce = usePanelStore((s) => s.focusChatInputNonce);
+  // Focus the textarea when a surface asks for *this* thread's composer.
+  // Keyed on a nonce so repeated requests re-fire even without an
+  // intervening blur.
+  const focusRequest = usePanelStore((s) => s.focusChatInputRequest);
+  const focusNonce =
+    focusRequest?.threadId === threadId ? focusRequest.nonce : null;
   useEffect(() => {
-    if (focusChatInputNonce === 0) return;
+    if (focusNonce === null) return;
     // Defer to the next frame so the panel has finished expanding and the
     // textarea is mounted + interactive before we move focus to it.
     const raf = requestAnimationFrame(() => {
       const ta = textareaRef.current;
       if (!ta) return;
-      ta.focus();
+      ta.focus({ preventScroll: true });
       const len = ta.value.length;
       ta.selectionStart = len;
       ta.selectionEnd = len;
     });
     return () => cancelAnimationFrame(raf);
-  }, [focusChatInputNonce]);
+  }, [focusNonce]);
 
   // ── Slash-command typeahead ──────────────────────────────────────
   //
@@ -168,7 +190,7 @@ export const ChatInput = ({
       try {
         if (file.type.startsWith('image/')) {
           const url = await uploadImage(file, canvasId);
-          addPendingAttachment({
+          addPendingAttachment(threadId, {
             type: 'image',
             source: 'upload',
             url,
@@ -176,7 +198,7 @@ export const ChatInput = ({
           });
         } else if (file.type === 'application/pdf') {
           const url = await uploadPdf(file, canvasId);
-          addPendingAttachment({
+          addPendingAttachment(threadId, {
             type: 'pdf',
             source: 'upload',
             url,
@@ -191,7 +213,7 @@ export const ChatInput = ({
           const textContent = isText ? await file.text() : undefined;
 
           const url = await uploadImage(file, canvasId);
-          addPendingAttachment({
+          addPendingAttachment(threadId, {
             type: 'file',
             source: 'upload',
             url,
@@ -200,11 +222,12 @@ export const ChatInput = ({
             filename: file.name,
           });
         }
+        onCommit?.();
       } catch (err) {
         console.error('Failed to upload file:', err);
       }
     },
-    [addPendingAttachment, canvasId, t],
+    [addPendingAttachment, canvasId, onCommit, t, threadId],
   );
 
   // Handle paste — upload pasted images/files as attachments
@@ -254,57 +277,6 @@ export const ChatInput = ({
       ? t('chat.operatePlaceholder')
       : (placeholder ?? t('chat.inputPlaceholder'));
 
-  // Auto-resize textarea.
-  // Runs synchronously before paint to avoid the brief flash where the
-  // textarea looks stretched by the parent flex container.
-  //
-  // Both `ask` and `operate` modes render the same `<textarea>` and
-  // both should grow as the user types — `mode` is still a dep so the
-  // effect re-runs on mode switch (e.g. to recompute against the
-  // mode-specific placeholder if it ever affects measured height).
-  useLayoutEffect(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-
-    const computed = window.getComputedStyle(textarea);
-    const lineHeightRaw = Number.parseFloat(computed.lineHeight);
-    const lineHeight =
-      Number.isFinite(lineHeightRaw) && lineHeightRaw > 0 ? lineHeightRaw : 20;
-
-    const paddingY =
-      (Number.parseFloat(computed.paddingTop) || 0) +
-      (Number.parseFloat(computed.paddingBottom) || 0);
-    const borderY =
-      (Number.parseFloat(computed.borderTopWidth) || 0) +
-      (Number.parseFloat(computed.borderBottomWidth) || 0);
-
-    const minLines = 2;
-    const maxLines = 5;
-    // With box-sizing: border-box (Tailwind preflight), style.height must
-    // include padding + border to match the visible row count.
-    const chrome = paddingY + borderY;
-    const minHeight = lineHeight * minLines + chrome;
-    const maxHeight = lineHeight * maxLines + chrome;
-
-    if (!value) {
-      // Empty content — skip scrollHeight measurement because it's unreliable
-      // on first mount (layout / fonts not yet settled) and tends to produce
-      // a value larger than the actual rows={2} default, making the textarea
-      // appear stretched until the user types.
-      textarea.style.height = `${minHeight}px`;
-      textarea.style.overflowY = 'hidden';
-      return;
-    }
-
-    // Reset to auto so scrollHeight reflects the intrinsic content height.
-    textarea.style.height = 'auto';
-    // scrollHeight excludes border per spec — add it back for border-box.
-    const measured = textarea.scrollHeight + borderY;
-    const nextHeight = Math.max(minHeight, Math.min(measured, maxHeight));
-    textarea.style.height = `${nextHeight}px`;
-    textarea.style.overflowY = measured > maxHeight ? 'auto' : 'hidden';
-  }, [mode, value]);
-
   // Handle Enter key for submission and ArrowUp/ArrowDown for prompt history
   const handleKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> = (
     e,
@@ -326,7 +298,7 @@ export const ChatInput = ({
         (e.key === 'ArrowUp' && atStart) ||
         (e.key === 'ArrowDown' && atEnd)
       ) {
-        const history = selectCurrentMessages(useChatStore.getState())
+        const history = selectThreadMessages(useChatStore.getState(), threadId)
           .filter((m) => m.role === 'user')
           .map((m) => (m.role === 'user' ? m.content : ''));
         if (history.length === 0) return;
@@ -388,8 +360,52 @@ export const ChatInput = ({
           className={`border p-3 transition-colors ${connectedTop ? 'rounded-t-none rounded-b-2xl' : 'rounded-2xl'} ${isDragOver ? 'border-edge-default bg-info-bg' : 'border-edge-default bg-surface'}`}
         >
           {/* ── Pending attachment thumbnails ── */}
-          {(pendingAttachments.length > 0 || selectionAttachment) && (
+          {(pendingAttachments.length > 0 ||
+            selectionAttachment ||
+            adjacentNode) && (
             <div className="mb-2 flex flex-wrap gap-2">
+              {adjacentNode &&
+                !pendingAttachments.some(
+                  (attachment) =>
+                    attachment.originNodeId === adjacentNode.id &&
+                    !attachment.content &&
+                    !attachment.url,
+                ) && (
+                  <Tooltip content={t('chat.addAdjacentNodeSource')}>
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      aria-label={t('chat.addAdjacentNodeSource')}
+                      className="group border-edge-default relative flex cursor-pointer items-center justify-center rounded-md border border-dashed"
+                      onClick={() => {
+                        const label =
+                          typeof adjacentNode.data.label === 'string'
+                            ? adjacentNode.data.label
+                            : t('chat.attachmentFallbackText');
+                        addPendingAttachment(threadId, {
+                          type: 'text',
+                          source: 'selection',
+                          originNodeId: adjacentNode.id,
+                          label,
+                        });
+                        onCommit?.();
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key !== 'Enter' && event.key !== ' ') return;
+                        event.preventDefault();
+                        event.currentTarget.click();
+                      }}
+                    >
+                      <AttachmentTextPreview
+                        text={
+                          typeof adjacentNode.data.label === 'string'
+                            ? adjacentNode.data.label
+                            : t('chat.attachmentFallbackText')
+                        }
+                      />
+                    </div>
+                  </Tooltip>
+                )}
               {/* Selection attachment (from text highlight in expanded panel) */}
               {selectionAttachment &&
                 (() => {
@@ -435,7 +451,8 @@ export const ChatInput = ({
                     // Lock the selection: promote to a regular pending attachment
                     const locked = { ...att };
                     useChatStore.getState().setSelectionAttachment(null);
-                    addPendingAttachment(locked);
+                    addPendingAttachment(threadId, locked);
+                    onCommit?.();
                   };
 
                   const tile = (
@@ -452,11 +469,7 @@ export const ChatInput = ({
                         lockSelectionAttachment();
                       }}
                     >
-                      <div className="bg-surface flex h-12 w-12 items-center justify-center rounded-md px-1">
-                        <span className="text-fg-subtle line-clamp-3 w-full text-center text-[8px] leading-tight">
-                          {previewText}
-                        </span>
-                      </div>
+                      <AttachmentTextPreview text={previewText} />
                       <Button
                         variant="ghost"
                         shape="pill"
@@ -552,11 +565,7 @@ export const ChatInput = ({
                         className="h-12 w-12 rounded-md object-contain"
                       />
                     ) : (
-                      <div className="bg-surface flex h-12 w-12 items-center justify-center rounded-md px-1">
-                        <span className="text-fg-subtle line-clamp-3 w-full text-center text-[8px] leading-tight">
-                          {previewText}
-                        </span>
-                      </div>
+                      <AttachmentTextPreview text={previewText} />
                     )}
                     <Button
                       variant="ghost"
@@ -565,7 +574,8 @@ export const ChatInput = ({
                       shape="pill"
                       onClick={(e) => {
                         e.stopPropagation();
-                        removePendingAttachment(idx);
+                        removePendingAttachment(threadId, idx);
+                        onCommit?.();
                       }}
                       tooltipWrapperClassName="absolute top-0.5 right-0.5 inline-flex opacity-0 transition-opacity group-hover:opacity-100"
                       className="text-fg-inverse bg-inverse/50 enabled:hover:bg-inverse/70 p-0.5"
@@ -596,6 +606,9 @@ export const ChatInput = ({
           <div className="relative">
             <textarea
               ref={textareaRef}
+              name="agent-message"
+              autoComplete="off"
+              aria-label={currentPlaceholder}
               value={value}
               onChange={(e) => {
                 onChange(e.target.value);
@@ -642,7 +655,10 @@ export const ChatInput = ({
                   size="sm"
                   type="button"
                   title={t('chat.stopGenerating')}
-                  onClick={onStop}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    onStop();
+                  }}
                   aria-label={t('chat.stop')}
                 >
                   <Square />

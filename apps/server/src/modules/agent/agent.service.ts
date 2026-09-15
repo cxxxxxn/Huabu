@@ -18,8 +18,6 @@
  *    themselves and pull the relevant `tool_result` payload.
  */
 
-import { loadAgent, type AgentId } from '../../prompt/index.js';
-import { canvasAcpNamespace } from '../storage/paths.js';
 import {
   agenetes,
   INTERNAL_DRIVER_KIND,
@@ -28,10 +26,14 @@ import {
 } from './agenetes/drivers.js';
 import { createChatSubmission } from './agenetes/handle.js';
 import { buildHuabuPiWorkloadSpec } from './agenetes/pi-driver.js';
+import { loadAgent, type AgentId } from '../../prompt/index.js';
+import { canvasAcpNamespace } from '../workspace/paths.js';
 import { renderInternalAgentInputs } from './conversation/prompt/build-prompt.js';
 import { dumpAssembledPrompt } from './conversation/prompt/debug-prompt.js';
+import { conversationTitleService } from './conversation-title.service.js';
 import { type ToolScope } from './tools/index.js';
 
+import type { HuabuSubmission } from './agenetes/handle.js';
 import type { ChatEnvelope } from './conversation/envelope.js';
 import type { WorkloadType } from '@agenetes/protocol';
 import type { Context, Message } from '@earendil-works/pi-ai';
@@ -92,6 +94,8 @@ export interface AgentRunOptions {
   threadId?: string;
   /** Current canvas ID available as implicit context for canvas-aware tools. */
   canvasId?: string;
+  /** Trusted upstream Question ownership; node labels are not Chat titles. */
+  questionOwned?: boolean;
   /**
    * This turn's structured input. When provided (the chat route), it is
    * rendered into the per-turn user message internally — symmetric with
@@ -100,12 +104,14 @@ export interface AgentRunOptions {
    * stays the single source of truth on reload.
    *
    * Optional for the internal, envelope-less callers (memory analyzer,
-   * sketch recognition, reachback operate) that assemble
+   * reachback operate) that assemble
    * `context.messages` directly: with no envelope, `runAgent` runs over
    * `context.messages` as-is and syncs the full final transcript back
    * (the legacy behaviour).
    */
   envelope?: ChatEnvelope;
+  /** Pre-rendered durable submission for non-chat host events. */
+  submission?: HuabuSubmission;
   /**
    * pi-ai Context for this run. The system prompt is host-rendered current
    * context; messages seed fresh handles and envelope-less Jobs. Durable
@@ -115,16 +121,15 @@ export interface AgentRunOptions {
   context: Context;
   /**
    * `NodeOrigin` stamp forwarded to `canvas_commands` (and ignored by
-   * other tools). Defaults inside the handler to `{ type: 'ai-operate' }`;
-   * the sketch pipeline overrides to
-   * `{ type: 'sketch-recognized' }` so user-authored gestures are
-   * not mis-tagged as AI-initiated.
+   * other tools). Defaults inside the handler to `{ type: 'ai-operate' }`.
    */
   origin?: NodeOrigin;
   /** Model role used to resolve the Chat or Utility tier for this workload. */
   modelRole?: ModelRole;
   /** Whether this workload may send image content to the selected model. */
   hasImage?: boolean;
+  /** Frozen Space Prompt captured when a fixed Agent Node is first realised. */
+  spacePrompt?: string;
   /**
    * Per-thread model override id carried with this turn (built-in chat).
    * Applied to the thread before the run, so a model picked before the
@@ -166,6 +171,8 @@ export interface AgentRunOptions {
     mode: string;
     logger: FastifyBaseLogger;
   };
+  /** Called after Agenetes has synchronously persisted this turn's start. */
+  onTurnStarted?: () => void;
 }
 
 // ==================== Agent Loop ====================
@@ -194,10 +201,12 @@ export async function* runAgent(
     threadId,
     canvasId,
     envelope,
+    submission: suppliedSubmission,
     context,
     origin,
     modelRole,
     hasImage,
+    spacePrompt,
     modelId,
     reasoningEffort,
     maxIterations,
@@ -205,6 +214,7 @@ export async function* runAgent(
     workloadType = 'Job',
     logger,
     debugPrompt,
+    onTurnStarted,
   } = options;
 
   const rendered = envelope
@@ -212,7 +222,9 @@ export async function* runAgent(
         canvasId: canvasId ?? null,
       })
     : undefined;
-  const submission = envelope ? createChatSubmission(envelope, rendered) : null;
+  const submission =
+    suppliedSubmission ??
+    (envelope ? createChatSubmission(envelope, rendered) : null);
 
   // Optional developer aid: dump the fully-assembled prompt (system +
   // prior history + this turn). No-op unless HUABU_DEBUG_PROMPT is set.
@@ -239,7 +251,7 @@ export async function* runAgent(
   // compiles the loaded profile into tool refs + runtime knobs while the
   // standard pi-driver owns harness execution and durable-history recovery.
   //
-  // Envelope-less / stateless callers (memory / sketch / reachback) have no
+  // Envelope-less / stateless callers (memory / reachback) have no
   // conversation thread. `threadId: ''` keeps the instance record key inert
   // and makes the factory resolve an ephemeral read-set + leave canvas
   // writes unattributed (every downstream consumer truthy-guards the thread
@@ -269,12 +281,26 @@ export async function* runAgent(
     origin,
     modelRole,
     hasImage,
+    spacePrompt,
   });
 
   // Static DriverMap construction guarantees that `internal` is the
   // pi-backed handle. Deployments get-or-create by `threadId`; Jobs mint a
   // fresh handle.
   const handle = agenetes.create(spec) as BuiltinHandle;
+  if (
+    workloadType === 'Deployment' &&
+    canvasId &&
+    deploymentThreadId &&
+    envelope &&
+    !options.questionOwned
+  ) {
+    void conversationTitleService.initialize(
+      canvasId,
+      deploymentThreadId,
+      envelope.user.text,
+    );
+  }
 
   // Apply any per-thread capability selection carried with this turn — a
   // model / reasoning effort the client picked (e.g. before the thread's
@@ -309,6 +335,7 @@ export async function* runAgent(
     logger,
     onRendered,
   });
+  onTurnStarted?.();
 
   while (true) {
     const next = await iterator.next();

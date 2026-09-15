@@ -18,10 +18,9 @@
  *   - changing the prompt shape (preview length, filename rule,
  *     opt-in fields) should not require a frontend deploy.
  *
- * Replaces the four parallel implementations of "compute filename +
+ * Replaces the parallel implementations of "compute filename +
  * pick a preview line" that previously lived in:
  *   - agent.route.ts (selected nodes)
- *   - sketch.service.ts (sketch refs)
  *   - canvas/canvas-spatial.ts (outline)
  *   - canvas/node-neighbourhood.ts (neighbourhood)
  *
@@ -33,7 +32,7 @@
 
 import { nodeRevisionOf } from '@huabu/shared/canvas-engine';
 
-import { toSafeFilename } from '../workspace/disk/naming.js';
+import { toSafeFilename } from '../../utils/naming.js';
 
 import type { CanvasNodeType, WireNodeRef } from '@huabu/shared';
 

@@ -14,7 +14,7 @@
  */
 
 import { subscribeCanvasUpdates } from './canvas-sync.js';
-import { getCanvasStore } from '../storage/index.js';
+import { space } from '../storage/index.js';
 
 import type { CanvasSyncEvent } from '@huabu/shared';
 import type { FastifyPluginAsync } from 'fastify';
@@ -38,19 +38,34 @@ const syncRoutes: FastifyPluginAsync = async (fastify): Promise<void> => {
       reply.raw.flushHeaders?.();
       reply.raw.write(': ok\n\n');
 
-      // Baseline handshake: report the current version so the client can
-      // close the "mutated before I subscribed" gap.
-      const canvas = getCanvasStore(canvasId).read();
+      const pending: CanvasSyncEvent[] = [];
+      let snapshotSent = false;
+      const unsubscribe = subscribeCanvasUpdates(canvasId, (event) => {
+        if (!snapshotSent) {
+          pending.push(event);
+          return;
+        }
+        writeSSE(reply.raw, event);
+      });
+
+      // Subscribe before reading the baseline. Updates committed while the
+      // snapshot is read are buffered and delivered after it, closing the
+      // handshake race without reordering updates ahead of the snapshot.
+      const canvas = await space(canvasId).read();
       writeSSE(reply.raw, {
         type: 'snapshot',
         data: { version: canvas?.version ?? 0 },
       });
+      snapshotSent = true;
+      for (const event of pending) writeSSE(reply.raw, event);
+      pending.length = 0;
 
-      const unsubscribe = subscribeCanvasUpdates(canvasId, (event) => {
-        writeSSE(reply.raw, event);
-      });
+      const heartbeat = setInterval(() => {
+        reply.raw.write(': ping\n\n');
+      }, 15_000);
 
       request.raw.on('close', () => {
+        clearInterval(heartbeat);
         unsubscribe();
         try {
           reply.raw.end();
