@@ -8,7 +8,6 @@ import { createId } from '@huabu/shared';
 import { ApiError } from '@/api/_client';
 import { agentApi } from '@/api/agent';
 import { isActivelyViewingQuestion } from '@/hooks/useActivelyViewingQuestion';
-import { useAcpThreadChangesStore } from '@/store/acpThreadChangesStore';
 import useCanvasStore from '@/store/canvasStore';
 import { useChatPreferencesStore } from '@/store/chatPreferencesStore';
 import {
@@ -22,7 +21,6 @@ import {
   ConversationIntegrityError,
   filterClientOwnedQuestionPatch,
   patchConversationOwnerNode,
-  refreshConversationPresentation,
   resolveConversationOwnerSource,
   validateConversationView,
 } from '@/store/conversationOwner';
@@ -484,32 +482,18 @@ export function useChatHistory(
             resolveConversationOwnerSource(
               canvas.canvasId,
               canvas.nodes,
-              canvas.worldReferences,
               ownerView,
             ),
             patch,
           );
           if (!ownerPatch) return;
-          void patchConversationOwnerNode(ownerView, ownerPatch)
-            .then(async () => {
-              await refreshConversationPresentation(ownerView);
-              if (
-                ownerView.presentationAnchor.canvasId !==
-                  ownerView.conversationOwner.canvasId ||
-                ownerView.presentationAnchor.nodeId !==
-                  ownerView.conversationOwner.nodeId
-              ) {
-                await useAcpThreadChangesStore
-                  .getState()
-                  .load(ownerCanvasId, forThreadId);
-              }
-            })
-            .catch((error) =>
+          void patchConversationOwnerNode(ownerView, ownerPatch).catch(
+            (error) =>
               console.error(
                 '[useChatHistory] failed to persist owner lifecycle',
                 error,
               ),
-            );
+          );
           return;
         }
         const node = useCanvasStore
