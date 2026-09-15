@@ -5,11 +5,14 @@
 // runtime surface get-or-creates / looks up / closes live handles; and the
 // I9.4 query surface reads durable records independently from handle liveness.
 
-import { defineDriver } from '@agenetes/runtime';
+import { mkdtempSync, rmSync } from 'node:fs';
+import path from 'node:path';
+
+import { AgenetesError, defineDriver } from '@agenetes/runtime';
 import { describe, expect, it, vi } from 'vitest';
 
 import { InMemoryEventLogStore } from './event-log.js';
-import { InMemoryThreadStore } from './thread-store.js';
+import { FileThreadStore, InMemoryThreadStore } from './thread-store.js';
 import { InMemoryTurnStore } from './turn-store.js';
 
 import { mountAgenetes } from './index.js';
@@ -84,6 +87,243 @@ function mount() {
 }
 
 describe('mounted Agenetes instance (M5 INST skeleton)', () => {
+  it('updates annotations synchronously without spawning or changing spec/state', () => {
+    const threadStore = new InMemoryThreadStore();
+    const driver = stubDriver();
+    const create = vi.spyOn(driver, 'create');
+    const inst = mountAgenetes({ drivers: { external: driver }, threadStore });
+    const namespace = ns('annotations');
+    const record = {
+      driverSchemaVersion: 1,
+      spec: {
+        threadId: 'thread',
+        kind: 'external',
+        workloadType: 'Deployment' as const,
+        namespace,
+        spec: { note: 'original' },
+      },
+      state: { driverState: { sessionId: 'session' } },
+      annotations: { untouched: ['keep'], details: { old: true } },
+    };
+    threadStore.upsert(namespace, 'thread', record);
+    const patch = {
+      label: 'host label',
+      details: { replacement: true },
+      nullable: null,
+    };
+    const updated = inst.updateAnnotations(namespace, 'thread', patch);
+    expect(updated).not.toBeInstanceOf(Promise);
+    expect(updated.spec).toBe(record.spec);
+    expect(updated.state).toBe(record.state);
+    expect(updated.annotations).toEqual({ untouched: ['keep'], ...patch });
+    expect(record.annotations).toEqual({
+      untouched: ['keep'],
+      details: { old: true },
+    });
+    patch.details.replacement = false;
+    (updated.annotations!.details as { replacement: boolean }).replacement =
+      false;
+    expect(inst.record(namespace, 'thread')?.annotations?.details).toEqual({
+      replacement: true,
+    });
+    expect(inst.records(namespace)[0]?.annotations).toEqual({
+      untouched: ['keep'],
+      label: 'host label',
+      details: { replacement: true },
+      nullable: null,
+    });
+    expect(inst.updateAnnotations(namespace, 'thread', {}).annotations).toEqual(
+      inst.record(namespace, 'thread')?.annotations,
+    );
+    expect(create).not.toHaveBeenCalled();
+    expect(inst.get('thread')).toBeUndefined();
+  });
+
+  it('throws a typed missing-thread error without creating a record or handle', () => {
+    const inst = mount();
+    const namespace = ns('annotations');
+    for (const threadId of ['missing', '']) {
+      expect(() =>
+        inst.updateAnnotations(namespace, threadId, { label: 'host' }),
+      ).toThrow(AgenetesError);
+      expect(() => inst.updateAnnotations(namespace, threadId, {})).toThrow(
+        expect.objectContaining({
+          code: 'thread_not_found',
+          details: { namespace: namespace.name, threadId },
+        }),
+      );
+      expect(inst.get(threadId)).toBeUndefined();
+    }
+    expect(inst.records(namespace)).toEqual([]);
+  });
+
+  it('rejects non-JSON patches without changing the durable record', () => {
+    const inst = mount();
+    const namespace = ns('annotations');
+    inst.create({
+      threadId: 'thread',
+      kind: 'external',
+      workloadType: 'Deployment',
+      namespace,
+      spec: {},
+    });
+    inst.updateAnnotations(namespace, 'thread', { keep: true });
+    const before = inst.record(namespace, 'thread');
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    for (const patch of [
+      null,
+      [],
+      'bad',
+      { value: undefined },
+      { value: NaN },
+      { value: Infinity },
+      { value: 1n },
+      { value: () => {} },
+      { value: Symbol() },
+      { value: new Date() },
+      cycle,
+    ]) {
+      expect(() =>
+        inst.updateAnnotations(
+          namespace,
+          'thread',
+          patch as Record<string, unknown>,
+        ),
+      ).toThrow(expect.objectContaining({ code: 'invalid_annotations' }));
+      expect(inst.record(namespace, 'thread')).toEqual(before);
+    }
+    inst.close('thread');
+  });
+
+  it.each(['Deployment', 'Job'] as const)(
+    'preserves annotations through file-backed restart, %s realization, and rehome',
+    (workloadType) => {
+      const scratch = mkdtempSync(
+        path.join(process.cwd(), '.agenetes-annotations-'),
+      );
+      try {
+        const namespace = ns('source', path.join(scratch, 'source'));
+        const targetNamespace = ns('target', path.join(scratch, 'target'));
+        const spec: StubSpec = {
+          threadId: 'thread',
+          kind: 'external',
+          workloadType,
+          namespace,
+          spec: { note: 'source' },
+        };
+        const threadStore = new FileThreadStore();
+        const state = { driverState: { sessionId: 'durable-session' } };
+        threadStore.upsert(namespace, spec.threadId, {
+          driverSchemaVersion: 1,
+          spec,
+          state,
+        });
+        const first = mountAgenetes({
+          drivers: { external: stubDriver() },
+          threadStore,
+        });
+        const annotations = {
+          label: 'host label',
+          details: { origin: 'host' },
+        };
+        first.updateAnnotations(namespace, spec.threadId, annotations);
+        expect(first.get(spec.threadId)).toBeUndefined();
+
+        const restarted = mountAgenetes({
+          drivers: { external: stubDriver() },
+          threadStore: new FileThreadStore(),
+        });
+        expect(restarted.records(namespace)[0]?.annotations).toEqual(
+          annotations,
+        );
+        const recovered = restarted.create(spec) as unknown as StubHandle;
+        expect(recovered.createContext.recoveryInput?.state).toEqual(state);
+        expect(recovered.createContext.recoveryInput).not.toHaveProperty(
+          'annotations',
+        );
+        expect(restarted.record(namespace, spec.threadId)?.annotations).toEqual(
+          annotations,
+        );
+        restarted.close(spec.threadId);
+        const targetSpec = {
+          ...spec,
+          namespace: targetNamespace,
+          spec: { note: 'target' },
+        };
+        restarted.rehome({ namespace, threadId: spec.threadId }, targetSpec);
+        expect(restarted.record(namespace, spec.threadId)).toBeUndefined();
+
+        const afterMove = mountAgenetes({
+          drivers: { external: stubDriver() },
+          threadStore: new FileThreadStore(),
+        });
+        const moved = afterMove.create(targetSpec) as unknown as StubHandle;
+        expect(moved.createContext.recoveryInput?.state).toEqual(state);
+        expect(afterMove.record(targetNamespace, spec.threadId)).toEqual({
+          driverSchemaVersion: 1,
+          spec: targetSpec,
+          state,
+          annotations,
+        });
+        expect(() =>
+          afterMove.updateAnnotations(namespace, spec.threadId, {}),
+        ).toThrow(expect.objectContaining({ code: 'thread_not_found' }));
+        afterMove.close(spec.threadId);
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('fork deep-copies host annotations while resetting driver state', () => {
+    const threadStore = new InMemoryThreadStore();
+    const inst = mountAgenetes({
+      drivers: { external: stubDriver() },
+      threadStore,
+    });
+    const namespace = ns('annotations');
+    const spec: StubSpec = {
+      threadId: 'source',
+      kind: 'external',
+      workloadType: 'Deployment',
+      namespace,
+      spec: {},
+    };
+    inst.create(spec);
+    const annotations = {
+      label: 'source label',
+      details: { tags: ['source'] },
+    };
+    inst.updateAnnotations(namespace, spec.threadId, annotations);
+    inst.fork(
+      { namespace, threadId: spec.threadId },
+      { ...spec, threadId: 'target' },
+    );
+    expect(inst.record(namespace, 'target')?.annotations).toEqual(annotations);
+    expect(threadStore.get(namespace, 'target')?.annotations?.details).not.toBe(
+      threadStore.get(namespace, 'source')?.annotations?.details,
+    );
+    inst.updateAnnotations(namespace, 'target', {
+      label: 'target label',
+      details: { tags: ['target'] },
+    });
+    inst.updateAnnotations(namespace, 'source', { other: true });
+    expect(inst.record(namespace, 'source')?.annotations).toEqual({
+      ...annotations,
+      other: true,
+    });
+    expect(inst.record(namespace, 'target')?.annotations).toEqual({
+      label: 'target label',
+      details: { tags: ['target'] },
+    });
+    expect(inst.record(namespace, 'target')?.state).toEqual({
+      driverState: {},
+    });
+    inst.close('source');
+    inst.close('target');
+  });
+
   it('create() get-or-creates by threadId and reuse ignores spec (I9.3)', () => {
     const inst = mount();
     const spec: StubSpec = {

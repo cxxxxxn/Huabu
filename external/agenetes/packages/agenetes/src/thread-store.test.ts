@@ -81,6 +81,75 @@ const writeStore = (namespace: Namespace, value: unknown): void => {
 };
 
 describe('FileThreadStore agenetes-v2 durable backing', () => {
+  it.each(['constructor', '__proto__', 'toString'])(
+    'treats prototype-like thread ID %s as an ordinary stored record',
+    (threadId) => {
+      const namespace = ns('canvas-1');
+      const store = new FileThreadStore();
+      expect(store.get(namespace, threadId)).toBeUndefined();
+      const saved = {
+        ...record(threadId, 'session', meta),
+        annotations: JSON.parse(
+          '{"constructor":{"title":"saved"},"__proto__":{"safe":true}}',
+        ),
+      };
+      store.upsert(namespace, threadId, saved);
+      const restarted = new FileThreadStore();
+      expect(restarted.get(namespace, threadId)).toEqual(saved);
+      expect(restarted.list(namespace)).toEqual([saved]);
+      restarted.delete(namespace, threadId);
+      expect(restarted.get(namespace, threadId)).toBeUndefined();
+      expect(restarted.list(namespace)).toEqual([]);
+    },
+  );
+
+  it('preserves optional annotations across writes, listing, and restart', () => {
+    const namespace = ns('canvas-1');
+    const annotated: ThreadRecord = {
+      ...record('t1', 'session', meta),
+      annotations: {
+        label: 'Host label',
+        details: { source: 'host', version: 2 },
+        values: [null, false, 0, '', { nested: ['value'] }],
+        ...JSON.parse('{"__proto__":{"safe":true}}'),
+      },
+    };
+    const store = new FileThreadStore();
+    store.upsert(namespace, 't1', annotated);
+    store.upsert(namespace, 'legacy', record('legacy'));
+    store.upsert(namespace, 'empty', { ...record('empty'), annotations: {} });
+
+    const restarted = new FileThreadStore();
+    expect(restarted.get(namespace, 't1')).toEqual(annotated);
+    expect(restarted.list(namespace)).toEqual([
+      annotated,
+      record('legacy'),
+      { ...record('empty'), annotations: {} },
+    ]);
+    expect(restarted.get(namespace, 'legacy')).not.toHaveProperty(
+      'annotations',
+    );
+    restarted.delete(namespace, 'empty');
+    expect(new FileThreadStore().get(namespace, 't1')).toEqual(annotated);
+  });
+
+  it.each([null, [], 'label', 42, true])(
+    'rejects malformed persisted annotations: %j',
+    (annotations) => {
+      const namespace = ns('canvas-1');
+      writeStore(namespace, {
+        schemaVersion: THREAD_STORE_SCHEMA_VERSION,
+        records: { t1: { ...record('t1'), annotations } },
+      });
+      expect(() => new FileThreadStore().get(namespace, 't1')).toThrow(
+        expect.objectContaining({ code: 'invalid_persisted_record' }),
+      );
+      expect(() => new FileThreadStore().list(namespace)).toThrow(
+        /annotations must be an object of JSON values/,
+      );
+    },
+  );
+
   it('round-trips the strict versioned record envelope', () => {
     const store = new FileThreadStore();
     const namespace = ns('canvas-1');

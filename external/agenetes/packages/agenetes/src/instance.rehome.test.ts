@@ -108,6 +108,7 @@ function seedSource(
     driverSchemaVersion: 1,
     spec,
     state,
+    annotations: { label: 'host label', details: { owner: 'host' } },
   });
   eventLogStore.appendTurnStart(sourceNamespace, threadId, {
     type: 'user_text',
@@ -179,6 +180,7 @@ describe('Agenetes.rehome() — the destructive counterpart to fork()', () => {
       driverSchemaVersion: 1,
       spec: targetSpec,
       state: sourceRecord.state,
+      annotations: sourceRecord.annotations,
     });
     expect(eventLogStore.readRecords(targetNamespace, threadId)).toEqual(
       sourceEvents,
