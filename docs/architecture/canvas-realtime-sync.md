@@ -58,16 +58,17 @@ The wire event is defined once in
 [canvas-sync.ts](../../packages/shared/src/types/api/canvas-sync.ts) (zod
 schema + `z.infer`, web imports as `import type` only):
 
-| Event      | When                        | Payload                                                                                       |
-| ---------- | --------------------------- | --------------------------------------------------------------------------------------------- |
-| `snapshot` | once, on SSE connect        | `{ version }` — lets a tab that connected _after_ a mutation detect the gap and `loadCanvas`. |
-| `update`   | after every persisted batch | `{ fromVersion, toVersion, deltas, pendingEffects, threadId?, changes? }`                     |
+| Event      | When                        | Payload                                                                                         |
+| ---------- | --------------------------- | ----------------------------------------------------------------------------------------------- |
+| `snapshot` | once, on SSE connect        | `{ version }` — lets a tab that connected _after_ a mutation detect the gap and `loadCanvas`.   |
+| `update`   | after every persisted batch | `{ fromVersion, toVersion, deltas, pendingEffects, threadId?, changes?, agentNodeProjection? }` |
 
 - `deltas` / `pendingEffects.mutatedNodes` are `unknown` on the wire (they mirror
   the loosely-typed `PostCanvasExecuteResponse`; the engine `Delta` / `CanvasNode`
   shapes live in the canvas-engine module, not the API layer). The client casts.
 - `threadId` + `changes` are present **only** for thread-attributed batches; they
   feed the originating conversation's review card.
+- `agentNodeProjection` identifies trusted server binding/lifecycle/association effects for browser undo handling; it is output metadata, not client authorization to submit those writes.
 
 ## One write path, one broadcast
 
@@ -92,7 +93,7 @@ un-persisted local content edits (`nodeContentQueue.pendingNodeIds()` —
 debounced-but-unsaved plus in-flight PUTs):
 
 ```
-INSERT_NODE (new id)     → always apply (fresh ids never collide)
+INSERT_NODE (new id)     → apply unless a local pending Question creation was undone/deleted
 REPLACE_NODE changing content / DELETE_NODE on a dirty id → SKIP (keep the human's unsaved edit)
 REPLACE_NODE changing only non-content fields on a dirty id → apply while preserving local content fields
 otherwise                → apply
@@ -117,6 +118,7 @@ otherwise                → apply
 - Structure-save acknowledgements reconcile monotonically with Canvas Sync: a delayed HTTP success cannot lower the local version, and a delayed 409 whose reported server version has already arrived over SSE is retried against that fresh baseline instead of opening the global conflict state. If the 409 arrives first, the client records its server version; a later SSE update that reaches that version clears the warning and schedules the latest structure for retry.
 - **Scope:** content only. Same-node _structure_ conflicts (geometry / parent)
   stay coarse — there is no per-node structure-dirty tracking yet.
+- **Mixed Question content/FSM deltas:** when a dirty node rejects incoming authored content, its authoritative binding, invocation, attention, and association metadata still applies. The local content, existing amber conflict notice, skipped change-card state, and content-CAS baseline rebase remain intact. Geometry and deletion conflict policy is unchanged; this is not general field-level merging.
 
 Skipped ids flow back through `canvasSyncStore` into `acpThreadChangesStore`
 (`conflictedByThread`) and surface as:
@@ -197,23 +199,29 @@ is deferred — see the plan.
 
 ## Undo interaction
 
+Editable broadcast batches take **one** undo snapshot (via `applyDeltasFromAgent`). Trusted Agent Node projection batches and FSM-only replacements do not create ordinary undo entries. The server's first-submitted-content effect rebases matching empty Question content in existing snapshots, so undoing an earlier drag cannot erase that submitted intent.
+
 **Restore persistence is ordered, not delay-dependent.** Before undo/redo publishes reappearing nodes, the existing `nodeContentQueue` holds their sidecar writes behind generation tokens. Deleted-node content bookkeeping is forgotten immediately, while the preprocessing queue remembers interrupted work for history resurrection. Already-issued content and preprocessing requests settle before the history manager sends DELETE; DELETE promises are tracked to completion rather than aborted, because aborting fetch does not cancel an admitted server mutation. `saveCanvas` waits for outstanding deletes, reads the latest topology, and releases only tokens captured by that successfully acknowledged structure PUT. A later undo/redo invalidates earlier tokens, so neither an old acknowledgement nor a queued body resurrects a node removed again. Ordinary content edits retain their independent debounce and revision baseline; only an acknowledged resurrection starts with the absent-sidecar revision, still subject to the existing content CAS.
 
 History reports node changes to the existing preprocessing queue rather than independently cancelling or resuming tasks. The queue owns selective input reconciliation, waiting demand, and client callback validity under the authoritative [client responsibility boundary](./node-preprocessing.md#client-responsibility-boundary). The content queue signals readiness only after restored content successfully persists. These client guarantees do not establish server-side freshness of derived-content writes.
 
 Structure failures and unresolved version conflicts leave restored bodies held and dirty; ordinary autosave, the existing save-error Retry action, and SSE version reconciliation all reuse `saveCanvas`. A released body's content failure or content conflict also stays dirty until saved or explicitly resolved. Route navigation, `switchCanvas`, and explicit Canvas loads drain the same queues and refuse to discard an unresolved restored body; Retry or explicitly removing the node lets the user continue. Delayed callbacks check the captured Canvas and restore generation before applying acknowledgements. A snapshot with `contentMissing` or without a text-bearing node's string body never invents an empty sidecar; it remains a missing-file placeholder. Unload remains best-effort: it cannot guarantee a multi-request restore after the browser terminates, and it never bypasses the restore hold to write content early. Backend tombstones, version checks, endpoints, and debounce delays are unchanged.
 
-Broadcast applies take **one** undo snapshot per batch (via `applyDeltasFromAgent`). Host-side refinements keep undo coherent with sync:
+Host-side refinements keep undo coherent with sync:
 
 - **Transient-field parity.** `diff.ts` and the web snapshotter share one
   canonical `TRANSIENT_NODE_FIELDS` / `TRANSIENT_EDGE_FIELDS` list
   (`selected` / `dragging` / `measured` / `resizing`) so a pure selection flip
   never diffs into a phantom REPLACE, and undo/redo re-applies the live
   transient fields instead of clearing selection.
-- **Question-node data preservation.** Undo/redo restores a question node's
-  geometry but keeps its **live** `data` (thread binding, answer) — that payload
-  is system-driven, so rewinding a move must not wipe it.
+- **Question-node ownership preservation.** Undo/redo restores editable geometry/content/presentation while preserving live FSM fields and Bound preparation. Server change-card inverse replay applies only the editable data fields changed by that recorded effect, not an old complete Node. Undo reinsertion awaits deletion and confirms the restored thread through the association endpoint before ordinary autosave; a failed confirmation does not silently create a fresh binding.
+- **Pending Question removal.** Undo/deletion removes optimistic Questions immediately, filters their late creation inserts (and incident inserted edges) from both HTTP and SSE reconciliation, and delays the tracked server DELETE until creation settles. Failed creation/fork/restore rolls back its optimistic Question and history references rather than leaving a rejected promise that blocks every later structure save.
+
+Question restoration preserves main's immediate local undo/redo behavior and content-queue restore barriers. Only the server association waits for already-issued topology PUTs and the node's tracked DELETE; it does not flush or await new saves that depend on that association. Structure saving rechecks Question creation acknowledgements after asynchronous waits before submitting the latest editable topology.
+
 - **Retired topology filtering.** Undo/redo applies the shared `stripLegacyPortalTopology()` helper before restoring a snapshot, so old Portal/Pin nodes and their incident edges cannot reappear and ordinary children retain rebased positions. The former Portal-specific history invalidation path is removed; this filtering does not migrate or clean up stored files.
+
+The auto-accept preference still suppresses new Agent review records only. It does not suppress broadcasts or editable undo snapshots, and it does not weaken FSM ownership during manual revert or undo.
 
 ## Stream reliability
 

@@ -11,6 +11,7 @@
 
 import { z } from 'zod';
 
+import { canvasEditableNodeSchema } from './agent-node.js';
 export interface GetCanvasResponse {
   canvasId: string;
   title: string | null;
@@ -21,7 +22,12 @@ export interface GetCanvasResponse {
 /** Body for `PUT /api/canvas/:canvasId`. */
 export const putCanvasBodySchema = z.object({
   version: z.number().int().nonnegative(),
-  state: z.unknown(),
+  state: z
+    .object({
+      nodes: z.array(canvasEditableNodeSchema),
+      edges: z.array(z.unknown()).optional(),
+    })
+    .catchall(z.unknown()),
   title: z.string().min(1).optional(),
 });
 export type PutCanvasRequest = z.infer<typeof putCanvasBodySchema>;

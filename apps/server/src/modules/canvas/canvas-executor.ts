@@ -50,12 +50,21 @@ import {
   executeCanvasCommands,
   extractCanvasChanges,
   nodeRevision,
+  preserveAgentNodeOwnedData,
+  projectAgentNodeEditableData,
+  replayAgentNodeEditableData,
+  changesAgentNodePreparation,
   type CanvasChangeRecord,
   type CanvasEdge,
   type CanvasNode,
   type Delta,
 } from '@huabu/shared/canvas-engine';
 
+import {
+  guardAgentNodeDraftEditsAlreadyLocked,
+  initializeAgentNodeCreationAlreadyLocked,
+  validateAgentNodeEditableData,
+} from './agent-node-edit.js';
 import { publishCanvasUpdate } from './canvas-sync.js';
 import { importForeignNodeSources } from './import-node-src.js';
 import {
@@ -598,6 +607,8 @@ export interface ExecuteOnServerInput {
   computeChanges?: boolean;
   /** Internal coordination hook; ordinary callers always publish. */
   publish?: boolean;
+  /** Validated cross-Space move retains the original execution identity. */
+  agentNodeMoveState?: ReadonlyMap<string, Record<string, unknown>>;
 }
 
 export interface ExecuteOnServerOutput {
@@ -719,9 +730,9 @@ export async function executeOnServer(
 export async function executeOnServerAlreadyLocked(
   input: ExecuteOnServerInput,
 ): Promise<ExecuteOnServerOutput> {
-  const { canvasId, originator, runId } = input;
+  const { canvasId } = input;
   assertCurrentCanvasCommands(input.commands);
-  let commands = [...input.commands];
+  const commands = [...input.commands];
 
   const handle = space(canvasId);
   const canvas = await handle.read();
@@ -731,8 +742,6 @@ export async function executeOnServerAlreadyLocked(
   // topology needs its stored content before the engine sees it.
   const records = await handle.nodes.list();
 
-  const fromVersion = canvas.version;
-
   // Hydrate per-node content from .md sidecars before the engine sees
   // the prestate — handlers like MERGE_NODE_DATA need the current
   // `data.content` to merge against, but topology never carries it.
@@ -740,7 +749,83 @@ export async function executeOnServerAlreadyLocked(
     records,
     canvas.state.nodes as CanvasNode[],
   );
-  const prestateEdges = (canvas.state.edges ?? []) as CanvasEdge[];
+  const draftPatches = new Map<string, Record<string, unknown>>();
+  for (const command of commands) {
+    if (command.type === 'CREATE_NODES') {
+      for (const node of command.nodes) {
+        if (
+          prestateNodes.some(
+            (current) => current.id === node.id && current.type === 'question',
+          )
+        ) {
+          throw new Error(
+            'An existing Agent Node identity cannot be recreated',
+          );
+        }
+        if (node.id)
+          draftPatches.set(node.id, {
+            ...draftPatches.get(node.id),
+            ...node.data,
+          });
+      }
+    }
+    if (command.type !== 'MERGE_NODE_DATA') continue;
+    for (const entry of command.patches) {
+      if (
+        prestateNodes.some(
+          (node) => node.id === entry.nodeId && node.type === 'question',
+        )
+      )
+        validateAgentNodeEditableData(entry.patch);
+      draftPatches.set(entry.nodeId, {
+        ...draftPatches.get(entry.nodeId),
+        ...entry.patch,
+      });
+    }
+  }
+  const releaseDrafts = await guardAgentNodeDraftEditsAlreadyLocked(
+    canvasId,
+    prestateNodes.flatMap((current) => {
+      const patch = draftPatches.get(current.id);
+      return patch ? [{ current, patch }] : [];
+    }),
+  );
+  try {
+    // Canonical confirmation can persist Bound while this mutex is held.
+    const confirmedCanvas = await handle.read();
+    if (!confirmedCanvas) throw new CanvasNotFoundError(canvasId);
+    const promoted = confirmedCanvas.version !== canvas.version;
+    return await executePreparedOnServerAlreadyLocked(input, {
+      handle,
+      canvas: confirmedCanvas,
+      commands,
+      prestateNodes: promoted
+        ? hydrateCanvasNodes(
+            await handle.nodes.list(),
+            confirmedCanvas.state.nodes as CanvasNode[],
+          )
+        : prestateNodes,
+      prestateEdges: (confirmedCanvas.state.edges ?? []) as CanvasEdge[],
+    });
+  } finally {
+    releaseDrafts();
+  }
+}
+
+async function executePreparedOnServerAlreadyLocked(
+  input: ExecuteOnServerInput,
+  prepared: {
+    handle: ReturnType<typeof space>;
+    canvas: CanvasFile;
+    commands: CanvasCommand[];
+    prestateNodes: CanvasNode[];
+    prestateEdges: CanvasEdge[];
+  },
+): Promise<ExecuteOnServerOutput> {
+  const { canvasId, originator, runId } = input;
+  const { handle, canvas, prestateNodes, prestateEdges } = prepared;
+  let commands = prepared.commands;
+  const fromVersion = canvas.version;
 
   // Automatic preprocessing can arrive after an agent or user rename.
   // Filter only its label fields at the actual commit, not at request time.
@@ -876,7 +961,37 @@ export async function executeOnServerAlreadyLocked(
   // Pure host-agnostic cleanups (edge handle reroute) — same path the
   // web's `executeCommands` runs before its set().
   const sharedOut = applySharedPostEffectsFromWriteResult(writeResult);
-  const finalNodes = writeResult.nodes;
+  const originalNodes = new Map(prestateNodes.map((node) => [node.id, node]));
+  const finalNodes = await Promise.all(
+    writeResult.nodes.map(async (node) => {
+      const original = originalNodes.get(node.id);
+      if (original === node) return node;
+      if (original?.type === 'question') {
+        if (node.type !== 'question')
+          throw new Error('An Agent Node cannot change type');
+        return {
+          ...node,
+          data: preserveAgentNodeOwnedData(node.data, original.data),
+        };
+      }
+      if (node.type !== 'question' || original) return node;
+      const moved = input.agentNodeMoveState?.get(node.id);
+      return moved
+        ? { ...node, data: preserveAgentNodeOwnedData(node.data, moved) }
+        : initializeAgentNodeCreationAlreadyLocked(canvasId, node);
+    }),
+  );
+  const threadOwners = new Set<string>();
+  for (const node of finalNodes) {
+    if (node.type !== 'question' || typeof node.data.threadId !== 'string')
+      continue;
+    if (threadOwners.has(node.data.threadId))
+      throw new Error('A thread cannot belong to multiple Agent Nodes');
+    threadOwners.add(node.data.threadId);
+  }
+  pendingEffects.mutatedNodes = pendingEffects.mutatedNodes.map(
+    (node) => finalNodes.find((candidate) => candidate.id === node.id) ?? node,
+  );
   const finalEdges = sharedOut.edges;
   const assertResultAllowed =
     originator.source === 'system'
@@ -1200,6 +1315,8 @@ export async function applyDeltasOnServerAlreadyLocked(input: {
   deltas: readonly Delta[];
   originator: ExecuteOriginator;
   runId?: string;
+  /** Only the internal lifecycle writer may bypass editable inverse projection. */
+  agentNodeProjection?: boolean;
 }): Promise<{
   canvasId: string;
   fromVersion: number;
@@ -1215,55 +1332,238 @@ export async function applyDeltasOnServerAlreadyLocked(input: {
   const { canvasId, originator, runId } = input;
 
   const handle = space(canvasId);
-  const canvas = await handle.read();
+  let canvas = await handle.read();
   if (!canvas) throw new CanvasNotFoundError(canvasId);
 
   // Executor prestate is whole-Space work: every md-backed node in the
   // topology needs its stored content before the engine sees it.
   const records = await handle.nodes.list();
 
-  const fromVersion = canvas.version;
-  const prestateNodes = hydrateCanvasNodes(
+  let fromVersion = canvas.version;
+  let prestateNodes = hydrateCanvasNodes(
     records,
     canvas.state.nodes as CanvasNode[],
   );
   const prestateEdges = (canvas.state.edges ?? []) as CanvasEdge[];
 
+  const liveNodes = new Map(prestateNodes.map((node) => [node.id, node]));
+  const editableDeltas = input.agentNodeProjection
+    ? input.deltas
+    : input.deltas.map((delta): Delta => {
+        if (delta.type !== 'REPLACE_NODE') return delta;
+        const current = liveNodes.get(delta.next.id);
+        if (current?.type !== 'question') return delta;
+        const next = {
+          ...delta.next,
+          data: replayAgentNodeEditableData(
+            current.data,
+            delta.prev.data,
+            delta.next.data,
+          ),
+        };
+        liveNodes.set(next.id, next);
+        return { ...delta, next };
+      });
   const final = applyDeltas(
     { nodes: prestateNodes, edges: prestateEdges },
-    input.deltas,
+    editableDeltas,
   );
-  const finalNodes = final.nodes;
-  const finalEdges = final.edges;
-
-  // Reverts bypass commands, not policy. Both validators reject retired
-  // topology for every source; system compensation keeps its creation path.
-  const liveCanvasIds = isWorldCanvasId(canvasId)
-    ? await readLiveSpaceIds()
-    : EMPTY_CANVAS_IDS;
-  const assertResultAllowed =
-    originator.source === 'system'
-      ? assertWorldPreviewResultAllowed
-      : assertWorldPreviewTopologyAllowed;
-  assertResultAllowed(canvasId, prestateNodes, finalNodes, liveCanvasIds);
-
-  // Recompute the authoritative diff so the log row and broadcast
-  // reflect exactly what landed (tolerates already-applied / missing
-  // targets in the input deltas).
-  const deltas = diffCanvasState(
-    { nodes: prestateNodes, edges: prestateEdges },
-    { nodes: finalNodes, edges: finalEdges },
+  const previousById = new Map(prestateNodes.map((node) => [node.id, node]));
+  const replacedNodeIds = new Set(
+    input.deltas.flatMap((delta) =>
+      delta.type === 'REPLACE_NODE' ? [delta.next.id] : [],
+    ),
   );
+  const releaseDrafts = input.agentNodeProjection
+    ? () => {}
+    : await guardAgentNodeDraftEditsAlreadyLocked(
+        canvasId,
+        final.nodes.flatMap((node) => {
+          const current = previousById.get(node.id);
+          return current && replacedNodeIds.has(node.id)
+            ? [
+                {
+                  current,
+                  patch: {
+                    ...node.data,
+                    agentBinding: node.data.agentBinding ?? {
+                      kind: 'internal',
+                    },
+                    agentLaunchOverrides:
+                      node.data.agentLaunchOverrides ?? null,
+                  },
+                },
+              ]
+            : [];
+        }),
+      );
+  try {
+    if (!input.agentNodeProjection) {
+      const confirmedCanvas = await handle.read();
+      if (!confirmedCanvas) throw new CanvasNotFoundError(canvasId);
+      if (confirmedCanvas.version !== canvas.version) {
+        canvas = confirmedCanvas;
+        fromVersion = canvas.version;
+        prestateNodes = hydrateCanvasNodes(
+          await handle.nodes.list(),
+          canvas.state.nodes as CanvasNode[],
+        );
+        previousById.clear();
+        for (const node of prestateNodes) previousById.set(node.id, node);
+      }
+    }
+    const finalNodes = input.agentNodeProjection
+      ? final.nodes
+      : await Promise.all(
+          final.nodes.map(async (node) => {
+            const current = previousById.get(node.id);
+            if (!current && node.type === 'question') {
+              return initializeAgentNodeCreationAlreadyLocked(
+                canvasId,
+                {
+                  ...node,
+                  data: {
+                    ...projectAgentNodeEditableData(node.data),
+                    threadId: node.data.threadId ?? createId('thread'),
+                    bindingState: 'editing',
+                  },
+                },
+                node.data.bindingState === 'bound',
+              );
+            }
+            if (current?.type !== 'question') return node;
+            if (
+              current.data.bindingState === 'bound' &&
+              changesAgentNodePreparation(current.data, {
+                ...node.data,
+                agentBinding: node.data.agentBinding ?? { kind: 'internal' },
+                agentLaunchOverrides: node.data.agentLaunchOverrides ?? null,
+              })
+            )
+              throw new Error(
+                'Cannot undo execution preparation after binding',
+              );
+            return {
+              ...node,
+              type: current.type,
+              data: preserveAgentNodeOwnedData(node.data, current.data),
+            };
+          }),
+        );
+    const threadOwners = new Set<string>();
+    for (const node of finalNodes) {
+      if (node.type !== 'question' || typeof node.data.threadId !== 'string')
+        continue;
+      if (threadOwners.has(node.data.threadId))
+        throw new Error('A thread cannot belong to multiple Agent Nodes');
+      threadOwners.add(node.data.threadId);
+    }
+    const finalEdges = final.edges;
 
-  const mutatedNodes: CanvasNode[] = [];
-  const deletedNodeIds: string[] = [];
-  const contentEditedNodeIds: string[] = [];
+    // Reverts bypass commands, not topology policy.
+    const liveCanvasIds = isWorldCanvasId(canvasId)
+      ? await readLiveSpaceIds()
+      : EMPTY_CANVAS_IDS;
+    const assertResultAllowed =
+      originator.source === 'system'
+        ? assertWorldPreviewResultAllowed
+        : assertWorldPreviewTopologyAllowed;
+    assertResultAllowed(canvasId, prestateNodes, finalNodes, liveCanvasIds);
 
-  if (deltas.length === 0) {
+    // Recompute the authoritative diff so the log row and broadcast
+    // reflect exactly what landed (tolerates already-applied / missing
+    // targets in the input deltas).
+    const deltas = diffCanvasState(
+      { nodes: prestateNodes, edges: prestateEdges },
+      { nodes: finalNodes, edges: finalEdges },
+    );
+
+    const mutatedNodes: CanvasNode[] = [];
+    const deletedNodeIds: string[] = [];
+    const contentEditedNodeIds: string[] = [];
+
+    if (deltas.length === 0) {
+      return {
+        canvasId,
+        fromVersion,
+        toVersion: fromVersion,
+        deltas,
+        pendingEffects: {
+          mutatedNodes,
+          deletedNodeIds,
+          contentEditedNodeIds,
+          deferredFitFrameIds: [],
+        },
+      };
+    }
+
+    const toVersion = fromVersion + 1;
+
+    for (const d of deltas) {
+      if (d.type === 'INSERT_NODE' || d.type === 'REPLACE_NODE') {
+        const node = d.type === 'INSERT_NODE' ? d.node : d.next;
+        mutatedNodes.push(node);
+        if (d.type === 'REPLACE_NODE') contentEditedNodeIds.push(node.id);
+      } else if (d.type === 'DELETE_NODE') {
+        deletedNodeIds.push(d.node.id);
+      }
+    }
+    const insertedIds = insertedNodeIds(deltas);
+    const nodeMutations: SpaceNodeMutation[] = [];
+    for (const d of deltas) {
+      if (d.type === 'INSERT_NODE' || d.type === 'REPLACE_NODE') {
+        const node = d.type === 'INSERT_NODE' ? d.node : d.next;
+        const record = buildNodeContent(node);
+        if (record) {
+          nodeMutations.push({
+            kind: 'put',
+            nodeId: record.nodeId,
+            record,
+            strictLabel: record['labelSource'] === 'user',
+            authoritativeInsert: insertedIds.has(record.nodeId),
+          });
+        }
+      } else if (d.type === 'DELETE_NODE') {
+        nodeMutations.push({ kind: 'delete', nodeId: d.node.id });
+      }
+    }
+
+    const nextRecord: CanvasFile = {
+      ...canvas,
+      version: toVersion,
+      state: {
+        ...canvas.state,
+        nodes: stripNodesForCanvas(finalNodes),
+        edges: finalEdges,
+      },
+      updatedAt: Date.now(),
+    };
+    const write = await handle.write({
+      expectedVersion: fromVersion,
+      nextRecord,
+      nodeMutations,
+      delta: {
+        version: toVersion,
+        ts: Date.now(),
+        ...(runId ? { runId } : {}),
+        commands: [],
+        deltas: deltas as unknown[],
+        originator,
+      },
+    });
+    if (!write.ok) {
+      if (write.reason === 'not-found') {
+        throw new CanvasNotFoundError(canvasId);
+      }
+      throw new Error(
+        `[canvas-executor] ordered Space write rejected: ${write.reason}`,
+      );
+    }
+
     return {
       canvasId,
       fromVersion,
-      toVersion: fromVersion,
+      toVersion,
       deltas,
       pendingEffects: {
         mutatedNodes,
@@ -1272,81 +1572,7 @@ export async function applyDeltasOnServerAlreadyLocked(input: {
         deferredFitFrameIds: [],
       },
     };
+  } finally {
+    releaseDrafts();
   }
-
-  const toVersion = fromVersion + 1;
-
-  for (const d of deltas) {
-    if (d.type === 'INSERT_NODE' || d.type === 'REPLACE_NODE') {
-      const node = d.type === 'INSERT_NODE' ? d.node : d.next;
-      mutatedNodes.push(node);
-      if (d.type === 'REPLACE_NODE') contentEditedNodeIds.push(node.id);
-    } else if (d.type === 'DELETE_NODE') {
-      deletedNodeIds.push(d.node.id);
-    }
-  }
-  const insertedIds = insertedNodeIds(deltas);
-  const nodeMutations: SpaceNodeMutation[] = [];
-  for (const d of deltas) {
-    if (d.type === 'INSERT_NODE' || d.type === 'REPLACE_NODE') {
-      const node = d.type === 'INSERT_NODE' ? d.node : d.next;
-      const record = buildNodeContent(node);
-      if (record) {
-        nodeMutations.push({
-          kind: 'put',
-          nodeId: record.nodeId,
-          record,
-          strictLabel: record['labelSource'] === 'user',
-          authoritativeInsert: insertedIds.has(record.nodeId),
-        });
-      }
-    } else if (d.type === 'DELETE_NODE') {
-      nodeMutations.push({ kind: 'delete', nodeId: d.node.id });
-    }
-  }
-
-  const nextRecord: CanvasFile = {
-    ...canvas,
-    version: toVersion,
-    state: {
-      ...canvas.state,
-      nodes: stripNodesForCanvas(finalNodes),
-      edges: finalEdges,
-    },
-    updatedAt: Date.now(),
-  };
-  const write = await handle.write({
-    expectedVersion: fromVersion,
-    nextRecord,
-    nodeMutations,
-    delta: {
-      version: toVersion,
-      ts: Date.now(),
-      ...(runId ? { runId } : {}),
-      commands: [],
-      deltas: deltas as unknown[],
-      originator,
-    },
-  });
-  if (!write.ok) {
-    if (write.reason === 'not-found') {
-      throw new CanvasNotFoundError(canvasId);
-    }
-    throw new Error(
-      `[canvas-executor] ordered Space write rejected: ${write.reason}`,
-    );
-  }
-
-  return {
-    canvasId,
-    fromVersion,
-    toVersion,
-    deltas,
-    pendingEffects: {
-      mutatedNodes,
-      deletedNodeIds,
-      contentEditedNodeIds,
-      deferredFitFrameIds: [],
-    },
-  };
 }

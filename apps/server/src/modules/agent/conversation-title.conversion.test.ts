@@ -7,7 +7,7 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { agenetes } from './agenetes/drivers.js';
+import { agenetes, EXTERNAL_DRIVER_KIND } from './agenetes/drivers.js';
 import {
   CONVERSATION_TITLE_METADATA_KEY,
   ConversationTitleService,
@@ -20,6 +20,7 @@ import { setWorkspacePath } from '../workspace.js';
 
 import type { ThreadRecord } from '@agenetes/agenetes';
 import type { ConversationTitle } from '@huabu/shared';
+import type { CanvasNode } from '@huabu/shared/canvas-engine';
 
 const canvasId = 'canvas-conversion';
 const threadId = 'thread-conversion';
@@ -51,11 +52,17 @@ async function fixture(
   let record: ThreadRecord = {
     driverSchemaVersion: 1,
     spec: {
-      kind: 'test',
+      kind: EXTERNAL_DRIVER_KIND,
       workloadType: 'Deployment',
       threadId,
       namespace: { name: canvasId },
-      spec: {},
+      spec: {
+        binding: {
+          kind: 'external',
+          profileId: 'profile-conversion',
+          alias: 'Conversion Agent',
+        },
+      },
     },
     state: {
       driverState: {},
@@ -144,8 +151,6 @@ async function fixture(
                 label: title,
                 labelSource,
                 content: 'First user prompt',
-                status: 'done',
-                viewed: true,
               },
             },
           ],
@@ -165,12 +170,22 @@ async function fixture(
           id: 'node-q',
           data: expect.objectContaining({
             threadId,
-            status: 'done',
-            viewed: true,
+            bindingState: 'bound',
+            agentBinding: {
+              kind: 'external',
+              profileId: 'profile-conversion',
+              alias: 'Conversion Agent',
+            },
           }),
         }),
       ]),
     );
+    const question = (canvas?.state.nodes as CanvasNode[] | undefined)?.find(
+      (entry) => entry.id === 'node-q',
+    );
+    expect(question?.data).not.toHaveProperty('status');
+    expect(question?.data).not.toHaveProperty('viewed');
+    expect(question?.data).not.toHaveProperty('invocationToken');
     return () => {
       const reopened = getCanvasStore(canvasId);
       expect(reopened.readNode('node-q')).toEqual(node);

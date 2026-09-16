@@ -149,8 +149,8 @@ describe('Question ownership at the real message adapters', () => {
       }
 
       expect(run).toHaveBeenCalledOnce();
-      expect(startLifecycle).toHaveBeenCalledTimes(fixed ? 1 : 0);
-      expect(finishLifecycle).toHaveBeenCalledTimes(fixed ? 1 : 0);
+      expect(startLifecycle).toHaveBeenCalledTimes(questionOwned ? 1 : 0);
+      expect(finishLifecycle).toHaveBeenCalledTimes(questionOwned ? 1 : 0);
       expect(conversationTitleService.initialize).toHaveBeenCalledTimes(
         questionOwned ? 0 : 1,
       );

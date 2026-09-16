@@ -173,6 +173,8 @@ export interface AgentRunOptions {
   };
   /** Called after Agenetes has synchronously persisted this turn's start. */
   onTurnStarted?: () => void;
+  /** Awaited after canonical create, before any controls or prompt dispatch. */
+  onExecutionCreated?: () => Promise<void>;
 }
 
 // ==================== Agent Loop ====================
@@ -217,11 +219,13 @@ export async function* runAgent(
     onTurnStarted,
   } = options;
 
+  if (signal?.aborted) return [];
   const rendered = envelope
     ? await renderInternalAgentInputs(envelope, {
         canvasId: canvasId ?? null,
       })
     : undefined;
+  if (signal?.aborted) return [];
   const submission =
     suppliedSubmission ??
     (envelope ? createChatSubmission(envelope, rendered) : null);
@@ -288,6 +292,8 @@ export async function* runAgent(
   // pi-backed handle. Deployments get-or-create by `threadId`; Jobs mint a
   // fresh handle.
   const handle = agenetes.create(spec) as BuiltinHandle;
+  await options.onExecutionCreated?.();
+  if (signal?.aborted) return [];
   if (
     workloadType === 'Deployment' &&
     canvasId &&
@@ -329,6 +335,7 @@ export async function* runAgent(
       liveHandle === undefined && durableRecord === undefined,
     );
   }
+  if (signal?.aborted) return [];
   const iterator = handle.run(submission, {
     maxIterations: maxIterations ?? agentCfg.runtime.maxIterations,
     signal,

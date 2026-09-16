@@ -16,9 +16,8 @@ import {
 
 import { agentApi } from '@/api/agent';
 import { toast } from '@/components/Common/Toast';
-import { isActivelyViewingQuestion } from '@/hooks/useActivelyViewingQuestion';
 import { i18n } from '@/i18n';
-import { useAcpProfilesStore } from '@/store/acpProfilesStore';
+import { useAcpThreadChangesStore } from '@/store/acpThreadChangesStore';
 import useCanvasStore from '@/store/canvasStore';
 import {
   selectThreadBinding,
@@ -31,8 +30,7 @@ import {
 import {
   conversationRequestScope,
   ConversationIntegrityError,
-  filterClientOwnedQuestionPatch,
-  patchConversationOwnerNode,
+  awaitConversationDraft,
   resolveConversationAgentBinding,
   resolveConversationOwnerSource,
   shouldComposeConversationOwner,
@@ -45,7 +43,6 @@ import {
 } from '@/store/conversationTitleStore';
 import { useGesturePreviewStore } from '@/store/gesturePreviewStore';
 import { usePreviewWorkspaceStore } from '@/store/previewWorkspace/store';
-import { snapshotAgentIcon } from '@/utils/agentIcon';
 import { isPageUnloading } from '@/utils/pageLifecycle';
 
 import {
@@ -704,6 +701,7 @@ export function useAgentStream(
 
       if (conversationView) {
         try {
+          await awaitConversationDraft(conversationView);
           await validateConversationView(conversationView);
         } catch (error) {
           if (error instanceof ConversationIntegrityError) {
@@ -712,7 +710,13 @@ export function useAgentStream(
             });
             return;
           }
-          throw error;
+          toast(
+            error instanceof Error
+              ? error.message
+              : 'Failed to save Agent selection',
+            { tone: 'danger' },
+          );
+          return;
         }
         // Validation is async, so confirm this renderer still owns the same
         // tab. Closing or replacing it invalidates the pending send.
@@ -751,6 +755,15 @@ export function useAgentStream(
       const requestScope = conversationRequestScope(conversationView, canvasId);
       const anchorQuestionNodeId =
         conversationView?.conversationOwner.nodeId ?? null;
+      const refreshAfterLifecycle = async () => {
+        if (!conversationView) return;
+        await useAcpThreadChangesStore
+          .getState()
+          .load(
+            conversationView.conversationOwner.canvasId,
+            conversationView.conversationOwner.threadId,
+          );
+      };
 
       // Selected node ids are still recorded on the persisted user
       // message so the UI can re-render the selection chip after a
@@ -841,22 +854,8 @@ export function useAgentStream(
         streamClaim.release();
       };
 
-      // ── Question-node follow-up bookkeeping ─────────────────────────
-      //
-      // When this session renders a selectable Question Node, this hook keeps
-      // its client-authored lifecycle honest across follow-up turns. Fixed
-      // Agent Nodes route content/status/error through the server; this hook
-      // writes only their client presentation state (`viewed`).
-      //
-      // We also track whether a successful `done` event was observed so
-      // a late cap-out `error` event (`Agent loop exceeded maximum
-      // iterations`) emitted *after* a complete answer doesn't flip the
-      // node to `error` (issue 3 — tool failures during a successful
-      // agent run should not poison the final status).
-      const questionNodeId = conversationView?.conversationOwner.nodeId ?? null;
-      let sawDone = false;
-      let serverOwnsQuestionLifecycle = false;
-      let isComposingQuestion = false;
+      // Canvas Sync owns all node lifecycle projection. This stream only
+      // maintains request feedback and the conversation transcript.
       let serverSettingsConfirmed = false;
       const canvasState = useCanvasStore.getState();
       const ownerSource = conversationView
@@ -867,84 +866,8 @@ export function useAgentStream(
           )
         : undefined;
 
-      if (questionNodeId && conversationView) {
-        // First send of a freshly-composed question node ⇔ the node is still
-        // `idle` (never authored/run). Derived from the node's own status so
-        // there is no stored `compose` flag to keep in sync. On that first
-        // send we author the node's `content` and lock in the agent the user
-        // picked in the inline selector (binding + built-in mode); follow-up
-        // turns skip both.
-        const isCompose = shouldComposeConversationOwner(ownerSource);
-        isComposingQuestion = isCompose;
-        serverOwnsQuestionLifecycle =
-          ownerSource?.agentBindingPolicy === 'fixed';
-        if (isCompose && !serverOwnsQuestionLifecycle) {
-          // Author content through the intent pipeline so it gets a
-          // markdown sidecar save + server-side label preprocessing —
-          // matching how the inline editor used to commit the prompt.
-          useCanvasStore
-            .getState()
-            .updateNodeData(questionNodeId, { content: prompt });
-        }
-        const selectedBinding = resolveConversationAgentBinding(
-          ownerSource,
-          selectThreadBinding(useChatStore.getState(), threadId),
-        );
-        const selectedProfile =
-          selectedBinding.kind === 'external'
-            ? useAcpProfilesStore
-                .getState()
-                .profiles.find(
-                  (profile) => profile.id === selectedBinding.profileId,
-                )
-            : undefined;
-        const snapshotBinding =
-          selectedBinding.kind === 'external' && selectedProfile
-            ? { ...selectedBinding, alias: selectedProfile.alias }
-            : selectedBinding;
-        const composeBinding =
-          isCompose && !serverOwnsQuestionLifecycle
-            ? {
-                agentBinding: snapshotBinding,
-                agentIcon: snapshotAgentIcon(
-                  selectedBinding,
-                  useAcpProfilesStore.getState().profiles,
-                ),
-                agentMode,
-              }
-            : {};
-        // Reset `viewed` so the layer-panel dot + on-canvas "done · unread"
-        // glow re-appear when the follow-up answer lands. Completion marks it
-        // viewed again if the user is still in the thread.
-        const startPatch = filterClientOwnedQuestionPatch(ownerSource, {
-          status: 'running',
-          errorMessage: undefined,
-          viewed: false,
-          ...composeBinding,
-        });
-        try {
-          if (startPatch) {
-            await patchConversationOwnerNode(conversationView, startPatch);
-            if (isCompose) {
-              useChatStore.getState().makeThreadMetadataEphemeral(threadId, {
-                preserveSettings: true,
-              });
-            }
-          }
-        } catch (error) {
-          const message =
-            error instanceof Error ? error.message : 'Unknown error';
-          setThreadLoading(threadId, false);
-          releaseAbort();
-          addMessage(threadId, {
-            id: createId('status'),
-            role: 'status',
-            status: 'error',
-            detail: message,
-          });
-          return;
-        }
-      }
+      const isComposingQuestion =
+        !!conversationView && shouldComposeConversationOwner(ownerSource);
 
       // Make sure any buffered behavioural events have hit the server
       // before the agent builds its request context. Failures are
@@ -990,7 +913,6 @@ export function useAgentStream(
                 serverSettingsConfirmed = true;
                 useChatStore.getState().makeThreadMetadataEphemeral(threadId);
               }
-              if (event.type === 'done') sawDone = true;
               handleStreamEvent(event, {
                 threadId,
                 assistantId,
@@ -1001,46 +923,9 @@ export function useAgentStream(
               if (isPageUnloading() || errorHandled) return;
               errorHandled = true;
               console.error(`${agentMode} error:`, err);
-              // Question-node follow-up: only flip to `error` if no
-              // useful final `done` event ever arrived. A cap-out error
-              // emitted after a successful answer is treated as success.
-              if (questionNodeId) {
-                const stillViewing = isActivelyViewingQuestion({
-                  nodeId: questionNodeId,
-                });
-                const terminalPatch = filterClientOwnedQuestionPatch(
-                  serverOwnsQuestionLifecycle
-                    ? { agentBindingPolicy: 'fixed' }
-                    : undefined,
-                  {
-                    status: sawDone ? 'done' : 'error',
-                    errorMessage: sawDone ? undefined : err.message,
-                    ...(stillViewing ? { viewed: true } : {}),
-                  },
-                );
-                if (conversationView && terminalPatch) {
-                  void patchConversationOwnerNode(
-                    conversationView,
-                    terminalPatch,
-                  )
-                    .catch((error) =>
-                      console.error(
-                        '[useAgentStream] failed to persist owner error',
-                        error,
-                      ),
-                    )
-                    .finally(() => {
-                      setThreadLoading(threadId, false);
-                      releaseAbort();
-                    });
-                } else {
-                  setThreadLoading(threadId, false);
-                  releaseAbort();
-                }
-              } else {
-                setThreadLoading(threadId, false);
-                releaseAbort();
-              }
+              setThreadLoading(threadId, false);
+              releaseAbort();
+              void refreshAfterLifecycle().catch(console.error);
               addMessage(threadId, {
                 id: createId('status'),
                 role: 'status',
@@ -1049,47 +934,9 @@ export function useAgentStream(
               });
             },
             onComplete: () => {
-              if (questionNodeId) {
-                // If the user is still actively viewing this question
-                // thread at completion, count it as read — they watched
-                // the answer stream. Otherwise leave `viewed: false` so
-                // the layer-panel dot stays "unread" until they open it.
-                const stillViewing = isActivelyViewingQuestion({
-                  nodeId: questionNodeId,
-                });
-                const terminalPatch = filterClientOwnedQuestionPatch(
-                  serverOwnsQuestionLifecycle
-                    ? { agentBindingPolicy: 'fixed' }
-                    : undefined,
-                  {
-                    status: 'done',
-                    errorMessage: undefined,
-                    ...(stillViewing ? { viewed: true } : {}),
-                  },
-                );
-                if (conversationView && terminalPatch) {
-                  void patchConversationOwnerNode(
-                    conversationView,
-                    terminalPatch,
-                  )
-                    .catch((error) =>
-                      console.error(
-                        '[useAgentStream] failed to persist owner completion',
-                        error,
-                      ),
-                    )
-                    .finally(() => {
-                      setThreadLoading(threadId, false);
-                      releaseAbort();
-                    });
-                } else {
-                  setThreadLoading(threadId, false);
-                  releaseAbort();
-                }
-              } else {
-                setThreadLoading(threadId, false);
-                releaseAbort();
-              }
+              setThreadLoading(threadId, false);
+              releaseAbort();
+              void refreshAfterLifecycle().catch(console.error);
             },
           },
           {
@@ -1124,31 +971,7 @@ export function useAgentStream(
         if (abortController.signal.aborted) {
           setThreadLoading(threadId, false);
           releaseAbort();
-          if (questionNodeId) {
-            // User stopped the stream while in the thread — count as
-            // viewed; otherwise leave unread so the dot reappears.
-            const stillViewing = isActivelyViewingQuestion({
-              nodeId: questionNodeId,
-            });
-            if (conversationView) {
-              const terminalPatch = filterClientOwnedQuestionPatch(
-                serverOwnsQuestionLifecycle
-                  ? { agentBindingPolicy: 'fixed' }
-                  : undefined,
-                {
-                  status: 'done',
-                  errorMessage: undefined,
-                  ...(stillViewing ? { viewed: true } : {}),
-                },
-              );
-              if (terminalPatch) {
-                await patchConversationOwnerNode(
-                  conversationView,
-                  terminalPatch,
-                );
-              }
-            }
-          }
+          void refreshAfterLifecycle().catch(console.error);
           return;
         }
         // Page unloading — don't persist error
@@ -1157,27 +980,7 @@ export function useAgentStream(
         if (errorHandled) return;
         errorHandled = true;
         console.error(`${agentMode} failed:`, err);
-        if (questionNodeId) {
-          const message = err instanceof Error ? err.message : 'Unknown error';
-          const stillViewing = isActivelyViewingQuestion({
-            nodeId: questionNodeId,
-          });
-          if (conversationView) {
-            const terminalPatch = filterClientOwnedQuestionPatch(
-              serverOwnsQuestionLifecycle
-                ? { agentBindingPolicy: 'fixed' }
-                : undefined,
-              {
-                status: sawDone ? 'done' : 'error',
-                errorMessage: sawDone ? undefined : message,
-                ...(stillViewing ? { viewed: true } : {}),
-              },
-            );
-            if (terminalPatch) {
-              await patchConversationOwnerNode(conversationView, terminalPatch);
-            }
-          }
-        }
+        void refreshAfterLifecycle().catch(console.error);
         setThreadLoading(threadId, false);
         releaseAbort();
         addMessage(threadId, {

@@ -25,8 +25,13 @@ import type { AgentStreamAttachResult } from '@/api/agent';
 const apiMocks = vi.hoisted(() => ({
   fetchHistoryPage: vi.fn(),
   reconnectStream: vi.fn(
-    async (): Promise<AgentStreamAttachResult> => ({ status: 'inactive' }),
+    async (
+      _threadId: string,
+      _canvasId: string,
+      _callbacks: { onComplete: () => void },
+    ): Promise<AgentStreamAttachResult> => ({ status: 'inactive' }),
   ),
+  patchOwner: vi.fn(),
 }));
 
 const canvasMock = vi.hoisted(() => ({
@@ -66,13 +71,19 @@ vi.mock('@/store/conversationOwner', () => ({
   filterClientOwnedQuestionPatch: vi.fn(
     (_source: unknown, patch: Record<string, unknown>) => patch,
   ),
-  patchConversationOwnerNode: vi.fn(),
+  patchConversationOwnerNode: apiMocks.patchOwner,
   resolveConversationOwnerSource: vi.fn(() => undefined),
   validateConversationView: vi.fn(async () => {}),
 }));
 
 vi.mock('@/hooks/useActivelyViewingQuestion', () => ({
   isActivelyViewingQuestion: vi.fn(() => false),
+}));
+
+vi.mock('@/store/acpThreadChangesStore', () => ({
+  useAcpThreadChangesStore: {
+    getState: () => ({ load: vi.fn().mockResolvedValue(undefined) }),
+  },
 }));
 
 const THREAD_ID = 'thread-1';
@@ -157,6 +168,8 @@ beforeEach(() => {
   apiMocks.reconnectStream.mockReset();
   apiMocks.reconnectStream.mockResolvedValue({ status: 'inactive' });
   canvasMock.state.nodes = [];
+  canvasMock.state.patchNodeSilent.mockClear();
+  apiMocks.patchOwner.mockClear();
   latestLoadOlderHistory = undefined;
 });
 
@@ -283,50 +296,59 @@ describe('useChatHistory reconnect', () => {
     );
   });
 
-  it('attaches when an already-loaded Agent Node becomes running', async () => {
-    seedStore(false);
-    useChatStore.getState().setMessages(THREAD_ID, [
-      {
-        id: 'prior-answer',
-        role: 'assistant',
-        segments: [{ kind: 'text', text: 'Previous answer' }],
-      },
-    ]);
-    canvasMock.state.nodes = [
-      {
-        id: 'node-agent',
-        type: 'question',
-        data: {
-          threadId: THREAD_ID,
-          status: 'running',
-          agentBindingPolicy: 'fixed',
+  it.each([undefined, 'selectable', 'fixed'])(
+    'observes a running %s Agent Node without history-based repair',
+    async (policy) => {
+      seedStore(false);
+      useChatStore.getState().setMessages(THREAD_ID, [
+        {
+          id: 'prior-answer',
+          role: 'assistant',
+          segments: [{ kind: 'text', text: 'Previous answer' }],
         },
-      },
-    ];
-    const session: ChatSession = {
-      ...SESSION,
-      conversationView: {
-        presentationAnchor: {
-          canvasId: CANVAS_ID,
-          nodeId: 'node-agent',
+      ]);
+      canvasMock.state.nodes = [
+        {
+          id: 'node-agent',
+          type: 'question',
+          data: {
+            threadId: THREAD_ID,
+            status: 'running',
+            agentBindingPolicy: policy,
+          },
         },
-        conversationOwner: {
-          canvasId: CANVAS_ID,
-          nodeId: 'node-agent',
-          threadId: THREAD_ID,
+      ];
+      const session: ChatSession = {
+        ...SESSION,
+        conversationView: {
+          presentationAnchor: {
+            canvasId: CANVAS_ID,
+            nodeId: 'node-agent',
+          },
+          conversationOwner: {
+            canvasId: CANVAS_ID,
+            nodeId: 'node-agent',
+            threadId: THREAD_ID,
+          },
         },
-      },
-    };
+      };
 
-    await renderHarness(session);
+      await renderHarness(session);
 
-    expect(apiMocks.fetchHistoryPage).toHaveBeenCalledWith(
-      THREAD_ID,
-      CANVAS_ID,
-      3,
-    );
-    expect(apiMocks.reconnectStream).toHaveBeenCalledTimes(1);
-  });
+      expect(apiMocks.fetchHistoryPage).toHaveBeenCalledWith(
+        THREAD_ID,
+        CANVAS_ID,
+        3,
+      );
+      expect(apiMocks.reconnectStream).toHaveBeenCalledTimes(1);
+      await act(async () =>
+        apiMocks.reconnectStream.mock.calls[0][2].onComplete(),
+      );
+      expect(canvasMock.state.nodes[0].data.status).toBe('running');
+      expect(canvasMock.state.patchNodeSilent).not.toHaveBeenCalled();
+      expect(apiMocks.patchOwner).not.toHaveBeenCalled();
+    },
+  );
 
   it('reconnects when the newest page marks an assistant tail active', async () => {
     seedStore(false);
