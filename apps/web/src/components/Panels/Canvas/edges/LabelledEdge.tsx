@@ -10,18 +10,12 @@
  * agent writes via `CONNECT_NODES` / `SET_EDGE_STYLE`, so human and AI
  * edits share one source of truth.
  */
-import {
-  BaseEdge,
-  EdgeLabelRenderer,
-  getBezierPath,
-  getSmoothStepPath,
-  getStraightPath,
-  useStore,
-} from '@xyflow/react';
+import { BaseEdge, EdgeLabelRenderer, useStore } from '@xyflow/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { EDGE_LABEL_MAX_INVERSE_SCALE } from '@huabu/shared';
+import { getEdgeLineType, getEdgePath } from '@huabu/shared/canvas-engine';
 
 import { getAccentTokens } from '@/components/Nodes/accentTokens';
 import useCanvasStore from '@/store/canvasStore';
@@ -75,45 +69,17 @@ export function LabelledEdge(props: EdgeProps) {
   } = props;
 
   const edgeStyle = getEdgeStyle(data);
-  // `data.edgeStyle.lineType` is the source of truth; fall back to the
-  // React Flow `type` for legacy edges that pre-date that field.
-  const lineType =
-    edgeStyle.lineType ??
-    (props.type === 'straight'
-      ? 'straight'
-      : props.type === 'smoothstep' || props.type === 'step'
-        ? 'step'
-        : 'bezier');
-
-  let edgePath: string;
-  let labelX: number;
-  let labelY: number;
-  if (lineType === 'straight') {
-    [edgePath, labelX, labelY] = getStraightPath({
-      sourceX,
-      sourceY,
-      targetX,
-      targetY,
-    });
-  } else if (lineType === 'step') {
-    [edgePath, labelX, labelY] = getSmoothStepPath({
+  const [edgePath, labelX, labelY] = getEdgePath(
+    {
       sourceX,
       sourceY,
       targetX,
       targetY,
       sourcePosition,
       targetPosition,
-    });
-  } else {
-    [edgePath, labelX, labelY] = getBezierPath({
-      sourceX,
-      sourceY,
-      targetX,
-      targetY,
-      sourcePosition,
-      targetPosition,
-    });
-  }
+    },
+    getEdgeLineType(data, props.type),
+  );
 
   // ── Arrow rendering ────────────────────────────────────────────────
   //

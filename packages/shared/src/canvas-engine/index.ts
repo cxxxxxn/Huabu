@@ -209,6 +209,7 @@ export {
   getSmartHandles,
   rerouteAllEdges,
 } from './utils/edge.js';
+export { getEdgeLineType, getEdgePath } from './utils/edgePath.js';
 
 // ── Note block provenance (host-agnostic fingerprint) ─────────────────────
 export {
