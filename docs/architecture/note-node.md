@@ -45,11 +45,11 @@ Both surfaces are built by the same [`createMilkdown`](../../apps/web/src/compon
 
 Everything from here on is what happens **inside** the document. Pointer routing up to that point — which gesture the canvas claims before the event ever reaches a note — belongs to [canvas-input-interactions.md](./canvas-input-interactions.md).
 
-| Surface                                                                         | Mount                                  | Notes                                                                                                                                                                                                |
-| ------------------------------------------------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`MilkdownEditor`](../../apps/web/src/components/Milkdown/MilkdownEditor.tsx)   | `editable: true`                       | Full editing. React owns the chrome, so Crepe's own Toolbar / LinkTooltip are off; links require Ctrl/Cmd-click so a plain click can place the caret.                                                |
-| [`MilkdownPreview`](../../apps/web/src/components/Milkdown/MilkdownPreview.tsx) | `editable: false`                      | Pure display. `contenteditable=false` communicates read-only on its own, and a plain primary click opens a link.                                                                                     |
-| `MilkdownPreview` with `enableBlockDrag`                                        | `editable: true` + `previewMode: true` | ProseMirror must stay editable for the block-drag handle to be hit-testable, so every input verb is swallowed at the capture phase, `aria-readonly` is set, and links open on a plain primary click. |
+| Surface                                                                         | Mount                                  | Notes                                                                                                                                                                                                                        |
+| ------------------------------------------------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`MilkdownEditor`](../../apps/web/src/components/Milkdown/MilkdownEditor.tsx)   | `editable: true`                       | Full editing with React-owned chrome; Crepe's Toolbar / LinkTooltip are off. Defaults to `linkActivation="modifier"`; expanded Note explicitly uses `plain` with host navigation and a link-edit popover.                    |
+| [`MilkdownPreview`](../../apps/web/src/components/Milkdown/MilkdownPreview.tsx) | `editable: false`                      | Pure display with `contenteditable=false`. Defaults to `linkActivation="plain"`; canvas `NoteNode` explicitly uses `modifier` so plain clicks remain available for node selection.                                           |
+| `MilkdownPreview` with `enableBlockDrag`                                        | `editable: true` + `previewMode: true` | ProseMirror stays editable for block-drag hit testing, but input verbs are swallowed at capture and `aria-readonly` is set. Chat explicitly uses `plain` with the shared host navigation callback, without link-edit chrome. |
 
 ---
 
@@ -86,23 +86,30 @@ In `MilkdownPreview`, `Tab` is deliberately _not_ in the swallowed-key set: its 
 
 ## 6. Link activation
 
-In the expanded `NotePreview`, links show a pointer cursor. An unmodified primary click opens a new browser tab in the web app, without changing the Preview Workspace. In the Electron desktop app, the same click opens a permanent URL tab in the existing [Preview Workspace](./preview-workspace.md), shared with Chat. The existing `isElectron()` helper selects the destination. `openPreviewUrl` settles and promotes the source Note before desktop navigation, so following a link never consumes or later loses a temporary Note tab. Reopening the same normalized URL activates its existing tab, including across groups. `Ctrl`-click (`Cmd` on macOS, where `Ctrl`-click is the secondary-click gesture) still opens externally; the URL renderer also keeps an external-open button visible independently of iframe loading.
+Expanded `NotePreview` and Chat's `MilkdownMessageCard` explicitly use `linkActivation="plain"` and show the same pointer cursor on links. Their shared `openDocumentLink` host helper uses `isElectron()` to choose the destination: an unmodified primary click opens a new browser tab in the web app without changing Preview Workspace, or a permanent URL tab in the desktop [Preview Workspace](./preview-workspace.md). Note supplies its source node ID and Chat supplies its source thread ID. `openPreviewUrl` promotes a matching source tab and opens in that source's group, settling the source Note before navigation; following a link does not consume its temporary inspection tab. Reopening the same normalized URL activates its existing tab, including across groups. `Ctrl`-click (`Cmd` on macOS, where `Ctrl`-click is the secondary-click gesture) opens externally instead of invoking the host callback; the URL renderer also keeps an external-open button visible independently of iframe loading.
 
-This is an explicit `onLinkClick` callback passed from `NotePreview` through `MilkdownEditor` to the shared factory, not a global editor behavior change. Other editable Milkdown surfaces reserve plain click for caret placement and use Ctrl/Cmd-click to open externally. Read-only and drag-only `MilkdownPreview` surfaces retain their plain-click external behavior and `nodrag` anchors. The link plugin installs pointer gesture handlers only when `onLinkClick` is supplied. In the opted-in Note, dragging suppresses navigation for that gesture; an older text selection does not block a fresh stationary click. The first stationary click opens immediately, without waiting for a possible double-click. Subsequent clicks in the same multi-click sequence do not open again, but cannot cancel the first activation: double-clicking a link is not a selection-only gesture. Modifier/secondary clicks do not invoke the Note callback. The pointer CSS is scoped to `.milkdown-note-preview .ProseMirror a[href]`.
+Activation policy is independent of `onLinkClick`: a callback selects the destination of an eligible plain click, but never enables plain activation by itself. Without an explicit policy, the factory defaults read-only and drag-only previews to `plain`, and other editable editors to `modifier`. Canvas `NoteNode` explicitly overrides the read-only default with `modifier`; a plain primary click has its native navigation prevented, returns unhandled, and bubbles for canvas selection without opening anything. Other modifier-policy editors likewise leave plain clicks available for caret placement. The shared pointer CSS targets `.milkdown .ProseMirror[data-link-activation='plain'] a[href]`, not a Note-specific wrapper.
+
+Every factory link handler installs the same pointer tracking and multi-click suppression, whether or not a host callback exists. Pointer movement beyond the gesture threshold suppresses navigation, including an out-and-back drag; an older text selection does not block a fresh stationary click. Eligible first clicks open immediately, without a timer. Subsequent clicks with `detail > 1` do not reopen, but cannot cancel the first activation: double-clicking an eligible link is not a selection-only gesture. The same suppression applies to platform-modifier navigation. Secondary clicks do not invoke the host callback.
 
 ```
-eligible primary click on <a href>
-  → handleLinkClick  (ProseMirror handleDOMEvents: click / auxclick)
-  → normalizeSafeLinkHref  ── unsafe ─→ preventDefault, no navigation
-    → Note plain click without selection gesture → onLinkClick
-      web      → window.open → new browser tab
-      desktop  → openPreviewUrl → in-app URL tab
-  → otherwise → window.open(href, '_blank', 'noopener,noreferrer')
-        web      → new browser tab
-        desktop  → setWindowOpenHandler denies the window, shell.openExternal
+click / auxclick on <a href> → validate HTTP(S) href
+  → unsafe → preventDefault, no navigation
+  → safe primary click → preventDefault
+    → drag / repeated click / policy-ineligible → unhandled, no navigation
+    → plain policy + plain click + callback → openDocumentLink
+      web → window.open; desktop → openPreviewUrl in source group
+    → platform modifier, or plain policy without callback → window.open
+      web → browser tab; desktop → shell.openExternal
 ```
 
-No preload API or IPC is involved in external opening: the desktop main process already routes `window.open` for `http(s)` targets to the OS browser. The expanded Note's callback is the explicit exception to the default editable-surface behavior in §4; raw Markdown mode remains a source editor.
+No preload API or IPC is involved in external opening: the desktop main process already routes `window.open` for `http(s)` targets to the OS browser. Expanded Note and Chat share host routing while retaining different editing capabilities; raw Markdown mode remains a source editor.
+
+### Expanded Note link editing
+
+`MilkdownEditor` mounts `MilkdownLinkPopover` only when it is editable, uses `linkActivation="plain"`, and has `onLinkClick`. This is expanded Note chrome, not Chat editing, and does not replace navigation handlers. Pointer-over on a link captures that anchor's document range without moving the caret or stealing focus. `Cmd/Ctrl+K` with the caret in a link or a focused anchor opens the same edit form and focuses its text field. Hover while dragging or using touch does not open the popover.
+
+The form edits link text and HTTP(S) URL, copies the captured link address, or removes the link mark while retaining its text. It validates nonempty single-line text and the shared safe URL policy before saving. Captured snapshots belong to the current document: document changes invalidate them and dismiss the popover, while caret movement alone does not retarget an open form. Commands recheck snapshot validity before applying, so an outdated popover cannot edit a different link after a document update. Escape dismisses the form and restores focus when appropriate.
 
 ### Preview link DOM updates
 
@@ -137,16 +144,18 @@ When a later agent rewrite restores a modified block to its original user-owned 
 
 ## Code entry points
 
-| File                                                                                              | Responsibility                                                                                                                                   |
-| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [`createMilkdown.ts`](../../apps/web/src/components/Milkdown/createMilkdown.ts)                   | Sole owner of Crepe/ProseMirror wiring: `tabContext`, `indentSelection`, `outdentSelection`, and link activation with an optional host callback. |
-| [`safeLink.ts`](../../apps/web/src/utils/safeLink.ts)                                             | Shared HTTP(S)-only link validation for Milkdown and URL preview targets.                                                                        |
-| [`node.ts`](../../packages/shared/src/types/canvas/node.ts)                                       | `NoteNodeData` and the `isNoteNode` guard.                                                                                                       |
-| [`NoteNode.tsx`](../../apps/web/src/components/Nodes/note/NoteNode.tsx)                           | Canvas card: layout shell, height-mode toggle, drop handling.                                                                                    |
-| [`NotePreview.tsx`](../../apps/web/src/components/Nodes/note/NotePreview.tsx)                     | Expanded surface: `MilkdownEditor`, WYSIWYG/raw toggle, provenance overlay, write-through to `updateNodeData`.                                   |
-| [`blockProvenance.ts`](../../apps/web/src/utils/blockProvenance.ts)                               | Block keys and provenance realignment.                                                                                                           |
-| [`MilkdownEditor.tsx`](../../apps/web/src/components/Milkdown/MilkdownEditor.tsx)                 | Editable surface; reconciles the `editable` toggle onto a mounted instance.                                                                      |
-| [`MilkdownPreview.tsx`](../../apps/web/src/components/Milkdown/MilkdownPreview.tsx)               | Read-only surface; capture-phase key/paste/cut/drop suppression and the `Tab` focus exemption.                                                   |
-| [`platform.ts`](../../apps/web/src/utils/platform.ts)                                             | `isMac`, which selects the follow modifier.                                                                                                      |
-| [`main.ts`](../../apps/desktop/src/main.ts)                                                       | `setWindowOpenHandler` / `will-navigate` guards that turn `window.open` into `shell.openExternal`.                                               |
-| [`blockCommands.test.ts`](../../apps/web/src/components/Milkdown/__tests__/blockCommands.test.ts) | Coverage for indent/outdent and for link activation, including the unsafe-scheme block.                                                          |
+| File                                                                                              | Responsibility                                                                                                                            |
+| ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| [`createMilkdown.ts`](../../apps/web/src/components/Milkdown/createMilkdown.ts)                   | Sole owner of Crepe/ProseMirror wiring, explicit link activation, shared gesture tracking, and document-bound link snapshots and editing. |
+| [`openDocumentLink.ts`](../../apps/web/src/utils/openDocumentLink.ts)                             | Shared Note/Chat host routing with source node or thread identity.                                                                        |
+| [`MilkdownLinkPopover.tsx`](../../apps/web/src/components/Milkdown/MilkdownLinkPopover.tsx)       | Expanded Note hover and keyboard link editing, copy, remove, and snapshot invalidation.                                                   |
+| [`safeLink.ts`](../../apps/web/src/utils/safeLink.ts)                                             | Shared HTTP(S)-only link validation for Milkdown and URL preview targets.                                                                 |
+| [`node.ts`](../../packages/shared/src/types/canvas/node.ts)                                       | `NoteNodeData` and the `isNoteNode` guard.                                                                                                |
+| [`NoteNode.tsx`](../../apps/web/src/components/Nodes/note/NoteNode.tsx)                           | Canvas card: layout shell, height-mode toggle, drop handling.                                                                             |
+| [`NotePreview.tsx`](../../apps/web/src/components/Nodes/note/NotePreview.tsx)                     | Expanded surface: `MilkdownEditor`, WYSIWYG/raw toggle, provenance overlay, write-through to `updateNodeData`.                            |
+| [`blockProvenance.ts`](../../apps/web/src/utils/blockProvenance.ts)                               | Block keys and provenance realignment.                                                                                                    |
+| [`MilkdownEditor.tsx`](../../apps/web/src/components/Milkdown/MilkdownEditor.tsx)                 | Editable surface; reconciles the `editable` toggle onto a mounted instance.                                                               |
+| [`MilkdownPreview.tsx`](../../apps/web/src/components/Milkdown/MilkdownPreview.tsx)               | Read-only surface; capture-phase key/paste/cut/drop suppression and the `Tab` focus exemption.                                            |
+| [`platform.ts`](../../apps/web/src/utils/platform.ts)                                             | `isMac`, which selects the follow modifier.                                                                                               |
+| [`main.ts`](../../apps/desktop/src/main.ts)                                                       | `setWindowOpenHandler` / `will-navigate` guards that turn `window.open` into `shell.openExternal`.                                        |
+| [`blockCommands.test.ts`](../../apps/web/src/components/Milkdown/__tests__/blockCommands.test.ts) | Coverage for indent/outdent and for link activation, including the unsafe-scheme block.                                                   |

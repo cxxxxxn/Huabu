@@ -30,12 +30,14 @@ import { attachBlockDragListeners } from './blockDrag';
 import { createMilkdown, type MilkdownInstance } from './createMilkdown';
 import { markdownEquals, normalizeMarkdown } from './markdownUtils';
 
-import type { MilkdownBlockDragEvent } from './types';
+import type { MilkdownBlockDragEvent, MilkdownLinkActivation } from './types';
 export interface MilkdownPreviewProps {
   markdown: string;
   className?: string;
   /** Accessible name for the rendered read-only rich-text surface. */
   ariaLabel?: string;
+  linkActivation?: MilkdownLinkActivation;
+  onLinkClick?: (href: string) => void;
   /**
    * Canvas id used to resolve artifact-key image `src`s (e.g.
    * `art_abc.png`) into fetchable URLs for the rendered `<img>`. When
@@ -100,6 +102,8 @@ export function MilkdownPreview(
     canvasId,
     enableBlockDrag = false,
     onBlockDragStart,
+    linkActivation = 'plain',
+    onLinkClick,
   } = props;
   const resolvedAriaLabel = ariaLabel ?? t('editor.readOnlyContent');
 
@@ -116,6 +120,9 @@ export function MilkdownPreview(
   canvasIdRef.current = canvasId;
   const ariaLabelRef = useRef(resolvedAriaLabel);
   ariaLabelRef.current = resolvedAriaLabel;
+  const onLinkClickRef = useRef(onLinkClick);
+  onLinkClickRef.current = onLinkClick;
+  const hasLinkCallback = !!onLinkClick;
 
   useEffect(() => {
     let cancelled = false;
@@ -155,6 +162,10 @@ export function MilkdownPreview(
         // `MilkdownFactoryOptions.previewMode`.
         previewMode: enableBlockDrag,
         toolbarMode: 'none',
+        linkActivation,
+        onLinkClick: hasLinkCallback
+          ? (href) => onLinkClickRef.current?.(href)
+          : undefined,
         resolveImageSrc: (src) => {
           const id = canvasIdRef.current;
           return id ? resolveArtifactUrl(src, id) : src;
@@ -186,7 +197,7 @@ export function MilkdownPreview(
       if (instance) void instance.destroy();
     };
     // Re-mount when drag mode toggles (rare, expected).
-  }, [enableBlockDrag]);
+  }, [enableBlockDrag, linkActivation, hasLinkCallback]);
 
   useEffect(() => {
     if (markdownEquals(markdown, lastSyncedRef.current)) return;
@@ -229,6 +240,12 @@ export function MilkdownPreview(
       // which is the accessibility-correct behavior for a read-only
       // surface.
       if (e.key === 'Tab') {
+        e.stopPropagation();
+        return;
+      }
+      // Focused anchors keep native keyboard activation; the shared click
+      // handler still validates and routes the resulting detail=0 click.
+      if (e.key === 'Enter' && e.target instanceof HTMLAnchorElement) {
         e.stopPropagation();
         return;
       }

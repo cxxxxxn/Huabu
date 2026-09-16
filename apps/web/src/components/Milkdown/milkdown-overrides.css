@@ -294,8 +294,8 @@
   border-color: var(--edge-default);
 }
 
-/* Only the expanded Note opts into plain-click workspace navigation. */
-.milkdown-note-preview .ProseMirror a[href] {
+/* Shared navigation affordance for Chat and expanded Notes. */
+.milkdown .ProseMirror[data-link-activation='plain'] a[href] {
   cursor: pointer;
 }
 
