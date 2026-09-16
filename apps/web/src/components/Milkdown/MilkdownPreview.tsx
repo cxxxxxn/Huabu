@@ -25,6 +25,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { resolveArtifactUrl } from '@/api/artifact';
+import { useLinkFollowModifierHeld } from '@/hooks/useMultiSelectModifier';
 
 import { attachBlockDragListeners } from './blockDrag';
 import { createMilkdown, type MilkdownInstance } from './createMilkdown';
@@ -106,6 +107,9 @@ export function MilkdownPreview(
     onLinkClick,
   } = props;
   const resolvedAriaLabel = ariaLabel ?? t('editor.readOnlyContent');
+  const followModifierHeld = useLinkFollowModifierHeld(
+    linkActivation === 'modifier',
+  );
 
   const containerRef = useRef<HTMLDivElement>(null);
   const instanceRef = useRef<MilkdownInstance | null>(null);
@@ -283,6 +287,9 @@ export function MilkdownPreview(
   return (
     <div
       ref={containerRef}
+      data-link-follow-held={
+        linkActivation === 'modifier' ? String(followModifierHeld) : undefined
+      }
       className={clsx('[&_a]:pointer-events-auto', className)}
       // Surface the read-only nature to assistive tech. In drag mode
       // we still keep the inner ProseMirror `contenteditable=true` so

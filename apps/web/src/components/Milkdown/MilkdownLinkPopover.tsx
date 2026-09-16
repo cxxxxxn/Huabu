@@ -20,7 +20,7 @@ interface LinkTarget {
   returnFocus: HTMLElement | null;
 }
 
-/** Expanded Note chrome only; never changes the document's navigation handlers. */
+/** One link form per editable editor; navigation and read-only previews are independent. */
 export function MilkdownLinkPopover({
   instance,
   rootRef,
@@ -41,6 +41,8 @@ export function MilkdownLinkPopover({
   const panelRef = useRef<HTMLDivElement | null>(null);
   const textRef = useRef<HTMLInputElement | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverBlocked = useRef(false);
+  const lastPointer = useRef<{ x: number; y: number } | null>(null);
 
   function cancelClose() {
     if (closeTimer.current !== null) clearTimeout(closeTimer.current);
@@ -50,10 +52,17 @@ export function MilkdownLinkPopover({
   function close(restoreFocus = false) {
     cancelClose();
     const previous = targetRef.current;
+    // Document/overlay replacement can emit pointerover under a stationary
+    // pointer. Only actual pointer movement re-arms hover after dismissal.
+    if (previous) hoverBlocked.current = true;
     targetRef.current = null;
     setTarget(null);
     if (restoreFocus && previous) {
-      if (previous.returnFocus?.isConnected)
+      instance.restoreLinkSelection(previous.snapshot);
+      if (
+        previous.returnFocus?.isConnected &&
+        rootRef.current?.contains(previous.returnFocus)
+      )
         previous.returnFocus.focus({ preventScroll: true });
       else instance.focus();
     }
@@ -84,7 +93,11 @@ export function MilkdownLinkPopover({
         ? anchor
         : null;
     };
-    const open = (anchor: HTMLAnchorElement | null, keyboard: boolean) => {
+    const open = (
+      anchor: HTMLAnchorElement | null,
+      keyboard: boolean,
+      requested?: MilkdownLinkSnapshot,
+    ) => {
       cancelClose();
       const current = targetRef.current;
       if (
@@ -94,7 +107,8 @@ export function MilkdownLinkPopover({
       )
         return;
       if (!keyboard && current?.anchor === anchor) return;
-      const snapshot = instance.getLinkSnapshot(anchor ?? undefined);
+      const snapshot =
+        requested ?? instance.getLinkSnapshot(anchor ?? undefined);
       if (!snapshot) return;
       const rect =
         anchor?.getBoundingClientRect() ?? instance.getLinkClientRect(snapshot);
@@ -116,10 +130,27 @@ export function MilkdownLinkPopover({
       setError('');
       setCopied(false);
     };
+    const unsubscribeRequest = instance.onLinkEditRequested((snapshot) =>
+      open(null, true, snapshot),
+    );
     const over = (event: PointerEvent) => {
       if (event.buttons || event.pointerType === 'touch') return;
+      lastPointer.current ??= { x: event.clientX, y: event.clientY };
+      if (hoverBlocked.current) return;
       const anchor = anchorAt(event);
       if (anchor) open(anchor, false);
+    };
+    const move = (event: PointerEvent) => {
+      const previous = lastPointer.current;
+      lastPointer.current = { x: event.clientX, y: event.clientY };
+      if (
+        previous &&
+        previous.x === event.clientX &&
+        previous.y === event.clientY
+      )
+        return;
+      hoverBlocked.current = false;
+      over(event);
     };
     const out = (event: PointerEvent) => {
       if (!anchorAt(event)) return;
@@ -153,21 +184,27 @@ export function MilkdownLinkPopover({
       if (!(event.target instanceof Node) || !root.contains(event.target))
         return;
       const anchor = anchorAt(event);
-      if (!instance.getLinkSnapshot(anchor ?? undefined)) return;
+      // Capture selection afresh for explicit requests, never reuse a hover target.
+      if (!instance.requestLinkEdit(anchor ?? undefined)) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      open(anchor, true);
     };
     root.addEventListener('pointerover', over);
     root.addEventListener('pointerout', out);
+    window.addEventListener('pointermove', move, { passive: true });
     window.addEventListener('keydown', keydown, true);
-    // This subscription fires only on content changes, not caret movement.
-    const unsubscribe = instance.onMarkdownUpdated(() => close());
+    // Observe every transaction; document identity alone invalidates the target.
+    const unsubscribe = instance.onFormattingUpdated(() => {
+      const current = targetRef.current;
+      if (current && !instance.isLinkSnapshotCurrent(current.snapshot)) close();
+    });
     return () => {
       cancelClose();
       unsubscribe();
+      unsubscribeRequest();
       root.removeEventListener('pointerover', over);
       root.removeEventListener('pointerout', out);
+      window.removeEventListener('pointermove', move);
       window.removeEventListener('keydown', keydown, true);
     };
     // The listener reads transient targets through refs, not React dependencies.
@@ -218,11 +255,15 @@ export function MilkdownLinkPopover({
       setError(t('editor.linkInvalidUrl'));
       return;
     }
-    if (!remove && (!text.trim() || /[\r\n]/.test(text))) {
+    if (
+      !remove &&
+      target.snapshot.textEditable &&
+      (!text.trim() || /[\r\n]/.test(text))
+    ) {
       setError(t('editor.linkInvalidText'));
       return;
     }
-    // A synchronous markdown callback can close the panel during the command.
+    // A synchronous transaction callback can close the panel during the command.
     const previous = target;
     const changed = instance.editLink(
       target.snapshot,
@@ -234,7 +275,10 @@ export function MilkdownLinkPopover({
       return;
     }
     close();
-    if (previous.returnFocus?.isConnected)
+    if (
+      previous.returnFocus?.isConnected &&
+      rootRef.current?.contains(previous.returnFocus)
+    )
       previous.returnFocus.focus({ preventScroll: true });
     else instance.focus();
   }
@@ -249,7 +293,11 @@ export function MilkdownLinkPopover({
     >
       <form
         role="dialog"
-        aria-label={t('editor.editLink')}
+        aria-label={t(
+          target.snapshot.kind === 'link'
+            ? 'editor.editLink'
+            : 'editor.createLink',
+        )}
         className="text-fg-default flex flex-col gap-2"
         onSubmit={(event) => {
           event.preventDefault();
@@ -270,11 +318,20 @@ export function MilkdownLinkPopover({
           ref={textRef}
           id={`${id}-text`}
           value={text}
+          readOnly={!target.snapshot.textEditable}
+          aria-describedby={
+            !target.snapshot.textEditable ? `${id}-structure` : undefined
+          }
           onChange={(event) => {
             setText(event.target.value);
             setError('');
           }}
         />
+        {!target.snapshot.textEditable ? (
+          <p id={`${id}-structure`} className="text-fg-muted text-xs">
+            {t('editor.linkKeepStructure')}
+          </p>
+        ) : null}
         <label htmlFor={`${id}-url`} className="text-fg-muted text-xs">
           {t('editor.linkUrl')}
         </label>
@@ -300,6 +357,7 @@ export function MilkdownLinkPopover({
           <Button
             size="sm"
             variant="ghost"
+            disabled={target.snapshot.kind !== 'link'}
             onClick={() => {
               const captured = target;
               void copyToClipboard(captured.snapshot.href)
@@ -318,6 +376,7 @@ export function MilkdownLinkPopover({
             size="sm"
             variant="ghost"
             tone="danger"
+            disabled={target.snapshot.kind !== 'link'}
             onClick={() => apply(true)}
           >
             {t('editor.removeLink')}

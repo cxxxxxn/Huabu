@@ -303,6 +303,8 @@
     "link": "链接",
     "linkUrl": "链接 URL",
     "editLink": "编辑链接",
+    "createLink": "创建链接",
+    "linkKeepStructure": "将保留所选内容的段落结构和格式，无法跨段落替换显示文本。",
     "linkText": "显示文本",
     "saveLink": "保存",
     "copyLinkAddress": "复制地址",

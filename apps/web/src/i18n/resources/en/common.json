@@ -303,6 +303,8 @@
     "link": "Link",
     "linkUrl": "Link URL",
     "editLink": "Edit link",
+    "createLink": "Create link",
+    "linkKeepStructure": "The selected blocks and formatting will be preserved. Display text cannot be replaced across blocks.",
     "linkText": "Display text",
     "saveLink": "Save",
     "copyLinkAddress": "Copy address",
