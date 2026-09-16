@@ -1,5 +1,9 @@
 # Preprocessing lifecycle browser acceptance
 
+## Rebase verification — 2026-09-16
+
+Rebased onto `origin/main` at `47270a20`. All six lifecycle browser scenarios passed twice again (12/12, 3.3 minutes). The harness now allows the upstream read-only `POST /api/agent/threads/titles/query`; blocking it had caused unrelated title-load errors and an extra Retry button. Agent execution remains blocked. Upstream tests were adapted to the retired router and removed Portal argument without dropping assertions: server executor 26/26 and ChatPanel titles 14/14 passed. Full regression results: shared 441 passed; Web 1339 passed; server 1505 passed, 2 todo, excluding the previously verified baseline `external-watcher.real.test.ts` failure. Repository typecheck and format passed; source lint had 0 errors and 271 warnings after excluding generated Playwright reports (unfiltered root lint still reports 3947 generated-asset errors). The earlier acceptance record below is retained as historical evidence.
+
 Date: 2026-09-15. Branch: `fix/frontend-polish`, HEAD `0c12d0e6` plus the uncommitted Retry acceptance extension. Result: **6 scenarios, each repeated twice; 12 passed, 0 failed, 0 skipped, 0 flaky retries**. No production changes were required during browser acceptance.
 
 ## Harness and isolation

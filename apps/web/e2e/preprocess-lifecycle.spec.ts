@@ -85,6 +85,7 @@ test.beforeEach(async ({ page, context }, testInfo) => {
     if (
       url.origin !== new URL(String(testInfo.project.use.baseURL)).origin ||
       (route.request().method() === 'POST' &&
+        url.pathname !== '/api/agent/threads/titles/query' &&
         /^\/api\/(agent(?:\/|$)|acp\/.*(?:prompt|run|invoke))/.test(
           url.pathname,
         ))
