@@ -344,6 +344,9 @@ importers:
       '@milkdown/plugin-cursor':
         specifier: ^7.21.1
         version: 7.21.2
+      '@milkdown/preset-commonmark':
+        specifier: ^7.21.2
+        version: 7.21.2
       '@milkdown/prose':
         specifier: ^7.21.1
         version: 7.21.2
