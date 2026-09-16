@@ -264,4 +264,69 @@ test.describe('canvas mouse mode', () => {
 
     await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);
   });
+
+  test('lassoed Ink creates one Question and clears after acceptance', async ({
+    page,
+  }) => {
+    const center = await paneCenter(page);
+    const toolbar = page.locator('.react-flow__panel.bottom.center');
+    await toolbar.getByRole('button', { name: /^Sketch/ }).click();
+
+    await page.mouse.move(center.x - 45, center.y);
+    await page.mouse.down();
+    await page.mouse.move(center.x + 45, center.y, { steps: 12 });
+    await page.mouse.up();
+    await expect(page.locator('.react-flow__node-sketch')).toHaveCount(1);
+
+    await page.keyboard.press('l');
+    const sketch = await page.locator('.react-flow__node-sketch').boundingBox();
+    if (!sketch) throw new Error('sketch has no bounding box');
+    const padding = 45;
+    const path = [
+      { x: sketch.x - padding, y: sketch.y - padding },
+      { x: sketch.x + sketch.width + padding, y: sketch.y - padding },
+      {
+        x: sketch.x + sketch.width + padding,
+        y: sketch.y + sketch.height + padding,
+      },
+      { x: sketch.x - padding, y: sketch.y + sketch.height + padding },
+      { x: sketch.x - padding, y: sketch.y - padding },
+    ];
+    await page.mouse.move(path[0].x, path[0].y);
+    await page.mouse.down();
+    for (let index = 1; index < path.length; index += 1) {
+      await page.mouse.move(path[index].x, path[index].y, { steps: 6 });
+    }
+    await page.mouse.up();
+
+    const send = page.getByRole('button', { name: 'Send ink request' });
+    await expect(send).toBeVisible();
+    await page.route('**/api/agent', async (route) => {
+      if (route.request().method() !== 'POST') {
+        await route.continue();
+        return;
+      }
+      const request = route.request().postDataJSON() as {
+        threadId: string;
+        inputKind?: string;
+      };
+      expect(request.inputKind).toBe('ink-intent');
+      const frame = (type: string, data: unknown) =>
+        `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body:
+          frame('accepted', {
+            threadId: request.threadId,
+            turnStartSeq: 1,
+          }) + frame('end', {}),
+      });
+    });
+
+    await send.click();
+
+    await expect(page.locator('.react-flow__node-question')).toHaveCount(1);
+    await expect(send).toHaveCount(0);
+  });
 });
