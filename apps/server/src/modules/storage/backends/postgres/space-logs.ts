@@ -1,15 +1,19 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { canvasEventInputSchema, canvasEventRecordSchema } from '@huabu/shared';
 import {
   coalesceChanges,
   type CanvasChangeRecord,
 } from '@huabu/shared/canvas-engine';
 
-import { spaceRowExists, stringifyJson } from './rows.js';
+import { spaceRowExists } from './rows.js';
 import { sanitizeId } from '../../../../utils/fs.js';
-import { decodeChanges, decodeEvents, firstIssue } from '../sql/log-rules.js';
+import { stringifyJson } from '../sql/codecs.js';
+import {
+  decodeChanges,
+  decodeEvents,
+  encodeEventBatch,
+} from '../sql/log-rules.js';
 
 import type { PgExecutor, PostgresStoreContext } from './database.js';
 import type { CanvasEvent } from '../../../canvas/persistence-types.js';
@@ -63,7 +67,7 @@ class PostgresSpaceLogCoordinator {
     const database = this.#context.database();
     if (!(await spaceRowExists(database, this.#workspaceId, this.#canvasId)))
       return [];
-    const records = decodeEvents(
+    return decodeEvents(
       await database.all(
         `SELECT event_json
          FROM events
@@ -71,38 +75,15 @@ class PostgresSpaceLogCoordinator {
          ORDER BY event_id ASC`,
         this.#canvasId,
       ),
+      limit,
     );
-    // Match Disk's strict reads: an older malformed row remains an error
-    // even when the caller requests only the tail (or no entries).
-    if (limit === undefined) return records;
-    if (!(limit > 0)) return [];
-    return records.slice(-Math.ceil(limit));
   }
 
   async appendEvents(events: readonly NewCanvasEvent[]): Promise<void> {
     this.#context.assertOpen();
     const workspaceId = this.#workspace();
     if (events.length === 0) return;
-    const records: CanvasEvent[] = events.map((event, index) => {
-      const input = canvasEventInputSchema.safeParse(event);
-      if (!input.success) {
-        throw new TypeError(
-          `Invalid Canvas event append input at index ${index}: ${firstIssue(input.error)}`,
-        );
-      }
-      const record = {
-        payload: event.payload,
-        ts: event.ts ?? this.#context.now(),
-      };
-      const parsed = canvasEventRecordSchema.safeParse(record);
-      if (!parsed.success) {
-        throw new TypeError(
-          `Invalid Canvas event append record at index ${index}: ${firstIssue(parsed.error)}`,
-        );
-      }
-      stringifyJson(record, `Canvas event append input ${index}`);
-      return record;
-    });
+    const records = encodeEventBatch(events, () => this.#context.now());
     this.#context.assertMutationAllowed(this.#canvasId);
     await this.#context.transaction(async (database) => {
       await requireSpace(database, workspaceId, this.#canvasId);
@@ -110,7 +91,7 @@ class PostgresSpaceLogCoordinator {
         await database.run(
           'INSERT INTO events (canvas_id, event_json) VALUES (?, ?)',
           this.#canvasId,
-          stringifyJson(record, `Canvas event for ${this.#canvasId}`),
+          record,
         );
       }
     });

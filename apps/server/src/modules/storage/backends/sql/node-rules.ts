@@ -8,7 +8,11 @@ import {
 } from './codecs.js';
 import { sanitizeId } from '../../../../utils/fs.js';
 
-import type { NodePutInput, NodeSnapshot } from '../../ports/structured.js';
+import type {
+  NodePutInput,
+  NodePutResult,
+  NodeSnapshot,
+} from '../../ports/structured.js';
 
 export interface NodeRow {
   readonly record: NodeSnapshot['record'];
@@ -67,4 +71,26 @@ export function validatePut(input: NodePutInput): string {
     throw new TypeError('expectedRevision must be a string, null, or omitted');
   }
   return nodeId;
+}
+
+export function decodeLabelConflict(
+  row: Record<string, unknown>,
+): Extract<NodePutResult, { reason: 'label-conflict' }> {
+  const conflictingNodeId = row['node_id'];
+  const collisionKey = row['label_collision_key'];
+  if (typeof conflictingNodeId !== 'string') {
+    throw new SyntaxError('Invalid conflicting Node id');
+  }
+  const conflicting = decodeNodeRecord(row['record_json'], conflictingNodeId);
+  return {
+    ok: false,
+    reason: 'label-conflict',
+    conflictingNodeId,
+    conflictingLabel:
+      typeof conflicting.label === 'string'
+        ? conflicting.label
+        : typeof collisionKey === 'string'
+          ? collisionKey
+          : conflictingNodeId,
+  };
 }

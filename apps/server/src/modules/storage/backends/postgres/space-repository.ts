@@ -3,14 +3,9 @@
 
 import { randomUUID } from 'node:crypto';
 
-import {
-  decodeSpaceRow,
-  insertSpaceRow,
-  occupiedCollisionKeys,
-  readSpaceRow,
-  SPACE_COLUMNS,
-} from './rows.js';
+import { insertSpaceRow, occupiedCollisionKeys, readSpaceRow } from './rows.js';
 import { sanitizeId } from '../../../../utils/fs.js';
+import { decodeSpaceRow, SPACE_COLUMNS } from '../sql/codecs.js';
 import {
   allocateSpaceIdentity,
   collisionKeyForTitle,

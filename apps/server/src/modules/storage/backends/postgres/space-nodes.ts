@@ -3,12 +3,14 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { decodeNodeRecord, spaceRowExists, stringifyJson } from './rows.js';
+import { spaceRowExists } from './rows.js';
 import { sanitizeId } from '../../../../utils/fs.js';
+import { stringifyJson } from '../sql/codecs.js';
 import { allocateNodeIdentity } from '../sql/identity.js';
 import {
   collectNodeRow,
   decodeIdentifiedNodeRow,
+  decodeLabelConflict,
   decodeNodeRow,
   validatePut,
 } from '../sql/node-rules.js';
@@ -102,26 +104,7 @@ export async function putPostgresNodeInTransaction(
       nodeId,
     );
     if (conflict !== undefined) {
-      const conflictingNodeId = conflict['node_id'];
-      const collisionKey = conflict['label_collision_key'];
-      if (typeof conflictingNodeId !== 'string') {
-        throw new SyntaxError('Invalid conflicting Postgres Node id');
-      }
-      const conflicting = decodeNodeRecord(
-        conflict['record_json'],
-        conflictingNodeId,
-      );
-      return {
-        ok: false,
-        reason: 'label-conflict',
-        conflictingNodeId,
-        conflictingLabel:
-          typeof conflicting.label === 'string'
-            ? conflicting.label
-            : typeof collisionKey === 'string'
-              ? collisionKey
-              : conflictingNodeId,
-      };
+      return decodeLabelConflict(conflict);
     }
   }
 

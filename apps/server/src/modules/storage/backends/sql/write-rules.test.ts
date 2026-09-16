@@ -4,7 +4,11 @@
 import { expect, it } from 'vitest';
 
 import { note, spaceRecord } from './test-fixtures.js';
-import { mutationError, validateInput } from './write-rules.js';
+import {
+  checkWritePreconditions,
+  mutationError,
+  validateInput,
+} from './write-rules.js';
 
 import type { SpaceWriteInput } from '../../ports/structured.js';
 const input = (): SpaceWriteInput => ({
@@ -59,4 +63,46 @@ it.each([
       conflictingNodeId: 'other',
     } as never).message,
   ).toContain('Space write failed for node "node"');
+});
+
+it('permits missing-space creation only when requested from version zero', () => {
+  expect(checkWritePreconditions('space', null, input())).toEqual({
+    ok: false,
+    reason: 'not-found',
+  });
+  expect(
+    checkWritePreconditions('space', null, { ...input(), allowCreate: true }),
+  ).toBeNull();
+  expect(() =>
+    checkWritePreconditions('space', null, {
+      ...input(),
+      allowCreate: true,
+      expectedVersion: 2,
+    }),
+  ).toThrow(/only from version 0/);
+});
+
+it('reports stale versions before checking immutable record fields', () => {
+  expect(
+    checkWritePreconditions(
+      'space',
+      { ...spaceRecord(), version: 2, title: 'Renamed' },
+      input(),
+    ),
+  ).toEqual({ ok: false, reason: 'version-conflict', actualVersion: 2 });
+  expect(checkWritePreconditions('space', spaceRecord(), input())).toBeNull();
+  expect(() =>
+    checkWritePreconditions(
+      'space',
+      { ...spaceRecord(), createdAt: 2 },
+      input(),
+    ),
+  ).toThrow(/createdAt/);
+  expect(() =>
+    checkWritePreconditions(
+      'space',
+      { ...spaceRecord(), title: 'Renamed' },
+      input(),
+    ),
+  ).toThrow(/SpaceRepository.rename/);
 });

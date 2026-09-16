@@ -8,26 +8,6 @@ import {
   stringifyJson,
   validateCanvasFile,
 } from '../sql/codecs.js';
-/**
- * Movement of persisted values between domain records and SQLite rows.
- *
- * Every column this backend stores is either JSON text or a scalar, so the
- * codecs here are the single place that decides what a well-formed stored
- * value looks like. Space and log reads reject malformed domain values. Node
- * reads preserve the port's repair path by recovering malformed JSON values
- * into a valid record whose content still exposes the stored value.
- *
- * The encoder's job is to refuse what SQLite could not faithfully return —
- * cycles, non-finite numbers, values `JSON.stringify` would silently reshape
- * into something else. It deliberately does **not** refuse what
- * `JSON.stringify` already handles by rule, because Disk persists through
- * that same function: a record it accepts must not become a rejected write
- * here. `undefined` is the case that matters in practice — an optional field
- * spread onto a node makes an own property whose value is `undefined`, and
- * Disk drops it. See §13's "silent divergence" risk: a portable contract that
- * only holds where the adapters already agree certifies both sides of a
- * disagreement.
- */
 
 import type { CanvasFile } from '../../../canvas/persistence-types.js';
 import type { PersistedSpace } from '../sql/codecs.js';
@@ -136,14 +116,3 @@ export function updateSpaceRow(
     );
   return Number(result.changes);
 }
-
-export {
-  decodeNodeRecord,
-  decodeSpaceRow,
-  parseJson,
-  requireRevision,
-  SPACE_COLUMNS,
-  stringifyJson,
-  validateCanvasFile,
-  validateNodeContent,
-} from '../sql/codecs.js';

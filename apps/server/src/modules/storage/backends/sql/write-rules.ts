@@ -8,10 +8,12 @@ import {
 } from './codecs.js';
 import { sanitizeId } from '../../../../utils/fs.js';
 
+import type { CanvasFile } from '../../../canvas/persistence-types.js';
 import type {
   NodePutResult,
   SpaceNodeMutation,
   SpaceWriteInput,
+  SpaceWriteResult,
 } from '../../ports/structured.js';
 
 export function mutationError(
@@ -72,4 +74,36 @@ export function validateInput(canvasId: string, input: SpaceWriteInput): void {
       validateNodeContent(mutation.record, mutation.nodeId);
     }
   }
+}
+
+/** Check persisted state inside the caller's transaction, before any mutation. */
+export function checkWritePreconditions(
+  canvasId: string,
+  current: CanvasFile | null,
+  input: SpaceWriteInput,
+): Extract<SpaceWriteResult, { ok: false }> | null {
+  if (current === null) {
+    if (!input.allowCreate) return { ok: false, reason: 'not-found' };
+    if (input.expectedVersion !== 0) {
+      throw new Error(`SpaceWrite(${canvasId}) can create only from version 0`);
+    }
+    return null;
+  }
+  if (current.version !== input.expectedVersion) {
+    return {
+      ok: false,
+      reason: 'version-conflict',
+      actualVersion: current.version,
+    };
+  }
+  if (input.nextRecord.createdAt !== current.createdAt) {
+    throw new Error(`SpaceWrite(${canvasId}) refusing to change createdAt`);
+  }
+  if (input.nextRecord.title !== current.title) {
+    throw new Error(
+      `SpaceWrite(${canvasId}) cannot change title; ` +
+        'use SpaceRepository.rename first',
+    );
+  }
+  return null;
 }

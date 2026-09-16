@@ -1,16 +1,20 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { canvasEventInputSchema, canvasEventRecordSchema } from '@huabu/shared';
 import {
   coalesceChanges,
   type CanvasChangeRecord,
 } from '@huabu/shared/canvas-engine';
 
 import { withImmediateTransaction } from './database.js';
-import { spaceRowExists, stringifyJson } from './rows.js';
+import { spaceRowExists } from './rows.js';
 import { sanitizeId } from '../../../../utils/fs.js';
-import { decodeChanges, decodeEvents, firstIssue } from '../sql/log-rules.js';
+import { stringifyJson } from '../sql/codecs.js';
+import {
+  decodeChanges,
+  decodeEvents,
+  encodeEventBatch,
+} from '../sql/log-rules.js';
 
 import type { SqliteStoreContext } from './database.js';
 import type { CanvasEvent } from '../../../canvas/persistence-types.js';
@@ -63,7 +67,7 @@ class SqliteSpaceLogCoordinator {
   async readEvents(limit?: number): Promise<CanvasEvent[]> {
     this.#workspace();
     const database = this.#context.database();
-    const records = decodeEvents(
+    return decodeEvents(
       database
         .prepare(
           `SELECT event_json
@@ -72,38 +76,15 @@ class SqliteSpaceLogCoordinator {
          ORDER BY event_id ASC`,
         )
         .all(this.#canvasId),
+      limit,
     );
-    // Match Disk's strict reads: an older malformed row remains an error
-    // even when the caller requests only the tail (or no entries).
-    if (limit === undefined) return records;
-    if (!(limit > 0)) return [];
-    return records.slice(-Math.ceil(limit));
   }
 
   async appendEvents(events: readonly NewCanvasEvent[]): Promise<void> {
     this.#context.assertOpen();
     const workspaceId = this.#workspace();
     if (events.length === 0) return;
-    const records: CanvasEvent[] = events.map((event, index) => {
-      const input = canvasEventInputSchema.safeParse(event);
-      if (!input.success) {
-        throw new TypeError(
-          `Invalid Canvas event append input at index ${index}: ${firstIssue(input.error)}`,
-        );
-      }
-      const record = {
-        payload: event.payload,
-        ts: event.ts ?? this.#context.now(),
-      };
-      const parsed = canvasEventRecordSchema.safeParse(record);
-      if (!parsed.success) {
-        throw new TypeError(
-          `Invalid Canvas event append record at index ${index}: ${firstIssue(parsed.error)}`,
-        );
-      }
-      stringifyJson(record, `Canvas event append input ${index}`);
-      return record;
-    });
+    const records = encodeEventBatch(events, () => this.#context.now());
 
     requireSpace(this.#context, workspaceId, this.#canvasId);
     const database = this.#context.database();
@@ -112,10 +93,7 @@ class SqliteSpaceLogCoordinator {
         'INSERT INTO events (canvas_id, event_json) VALUES (?, ?)',
       );
       for (const record of records) {
-        insert.run(
-          this.#canvasId,
-          stringifyJson(record, `Canvas event for ${this.#canvasId}`),
-        );
+        insert.run(this.#canvasId, record);
       }
     });
   }

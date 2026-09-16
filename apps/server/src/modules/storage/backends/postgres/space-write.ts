@@ -5,12 +5,16 @@ import {
   insertSpaceRow,
   occupiedCollisionKeys,
   readSpaceRow,
-  stringifyJson,
   updateSpaceRow,
 } from './rows.js';
 import { putPostgresNodeInTransaction } from './space-nodes.js';
+import { stringifyJson } from '../sql/codecs.js';
 import { allocateSpaceIdentity } from '../sql/identity.js';
-import { mutationError, validateInput } from '../sql/write-rules.js';
+import {
+  checkWritePreconditions,
+  mutationError,
+  validateInput,
+} from '../sql/write-rules.js';
 
 import type { PostgresStoreContext } from './database.js';
 import type {
@@ -35,17 +39,15 @@ export function createPostgresSpaceWrite(
     context.assertMutationAllowed(canvasId);
     validateInput(canvasId, input);
 
-    const completed = await context.transaction(async (database) => {
+    return context.transaction(async (database) => {
       const current = await readSpaceRow(database, workspaceId, canvasId);
+      const rejected = checkWritePreconditions(
+        canvasId,
+        current?.record ?? null,
+        input,
+      );
+      if (rejected) return rejected;
       if (current === null) {
-        if (!input.allowCreate) {
-          return { ok: false, reason: 'not-found' } as const;
-        }
-        if (input.expectedVersion !== 0) {
-          throw new Error(
-            `SpaceWrite(${canvasId}) can create only from version 0`,
-          );
-        }
         const identity = allocateSpaceIdentity(
           input.nextRecord.title,
           canvasId,
@@ -58,23 +60,6 @@ export function createPostgresSpaceWrite(
           identity.collisionKey,
         );
         return { ok: true } as const;
-      }
-
-      if (current.record.version !== input.expectedVersion) {
-        return {
-          ok: false,
-          reason: 'version-conflict',
-          actualVersion: current.record.version,
-        } as const;
-      }
-      if (input.nextRecord.createdAt !== current.record.createdAt) {
-        throw new Error(`SpaceWrite(${canvasId}) refusing to change createdAt`);
-      }
-      if (input.nextRecord.title !== current.record.title) {
-        throw new Error(
-          `SpaceWrite(${canvasId}) cannot change title; ` +
-            'use SpaceRepository.rename first',
-        );
       }
 
       for (const mutation of input.nodeMutations) {
@@ -121,6 +106,5 @@ export function createPostgresSpaceWrite(
       }
       return { ok: true } as const;
     });
-    return completed;
   };
 }

@@ -2,16 +2,20 @@
 // Licensed under the MIT license.
 
 import { withImmediateTransaction } from './database.js';
-import { allocateSpaceIdentity } from './identity.js';
 import {
   insertSpaceRow,
   occupiedCollisionKeys,
   readSpaceRow,
-  stringifyJson,
   updateSpaceRow,
 } from './rows.js';
 import { putSqliteNodeInTransaction } from './space-nodes.js';
-import { mutationError, validateInput } from '../sql/write-rules.js';
+import { stringifyJson } from '../sql/codecs.js';
+import { allocateSpaceIdentity } from '../sql/identity.js';
+import {
+  checkWritePreconditions,
+  mutationError,
+  validateInput,
+} from '../sql/write-rules.js';
 
 import type { SqliteStoreContext } from './database.js';
 import type {
@@ -37,17 +41,15 @@ export function createSqliteSpaceWrite(
     validateInput(canvasId, input);
     const database = context.database();
 
-    const completed = withImmediateTransaction(database, () => {
+    return withImmediateTransaction(database, () => {
       const current = readSpaceRow(database, workspaceId, canvasId);
+      const rejected = checkWritePreconditions(
+        canvasId,
+        current?.record ?? null,
+        input,
+      );
+      if (rejected) return rejected;
       if (current === null) {
-        if (!input.allowCreate) {
-          return { ok: false, reason: 'not-found' } as const;
-        }
-        if (input.expectedVersion !== 0) {
-          throw new Error(
-            `SpaceWrite(${canvasId}) can create only from version 0`,
-          );
-        }
         const identity = allocateSpaceIdentity(
           input.nextRecord.title,
           canvasId,
@@ -60,23 +62,6 @@ export function createSqliteSpaceWrite(
           identity.collisionKey,
         );
         return { ok: true } as const;
-      }
-
-      if (current.record.version !== input.expectedVersion) {
-        return {
-          ok: false,
-          reason: 'version-conflict',
-          actualVersion: current.record.version,
-        } as const;
-      }
-      if (input.nextRecord.createdAt !== current.record.createdAt) {
-        throw new Error(`SpaceWrite(${canvasId}) refusing to change createdAt`);
-      }
-      if (input.nextRecord.title !== current.record.title) {
-        throw new Error(
-          `SpaceWrite(${canvasId}) cannot change title; ` +
-            'use SpaceRepository.rename first',
-        );
       }
 
       for (const mutation of input.nodeMutations) {
@@ -124,6 +109,5 @@ export function createSqliteSpaceWrite(
       }
       return { ok: true } as const;
     });
-    return completed;
   };
 }

@@ -2,7 +2,8 @@
 // Licensed under the MIT license.
 
 import { withImmediateTransaction } from './database.js';
-import { parseJson, spaceRowExists, stringifyJson } from './rows.js';
+import { spaceRowExists } from './rows.js';
+import { parseJson, stringifyJson } from '../sql/codecs.js';
 import { SqlSpaceTasks, validateSnapshot } from '../sql/space-tasks.js';
 
 import type { SqliteStoreContext } from './database.js';
