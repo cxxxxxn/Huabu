@@ -668,7 +668,7 @@ describe('Milkdown block commands', () => {
   });
 
   it.each(['endpoint', 'out-and-back'])(
-    'preserves a real drag selection (%s), then follows the next stationary click',
+    'preserves selection during a simulated drag (%s), then follows the next stationary click',
     async (path) => {
       const onLinkClick = vi.fn();
       const open = vi.spyOn(window, 'open').mockReturnValue(null);
@@ -701,16 +701,24 @@ describe('Milkdown block commands', () => {
   );
 
   it.each([2, 3])(
-    'does not follow a selection click with detail %s',
-    async (detail) => {
+    'opens immediately on the first click and does not reopen through click %s',
+    async (clickCount) => {
       const onLinkClick = vi.fn();
+      const open = vi.spyOn(window, 'open').mockReturnValue(null);
       await mount('[docs](https://example.com)', { onLinkClick });
-      pointAtLink('pointerdown', { detail });
-      pointAtLink('pointerup', { buttons: 0, detail });
-      expect(clickLink({ modifier: false, detail }).defaultPrevented).toBe(
-        true,
-      );
-      expect(onLinkClick).not.toHaveBeenCalled();
+      for (let detail = 1; detail <= clickCount; detail++) {
+        pointAtLink('pointerdown', { detail });
+        pointAtLink('pointerup', { buttons: 0, detail });
+        expect(clickLink({ modifier: false, detail }).defaultPrevented).toBe(
+          true,
+        );
+        // Assert synchronously after every click, including the first: no timer
+        // and no promise that double-click selection cancels initial navigation.
+        expect(onLinkClick).toHaveBeenCalledExactlyOnceWith(
+          'https://example.com',
+        );
+        expect(open).not.toHaveBeenCalled();
+      }
     },
   );
 
