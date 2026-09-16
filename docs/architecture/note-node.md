@@ -104,6 +104,10 @@ eligible primary click on <a href>
 
 No preload API or IPC is involved in external opening: the desktop main process already routes `window.open` for `http(s)` targets to the OS browser. The expanded Note's callback is the explicit exception to the default editable-surface behavior in §4; raw Markdown mode remains a source editor.
 
+### Preview link DOM updates
+
+Read-only and drag-only previews share the factory's `nodrag` link attribute, including Chat message previews whose ProseMirror view remains editable for block dragging. The factory extends Milkdown's native `linkAttr` configuration, preserving inherited attributes, so ProseMirror renders the class itself on initial links and links introduced by `setMarkdown`. No plugin walks or patches link DOM after view updates: those writes can feed ProseMirror's DOM observer back into the plugin indefinitely, and even adding an already-present class emits an attribute mutation in Chromium. The class is a render attribute, not persisted Markdown. The Chromium regression in [preview-link-mutations.spec.ts](../../apps/web/e2e/preview-link-mutations.spec.ts) exercises the production factory with linked and link-free initial content, subsequent replacements, selection changes, and link navigation in both preview modes.
+
 ### Why the href is re-validated at click time
 
 Only `setLink` screens what the _user_ types. Markdown parsed from an agent reply, a paste or an externally synced file renders its `href` verbatim, so `[docs](javascript:alert(1))` reaches the DOM as a live `<a href="javascript:alert(1)">`. In the desktop renderer that URL would run with application privileges.

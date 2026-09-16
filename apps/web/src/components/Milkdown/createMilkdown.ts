@@ -22,6 +22,7 @@ import {
 import { Crepe } from '@milkdown/crepe';
 import { blockConfig } from '@milkdown/plugin-block';
 import { dropIndicatorState } from '@milkdown/plugin-cursor';
+import { linkAttr } from '@milkdown/preset-commonmark';
 import { findParent } from '@milkdown/prose';
 import {
   lift,
@@ -1775,12 +1776,6 @@ function outdentSelection(listItemType: NodeType): Command {
   };
 }
 
-function markPreviewLinksNoDrag(root: HTMLElement): void {
-  root.querySelectorAll('a[href]').forEach((anchor) => {
-    anchor.classList.add('nodrag');
-  });
-}
-
 /**
  * Build and start a Crepe-backed editor.
  *
@@ -1930,19 +1925,17 @@ export async function createMilkdown(
     ),
   );
   if (previewMode || !editable) {
-    crepe.editor.use(
-      $prose(
-        () =>
-          new Plugin({
-            view: (view) => {
-              markPreviewLinksNoDrag(view.dom);
-              return {
-                update: (nextView) => markPreviewLinksNoDrag(nextView.dom),
-              };
-            },
-          }),
-      ),
-    );
+    // Let ProseMirror render the class itself. Patching link DOM from a view
+    // update feeds its DOM observer back into the plugin in editable previews.
+    crepe.editor.config((ctx) => {
+      ctx.update(linkAttr.key, (attributes) => (mark) => {
+        const inherited = attributes(mark);
+        return {
+          ...inherited,
+          class: [inherited.class, 'nodrag'].filter(Boolean).join(' '),
+        };
+      });
+    });
   }
   crepe.editor.use(
     $prose(
