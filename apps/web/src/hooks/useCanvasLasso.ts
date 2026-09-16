@@ -17,6 +17,10 @@ import {
   updateCanvasGesture,
   type CanvasPointerType,
 } from '@/handler/canvasGestureSession';
+import {
+  blendedMarkRect,
+  useNodeCollapseStore,
+} from '@/store/nodeCollapseStore';
 import { getEdgeIdsBetweenSelectedNodes } from '@/utils/selection';
 
 import { isLassoStartTarget } from '../components/Panels/Canvas/canvasInputPolicy';
@@ -220,14 +224,18 @@ function getNodeRect(instance: ReactFlowInstance, nodeId: string): Rect | null {
   };
 }
 
-function getSelectedNodeIdsFromFlowPolygon(
+export function getSelectedNodeIdsFromFlowPolygon(
   flowPolygon: Point[],
   instance: ReactFlowInstance,
 ) {
+  const marks = useNodeCollapseStore.getState().marks;
   return instance
     .getNodes()
     .filter((node) => {
-      const rect = getNodeRect(instance, node.id);
+      const mark = marks[node.id];
+      const rect = mark
+        ? blendedMarkRect(mark)
+        : getNodeRect(instance, node.id);
       return rect ? polygonIntersectsRect(flowPolygon, rect) : false;
     })
     .map((node) => node.id);
