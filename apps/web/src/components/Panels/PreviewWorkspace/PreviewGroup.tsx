@@ -95,10 +95,7 @@ export function PreviewGroup({
         if (tab.target.kind === 'url') return [];
         const nodeId = tab.target.nodeId;
         const node = state.nodes.find((candidate) => candidate.id === nodeId);
-        return node &&
-          canRetainPreviewNode(node, state.worldReferences[node.id])
-          ? [tabId]
-          : [];
+        return node && canRetainPreviewNode(node) ? [tabId] : [];
       }),
     ),
   );
