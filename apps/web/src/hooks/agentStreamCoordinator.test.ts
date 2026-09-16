@@ -3,13 +3,80 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { selectThreadMessages, useChatStore } from '@/store/chatStore';
+
 import {
   abortAgentStreamClaim,
   claimAgentStream,
   hasAgentStreamClaim,
 } from './agentStreamCoordinator';
+import { handleStreamEvent } from './useAgentStream';
 
 describe('agentStreamCoordinator', () => {
+  it('holds a cancelled controller claim until lifecycle cleanup finishes', () => {
+    const claim = claimAgentStream('held-canvas', 'held-thread', 'post', {
+      holdUntilRelease: true,
+    });
+    abortAgentStreamClaim('held-canvas', 'held-thread');
+    expect(claim?.signal.aborted).toBe(true);
+    expect(claimAgentStream('held-canvas', 'held-thread', 'post')).toBeNull();
+    claim?.release();
+    expect(hasAgentStreamClaim('held-canvas', 'held-thread')).toBe(false);
+  });
+  it('rejects a second text POST while the first owns the thread', () => {
+    const claim = claimAgentStream('text-canvas', 'text-thread', 'post');
+    expect(claimAgentStream('text-canvas', 'text-thread', 'post')).toBeNull();
+    claim?.release();
+  });
+
+  it('keeps a replacement turn alive when an old turn releases late', () => {
+    const previous = claimAgentStream('text-canvas', 'text-thread', 'post');
+    abortAgentStreamClaim('text-canvas', 'text-thread');
+    const replacement = claimAgentStream('text-canvas', 'text-thread', 'post');
+    previous?.release();
+    expect(replacement?.signal.aborted).toBe(false);
+    expect(hasAgentStreamClaim('text-canvas', 'text-thread')).toBe(true);
+    replacement?.release();
+  });
+
+  it('folds text and thinking in order on the originating thread only', () => {
+    useChatStore.getState().setMessages('text-owner', []);
+    useChatStore.getState().setMessages('other-thread', []);
+    const context = { threadId: 'text-owner', assistantId: 'answer' };
+    handleStreamEvent(
+      { type: 'thinking_delta', data: { content: 'Think' } },
+      context,
+    );
+    handleStreamEvent(
+      { type: 'text_delta', data: { content: 'Hello' } },
+      context,
+    );
+    handleStreamEvent(
+      { type: 'text_delta', data: { content: ' world' } },
+      context,
+    );
+    handleStreamEvent(
+      { type: 'thinking_delta', data: { content: 'Again' } },
+      context,
+    );
+    expect(selectThreadMessages(useChatStore.getState(), 'text-owner')).toEqual(
+      [
+        {
+          id: 'answer',
+          role: 'assistant',
+          segments: [
+            { kind: 'thinking', text: 'Think' },
+            { kind: 'text', text: 'Hello world' },
+            { kind: 'thinking', text: 'Again' },
+          ],
+        },
+      ],
+    );
+    expect(
+      selectThreadMessages(useChatStore.getState(), 'other-thread'),
+    ).toEqual([]);
+  });
+
   it('allows only one consumer per canvas thread', () => {
     const first = claimAgentStream('canvas-a', 'thread-a', 'post');
     expect(first).not.toBeNull();

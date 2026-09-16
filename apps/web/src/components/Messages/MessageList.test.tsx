@@ -16,6 +16,7 @@ import type { ChatMessage } from '../../store/chatTypes';
 const renderCounts = vi.hoisted(() => ({
   assistant: new Map<string, number>(),
   user: 0,
+  userInputKinds: [] as Array<string | undefined>,
 }));
 
 vi.mock('./AIMessage', async () => {
@@ -38,8 +39,13 @@ vi.mock('./AIMessage', async () => {
 vi.mock('./UserMessage', async () => {
   const { memo } = await import('react');
   return {
-    UserMessage: memo(function MockUserMessage() {
+    UserMessage: memo(function MockUserMessage({
+      inputKind,
+    }: {
+      inputKind?: string;
+    }) {
       renderCounts.user++;
+      renderCounts.userInputKinds.push(inputKind);
       return <div data-user-message />;
     }),
   };
@@ -91,6 +97,7 @@ function mount(element: React.ReactNode): void {
 beforeEach(() => {
   renderCounts.assistant.clear();
   renderCounts.user = 0;
+  renderCounts.userInputKinds = [];
   vi.spyOn(HTMLElement.prototype, 'scrollTo').mockImplementation(() => {});
 });
 
@@ -103,6 +110,24 @@ afterEach(() => {
 });
 
 describe('MessageList render isolation', () => {
+  it('forwards the persisted input kind to user-message rendering', () => {
+    mount(
+      <MessageList
+        messages={[
+          {
+            id: 'ink-user',
+            role: 'user',
+            content: '',
+            inputKind: 'ink-intent',
+          },
+        ]}
+        isLoading={false}
+      />,
+    );
+
+    expect(renderCounts.userInputKinds).toEqual(['ink-intent']);
+  });
+
   it('does not rerender historical messages when a sibling draft changes', () => {
     const messages: ChatMessage[] = Array.from(
       { length: 100 },

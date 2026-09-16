@@ -884,7 +884,7 @@ type RFState = {
    * action data is fetched on demand by the agent through tools
    * (`get_canvas_outline`, `inspect_nodes`, `inspect_edges`, `read`).
    */
-  getAgentChatContext: () => AgentChatContext;
+  getAgentChatContext: (selection?: AgentSourceSelection) => AgentChatContext;
 
   /**
    * Force-flush any buffered behavioural events to the server.
@@ -910,6 +910,7 @@ const structureScheduler = createStructureScheduler({
   getSaveCanvas: () => useCanvasStore.getState().saveCanvas,
   delayMs: AUTOSAVE_DEBOUNCE_MS,
 });
+const structureSaveErrors = new Map<string, unknown>();
 
 // ─── Outgoing event buffer ────────────────────────────────────────────────
 //
@@ -1011,6 +1012,44 @@ export async function drainPendingSaves(): Promise<void> {
     throw new Error(
       'Restored node content is waiting for a successful structure save. Retry before leaving this Canvas.',
     );
+  }
+}
+
+export class CanvasSubmissionSaveError extends Error {
+  readonly code = 'canvas_save_failed';
+
+  constructor(
+    readonly canvasId: string,
+    cause: unknown,
+  ) {
+    super(`Cannot submit before Canvas ${canvasId} is saved`, { cause });
+    this.name = 'CanvasSubmissionSaveError';
+  }
+}
+
+export async function saveCanvasForSubmission(canvasId: string): Promise<void> {
+  const assertCanvas = () => {
+    if (useCanvasStore.getState().canvasId !== canvasId) {
+      throw new Error(`Submission Canvas changed: ${canvasId}`);
+    }
+  };
+  try {
+    assertCanvas();
+    do {
+      await drainPendingSaves();
+      assertCanvas();
+    } while (structureScheduler.hasPending());
+    const state = useCanvasStore.getState();
+    if (state.versionConflict || structureSaveErrors.has(canvasId)) {
+      throw (
+        structureSaveErrors.get(canvasId) ??
+        new Error('Canvas version conflict')
+      );
+    }
+    await nodeContentQueue.flushAllForSubmission(canvasId);
+    assertCanvas();
+  } catch (error) {
+    throw new CanvasSubmissionSaveError(canvasId, error);
   }
 }
 
@@ -1227,8 +1266,15 @@ let _dragStartPositions: Map<string, { x: number; y: number }> | null = null;
  * deliberately omitted: the server consumes neither. Spatial info is
  * fetched on demand via `get_canvas_outline()` / `inspect_nodes`.
  */
+export interface AgentSourceSelection {
+  nodeIds: readonly string[];
+  strokeSelection: Readonly<Record<string, readonly string[]>>;
+  excludeNodeIds?: readonly string[];
+}
+
 function makeBuildSelectedDetail(
   allNodes: Node[],
+  selection: AgentSourceSelection,
 ): (n: Node) => WireSelectionNode {
   const build = (n: Node): WireSelectionNode => {
     const data = n.data as Record<string, unknown> | undefined;
@@ -1243,11 +1289,18 @@ function makeBuildSelectedDetail(
       type: nodeType,
       label: data?.label as string | undefined,
       ...(src !== undefined ? { src } : {}),
+      ...(n.type === 'sketch' && selection.strokeSelection[n.id]?.length
+        ? { strokeIds: [...selection.strokeSelection[n.id]] }
+        : {}),
     };
 
     if (n.type === 'frame') {
       const children = allNodes
-        .filter((child) => child.parentId === n.id)
+        .filter(
+          (child) =>
+            child.parentId === n.id &&
+            !selection.excludeNodeIds?.includes(child.id),
+        )
         .map(build);
       if (children.length > 0) detail.children = children;
     }
@@ -2001,11 +2054,21 @@ const useCanvasStore = create<RFState>()(
       }
     },
 
-    getAgentChatContext: (): AgentChatContext => {
+    getAgentChatContext: (captured): AgentChatContext => {
       const { nodes } = get();
-      const buildSelectedDetail = makeBuildSelectedDetail(nodes);
+      const selection = captured ?? {
+        nodeIds: nodes.filter((node) => node.selected).map((node) => node.id),
+        strokeSelection:
+          useGesturePreviewStore.getState().sketchStrokeSelection,
+      };
+      const included = new Set(selection.nodeIds);
+      const buildSelectedDetail = makeBuildSelectedDetail(nodes, selection);
       const selectedNodes = nodes
-        .filter((n) => n.selected)
+        .filter(
+          (node) =>
+            included.has(node.id) &&
+            !selection.excludeNodeIds?.includes(node.id),
+        )
         .map(buildSelectedDetail);
 
       // Fold in any Stage-2 partial stroke selection as sketch wire
@@ -2014,9 +2077,10 @@ const useCanvasStore = create<RFState>()(
       // are normally NOT in the `n.selected` set — append them with
       // their stroke subset so the server can auto-snapshot + address
       // just those strokes and tell the agent it is a partial selection.
-      const strokeSel = useGesturePreviewStore.getState().sketchStrokeSelection;
+      const strokeSel = selection.strokeSelection;
       const selectedIds = new Set(selectedNodes.map((n) => n.id));
       for (const [nodeId, strokeIds] of Object.entries(strokeSel)) {
+        if (selection.excludeNodeIds?.includes(nodeId)) continue;
         if (!strokeIds || strokeIds.length === 0) continue;
         const node = nodes.find((n) => n.id === nodeId);
         if (!node || node.type !== 'sketch') continue;
@@ -2024,7 +2088,7 @@ const useCanvasStore = create<RFState>()(
           // Rare mixed case: the sketch is also whole-node selected —
           // attach the subset to its existing wire entry.
           const existing = selectedNodes.find((n) => n.id === nodeId);
-          if (existing) existing.strokeIds = strokeIds;
+          if (existing) existing.strokeIds = [...strokeIds];
           continue;
         }
         const data = node.data as Record<string, unknown> | undefined;
@@ -2032,7 +2096,7 @@ const useCanvasStore = create<RFState>()(
           id: nodeId,
           type: 'sketch',
           label: data?.label as string | undefined,
-          strokeIds,
+          strokeIds: [...strokeIds],
         });
       }
 
@@ -2078,6 +2142,8 @@ const useCanvasStore = create<RFState>()(
           });
           return;
         }
+
+        structureSaveErrors.delete(targetId);
 
         const state = response.state as {
           nodes?: Node[];
@@ -2342,9 +2408,11 @@ const useCanvasStore = create<RFState>()(
           dismissVersionConflictToast();
         }
         saveSucceeded = true;
+        structureSaveErrors.delete(savingCanvasId);
       } catch (error) {
         if (get().canvasId !== savingCanvasId) return;
         nodeContentQueue.reportRestoreFailure(savingCanvasId);
+        structureSaveErrors.set(savingCanvasId, error);
         if (error instanceof CanvasConflictError) {
           if (error.code === 'CANVAS_VERSION_CONFLICT') {
             if (

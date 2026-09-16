@@ -14,6 +14,7 @@
 import type {
   AssistantPart,
   ChatAttachment,
+  AgentRequest,
   SelectedStrokeSubset,
 } from '@huabu/shared';
 
@@ -53,6 +54,7 @@ export type ChatMessage =
       historyTurnActive?: boolean;
       role: 'user';
       content: string;
+      inputKind?: AgentRequest['inputKind'];
       /** Image/file attachments included with this message. */
       attachments?: ChatAttachment[];
       /** IDs of canvas nodes selected when this message was sent. */

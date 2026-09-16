@@ -28,6 +28,7 @@ import { CanvasConflictError } from '@/api/canvas';
  * Public shape returned by {@link createStructureScheduler}.
  */
 export type StructureScheduler = {
+  hasPending(): boolean;
   /**
    * Start (or reset) the debounce timer. When it fires, calls
    * `getSaveCanvas()()` and swallows `CanvasConflictError` (the
@@ -73,6 +74,7 @@ export function createStructureScheduler(opts: {
   };
 
   return {
+    hasPending: () => timer !== null,
     schedule(): void {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {

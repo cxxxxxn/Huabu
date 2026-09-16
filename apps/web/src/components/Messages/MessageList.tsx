@@ -229,7 +229,8 @@ export const MessageList = memo(function MessageList({
   const streamingAssistantId = (() => {
     if (!isLoading) return undefined;
     for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i]!;
+      const m = messages[i];
+      if (!m) continue;
       if (m.role === 'user') return undefined;
       if (m.role === 'assistant') return m.id;
     }
@@ -367,6 +368,7 @@ export const MessageList = memo(function MessageList({
                   <div key={msg.id} data-chat-message-id={msg.id}>
                     <UserMessage
                       content={msg.content}
+                      inputKind={msg.inputKind}
                       attachments={msg.attachments}
                       selectedNodeIds={msg.selectedNodeIds}
                       selectedStrokeIds={msg.selectedStrokeIds}

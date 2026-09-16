@@ -14,7 +14,7 @@
 
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
-import { putNodeContent } from '@/api/canvas';
+import { CanvasConflictError, putNodeContent } from '@/api/canvas';
 import { toast } from '@/components/Common/Toast';
 
 import { createNodeContentQueue } from '../nodeContentQueue';
@@ -63,6 +63,44 @@ beforeEach(() => {
 });
 
 describe('nodeContentQueue — save-failure surfacing', () => {
+  it('keeps navigation nonrejecting but reports failed saves to submissions', async () => {
+    const node = noteNode('v1');
+    const { queue } = makeQueue(node);
+    putMock.mockRejectedValue(new Error('disk fail'));
+    queue.scheduleChanges('c1', [], [node]);
+    await expect(queue.flushAll()).resolves.toBeUndefined();
+    await expect(queue.flushAllForSubmission('c1')).rejects.toThrow(
+      'Content saves failed',
+    );
+    putMock.mockResolvedValue({ nodeId: 'n1', label: 'Note', rev: 'saved' });
+    await queue.flushNow('c1', 'n1');
+    await expect(queue.flushAllForSubmission('c1')).resolves.toBeUndefined();
+  });
+
+  it('does not report a frozen content conflict as a successful submission save', async () => {
+    const node = noteNode('v1');
+    const { queue } = makeQueue(node);
+    const conflict = new CanvasConflictError({
+      code: 'NODE_CONTENT_CONFLICT',
+      message: 'stale',
+      currentRev: 'newer',
+    });
+    putMock.mockRejectedValue(conflict);
+    await expect(queue.flushNow('c1', 'n1')).resolves.toBeUndefined();
+    await expect(queue.flushAllForSubmission('c1')).rejects.toThrow(
+      'Content saves failed',
+    );
+    expect(putMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a different target Canvas before flushing', async () => {
+    const { queue } = makeQueue(noteNode('v1'));
+    await expect(queue.flushAllForSubmission('other')).rejects.toThrow(
+      'Canvas changed',
+    );
+    expect(putMock).not.toHaveBeenCalled();
+  });
+
   it('surfaces a retryable danger toast even on the auto path', async () => {
     const node = noteNode('v1');
     const { queue } = makeQueue(node);

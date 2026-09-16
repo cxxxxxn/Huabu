@@ -114,6 +114,7 @@ function historyItemsToMessages(
         historyTurnActive,
         role: 'user',
         content: message.content || '',
+        ...(message.inputKind ? { inputKind: message.inputKind } : {}),
         ...attachments,
         ...selectedNodeIds,
         ...(message.selectedStrokeIds && message.selectedStrokeIds.length > 0

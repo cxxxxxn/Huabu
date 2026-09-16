@@ -138,6 +138,7 @@ export type NodeContentQueue = {
    * flush so canvas switches do not orphan editor edits.
    */
   flushAll(): Promise<void>;
+  flushAllForSubmission(canvasId: string): Promise<void>;
 
   /**
    * `beforeunload` best-effort flush of pending content saves via
@@ -209,6 +210,7 @@ export function createNodeContentQueue(opts: {
   const restores = new Map<string, { canvasId: string; token: object }>();
   const restoredContent = new Map<string, string>();
   const generations = new Map<string, object>();
+  const failures = new Map<string, { canvasId: string; error: unknown }>();
   /**
    * Last `(label, labelSource)` the server confirmed it persisted for
    * each nodeId. Used by {@link handleSaveFailure} to revert an
@@ -381,6 +383,7 @@ export function createNodeContentQueue(opts: {
     // means the node is no longer blocked.
     baselineRev.set(nodeId, response.rev);
     const completedRestore = restoredContent.delete(nodeId);
+    failures.delete(nodeId);
     contentConflictToasted.delete(nodeId);
     saveErrorToasted.delete(nodeId);
     // A write that succeeded means any prior duplicate has been
@@ -571,6 +574,7 @@ export function createNodeContentQueue(opts: {
     contentConflictToasted.delete(nodeId);
     toast(i18n.t('node.contentConflictLoaded'), { tone: 'success' });
     restoredContent.delete(nodeId);
+    failures.delete(nodeId);
   }
 
   /**
@@ -594,6 +598,9 @@ export function createNodeContentQueue(opts: {
   ): Promise<void> {
     const generation = generations.get(nodeId);
     try {
+      if (opts.getState().canvasId !== canvasId) {
+        throw new Error(`Content save Canvas changed: ${canvasId}`);
+      }
       await performSave(canvasId, nodeId, kOpts);
     } catch (err) {
       if (
@@ -601,6 +608,7 @@ export function createNodeContentQueue(opts: {
         generations.get(nodeId) !== generation
       )
         return;
+      failures.set(nodeId, { canvasId, error: err });
       if (err instanceof NodeDuplicateFilesError) {
         notifyDuplicate(nodeId, err);
         throw err;
@@ -953,6 +961,37 @@ export function createNodeContentQueue(opts: {
       );
     },
 
+    async flushAllForSubmission(canvasId) {
+      const assertCanvas = () => {
+        if (opts.getState().canvasId !== canvasId) {
+          throw new Error(`Content save Canvas changed: ${canvasId}`);
+        }
+      };
+      assertCanvas();
+      do {
+        await this.flushAll();
+        assertCanvas();
+      } while (debouncer.pendingKeys().length > 0 || inflight.size > 0);
+      const nodeIds = new Set(opts.getState().nodes.map((node) => node.id));
+      const errors = Array.from(failures.entries())
+        .filter(
+          ([nodeId, failure]) =>
+            failure.canvasId === canvasId && nodeIds.has(nodeId),
+        )
+        .map(
+          ([nodeId, failure]) =>
+            new Error(`Content save failed: ${nodeId}`, {
+              cause: failure.error,
+            }),
+        );
+      if (errors.length > 0) {
+        throw new AggregateError(
+          errors,
+          `Content saves failed for Canvas ${canvasId}`,
+        );
+      }
+    },
+
     flushAllKeepalive() {
       const canvasId = opts.getState().canvasId;
       const pendingIds = debouncer.cancelAll();
@@ -973,6 +1012,7 @@ export function createNodeContentQueue(opts: {
       generations.delete(nodeId);
       restores.delete(nodeId);
       restoredContent.delete(nodeId);
+      failures.delete(nodeId);
       debouncer.cancel(nodeId);
       baselineRev.delete(nodeId);
       frozen.delete(nodeId);
@@ -987,6 +1027,7 @@ export function createNodeContentQueue(opts: {
         const nodeType = typeof node.type === 'string' ? node.type : '';
         if (!MD_BACKED_NODE_TYPES.has(nodeType)) continue;
         baselineRev.set(node.id, revOfNode(node));
+        failures.delete(node.id);
         // A fresh authoritative baseline means any prior conflict for this
         // node is resolved — drop the toast guard and unfreeze it so a
         // later divergence alerts again and writes resume.
