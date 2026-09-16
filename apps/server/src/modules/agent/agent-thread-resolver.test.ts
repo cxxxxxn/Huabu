@@ -88,6 +88,7 @@ describe('AgentThreadResolver', () => {
         profileId: 'profile-a',
         alias: 'Researcher',
       },
+      agentMode: 'ask',
       launchOverrides: {
         workingDirPath: '/work/research',
         additionalInitialPreamble: 'Focus on primary sources.',
@@ -142,6 +143,20 @@ describe('AgentThreadResolver', () => {
         )
       )?.agentBinding,
     ).toEqual({ kind: 'internal' });
+  });
+
+  it('preserves an explicit operate mode from the Question Node', async () => {
+    const operate = {
+      ...FIXED_NODE,
+      data: { ...FIXED_NODE.data, agentMode: 'operate' },
+    };
+
+    await expect(
+      createResolver([operate]).resolveAgentNode('canvas-a', 'thread-a'),
+    ).resolves.toMatchObject({ agentMode: 'operate' });
+    await expect(
+      createResolver([operate]).resolveFixedAgentNode('canvas-a', 'thread-a'),
+    ).resolves.toMatchObject({ agentMode: 'operate' });
   });
 
   it('rejects duplicate threads and corrupt fixed-node metadata', async () => {

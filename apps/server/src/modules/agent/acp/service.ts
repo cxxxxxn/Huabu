@@ -32,6 +32,7 @@ import { buildReachbackEnv } from './reachback-env.js';
 import { renderExternalAgentSystemPreamble } from '../../../prompt/external-agent/system-preamble.js';
 import { canvasAcpNamespace } from '../../workspace/paths.js';
 import {
+  agenetes,
   EXTERNAL_DRIVER_KIND,
   type AcpHandle,
   type AcpWorkloadSpec,
@@ -44,7 +45,11 @@ import type { HuabuSubmission } from '../agenetes/handle.js';
 import type { ChatEnvelope } from '../conversation/envelope.js';
 import type { AcpBindingRecipe, AcpTurnOverlay } from '@agenetes/acp-driver';
 import type { AgentProfileSnapshot } from '@agenetes/agent-team';
-import type { AgentLaunchOverrides, AgentStreamEvent } from '@huabu/shared';
+import type {
+  AgentLaunchOverrides,
+  AgentStreamEvent,
+  AgentTurnAccepted,
+} from '@huabu/shared';
 import type { FastifyBaseLogger } from 'fastify';
 
 export interface RunAcpAgentOptions {
@@ -118,7 +123,7 @@ export interface RunAcpAgentOptions {
     logger: FastifyBaseLogger;
   };
   /** Called after Agenetes has synchronously persisted this turn's start. */
-  onTurnStarted?: () => void;
+  onTurnStarted?: (acceptance?: AgentTurnAccepted) => void;
 }
 
 /**
@@ -307,6 +312,7 @@ export async function* runAcpAgent(
   // The shared realization service has already created the complete durable
   // workload and subscribed its metadata before either message or control
   // dispatch reaches this point.
+  signal?.throwIfAborted();
   if (canvasId)
     await conversationTitleService.start(
       canvasId,
@@ -319,6 +325,12 @@ export async function* runAcpAgent(
     logger,
     onPrepared,
   });
-  opts.onTurnStarted?.();
+  opts.onTurnStarted?.({
+    threadId: opts.threadId,
+    turnStartSeq: agenetes.logMetadata(
+      canvasAcpNamespace(canvasId),
+      opts.threadId,
+    ).eventCount,
+  });
   yield* iterator;
 }

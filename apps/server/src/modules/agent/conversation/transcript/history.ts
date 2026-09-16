@@ -277,6 +277,7 @@ export function buildHistoryFromTurns(
       const selectedStrokeIds = envelope.focus.selection.strokeSubsets ?? [];
       const invokedSkills = envelope.skills.invokedIds;
       if (
+        envelope.user.inputKind === 'ink-intent' ||
         envelope.user.text.trim() ||
         attachments.length > 0 ||
         selectedNodeIds.length > 0
@@ -284,6 +285,9 @@ export function buildHistoryFromTurns(
         messages.push({
           role: 'user',
           content: envelope.user.text,
+          ...(envelope.user.inputKind && {
+            inputKind: envelope.user.inputKind,
+          }),
           ...(attachments.length > 0 && {
             attachments: attachments as ChatAttachment[],
           }),

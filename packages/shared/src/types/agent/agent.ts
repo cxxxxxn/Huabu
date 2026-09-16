@@ -27,6 +27,7 @@
  * to avoid churning every producer with a brand cast.
  */
 
+import type { AgentTurnAccepted } from '../api/agent.js';
 import type { AgentStreamEvent as ProtocolStreamEvent } from '@agenetes/protocol';
 
 // ==================== Agent Modes ====================
@@ -200,3 +201,12 @@ export const AGENT_SSE_EVENTS = {
   Error: 'error',
   End: 'end',
 } as const satisfies Record<string, AgentStreamEventType>;
+
+export type AgentHostStreamEvent =
+  | AgentStreamEvent
+  | { type: 'accepted'; data: AgentTurnAccepted };
+
+export const AGENT_HOST_SSE_EVENTS = {
+  ...AGENT_SSE_EVENTS,
+  Accepted: 'accepted',
+} as const satisfies Record<string, AgentHostStreamEvent['type']>;

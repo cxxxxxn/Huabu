@@ -1539,6 +1539,7 @@ describe('POST /api/rfs/:canvasId/agent', () => {
           binding: target.agentBinding,
           fixedTarget: target,
           signal: options.signal ?? new AbortController().signal,
+          acceptance: Promise.resolve(null),
           dispose,
           events: (async function* () {
             yield {
@@ -1605,6 +1606,7 @@ describe('POST /api/rfs/:canvasId/agent', () => {
         binding: target.agentBinding,
         fixedTarget: target,
         signal: options.signal ?? new AbortController().signal,
+        acceptance: Promise.resolve(null),
         dispose: vi.fn().mockResolvedValue(undefined),
         events: (async function* () {
           yield { type: 'done' as const, data: { message: 'first answer' } };
@@ -1694,6 +1696,7 @@ describe('POST /api/rfs/:canvasId/agent', () => {
         binding: target.agentBinding,
         fixedTarget: target,
         signal: options.signal ?? new AbortController().signal,
+        acceptance: Promise.resolve(null),
         dispose: vi.fn().mockResolvedValue(undefined),
         events: (async function* () {
           yield {
@@ -1844,6 +1847,7 @@ describe('POST /api/rfs/:canvasId/agent', () => {
         binding: target.agentBinding,
         fixedTarget: target,
         signal: options.signal ?? new AbortController().signal,
+        acceptance: Promise.resolve(null),
         dispose: vi.fn().mockResolvedValue(undefined),
         events: (async function* () {
           yield { type: 'error' as const, data: { error: 'model failed' } };
@@ -1885,6 +1889,7 @@ describe('POST /api/rfs/:canvasId/agent', () => {
         binding: target.agentBinding,
         fixedTarget: target,
         signal: options.signal ?? new AbortController().signal,
+        acceptance: Promise.resolve(null),
         dispose: vi.fn().mockResolvedValue(undefined),
         events: (async function* () {
           yield { type: 'done' as const, data: { message: 'complete' } };

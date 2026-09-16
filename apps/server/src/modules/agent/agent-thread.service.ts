@@ -12,6 +12,7 @@ import { runAcpAgent } from './acp/service.js';
 import { agenetes, EXTERNAL_DRIVER_KIND } from './agenetes/drivers.js';
 import { agentNodeBinding } from './agent-node-binding.js';
 import { agentNodeLifecycle } from './agent-node-lifecycle.js';
+import { prepareAgentSubmission } from './agent-submission.js';
 import {
   agentThreadResolver,
   type AgentNodeTarget,
@@ -38,6 +39,7 @@ import type {
   AgentBinding,
   AgentMode,
   AgentStreamEvent,
+  AgentTurnAccepted,
   ReasoningEffort,
 } from '@huabu/shared';
 import type { FastifyBaseLogger } from 'fastify';
@@ -190,6 +192,8 @@ export interface AgentThreadInvocation {
   binding: AgentBinding;
   fixedTarget: FixedAgentNodeTarget | null;
   signal: AbortSignal;
+  /** Resolves after the canonical turn start is durable, or null if unavailable. */
+  acceptance: Promise<AgentTurnAccepted | null>;
   events: AsyncGenerator<AgentStreamEvent, void>;
   dispose: (error?: unknown) => Promise<void>;
 }
@@ -202,12 +206,22 @@ export interface ExternalAgentThreadTarget {
 interface ActiveAgentInvocation {
   canvasId?: string;
   abortController: AbortController;
-  turnStarted: Promise<boolean>;
-  resolveTurnStarted: (started: boolean) => void;
+  turnStartState: TurnStartState | null;
+  turnStarted: Promise<TurnStartState>;
+  resolveTurnStarted: (state: TurnStartState) => void;
   phase: 'preparing' | 'executing' | 'stopping' | 'settled';
   outcome?: 'done' | 'error';
   errorMessage?: string;
 }
+
+interface PendingAgentPreparation {
+  canvasId?: string;
+  abortController: AbortController;
+}
+
+type TurnStartState =
+  | { started: true; acceptance?: AgentTurnAccepted }
+  | { started: false };
 
 function buildAgentSystemPrompt(params: {
   canvasId: string | undefined;
@@ -231,10 +245,37 @@ function errorMessage(error: unknown): string {
 
 export class AgentThreadService {
   private readonly activeInvocations = new Map<string, ActiveAgentInvocation>();
+  private readonly pendingPreparations = new Map<
+    string,
+    Set<PendingAgentPreparation>
+  >();
 
   constructor(
     private readonly dependencies: AgentThreadServiceDependencies = DEFAULT_DEPENDENCIES,
   ) {}
+
+  beginPreparation(
+    threadId: string,
+    canvasId?: string,
+  ): {
+    signal: AbortSignal;
+    finish: () => void;
+  } {
+    const preparation: PendingAgentPreparation = {
+      canvasId,
+      abortController: new AbortController(),
+    };
+    const pending = this.pendingPreparations.get(threadId) ?? new Set();
+    pending.add(preparation);
+    this.pendingPreparations.set(threadId, pending);
+    return {
+      signal: preparation.abortController.signal,
+      finish: () => {
+        pending.delete(preparation);
+        if (pending.size === 0) this.pendingPreparations.delete(threadId);
+      },
+    };
+  }
 
   async resolveFixedTarget(
     canvasId: string | undefined,
@@ -242,6 +283,15 @@ export class AgentThreadService {
   ): Promise<FixedAgentNodeTarget | null> {
     return canvasId
       ? this.dependencies.resolveFixedAgentNode(canvasId, threadId)
+      : null;
+  }
+
+  async resolveTarget(
+    canvasId: string | undefined,
+    threadId: string,
+  ): Promise<AgentNodeTarget | null> {
+    return canvasId
+      ? this.dependencies.resolveAgentNode(canvasId, threadId)
       : null;
   }
 
@@ -266,6 +316,28 @@ export class AgentThreadService {
     return binding ? { binding, fixedTarget: null } : null;
   }
 
+  resolveBinding(options: {
+    canvasId?: string;
+    threadId: string;
+    requestBinding?: AgentBinding;
+    agentTarget?: AgentNodeTarget | null;
+    fixedTarget?: FixedAgentNodeTarget | null;
+  }): AgentBinding {
+    const persistedExternalBinding =
+      !options.fixedTarget && options.canvasId
+        ? this.dependencies.resolvePersistedExternalBinding(
+            options.canvasId,
+            options.threadId,
+          )
+        : null;
+    return (
+      options.fixedTarget?.agentBinding ??
+      options.agentTarget?.agentBinding ??
+      persistedExternalBinding ??
+      options.requestBinding ?? { kind: 'internal' }
+    );
+  }
+
   invokeSubmission(
     options: AgentThreadInvocationOptions & { submission: HuabuSubmission },
   ): Promise<AgentThreadInvocation> {
@@ -275,7 +347,9 @@ export class AgentThreadService {
   async invoke(
     options: AgentThreadInvocationOptions,
   ): Promise<AgentThreadInvocation> {
+    options.signal?.throwIfAborted();
     await this.dependencies.waitForTurnRelease(options.threadId);
+    options.signal?.throwIfAborted();
     const releaseTurn = this.dependencies.acquireTurn(options.threadId);
     if (!releaseTurn) throw new AgentThreadBusyError(options.threadId);
 
@@ -283,16 +357,22 @@ export class AgentThreadService {
     const signal = options.signal
       ? AbortSignal.any([options.signal, abortController.signal])
       : abortController.signal;
-    let resolveTurnStarted!: (started: boolean) => void;
-    const turnStarted = new Promise<boolean>((resolve) => {
+    let resolveTurnStarted!: (state: TurnStartState) => void;
+    const turnStarted = new Promise<TurnStartState>((resolve) => {
       resolveTurnStarted = resolve;
     });
     const active: ActiveAgentInvocation = {
       canvasId: options.canvasId,
       abortController,
+      turnStartState: null,
       turnStarted,
       resolveTurnStarted,
       phase: 'preparing',
+    };
+    const recordTurnStart = (state: TurnStartState): void => {
+      if (active.turnStartState) return;
+      active.turnStartState = state;
+      resolveTurnStarted(state);
     };
     this.activeInvocations.set(options.threadId, active);
 
@@ -309,6 +389,7 @@ export class AgentThreadService {
     let externalRealization: RealizedExternalAgentThread | undefined;
     let envelope =
       typeof options.envelope === 'function' ? undefined : options.envelope;
+    let submission = options.submission;
     let projected = false;
     let settled = false;
     const settle = async (
@@ -321,7 +402,7 @@ export class AgentThreadService {
       message =
         active.outcome === 'error' ? (active.errorMessage ?? message) : message;
       active.phase = 'settled';
-      resolveTurnStarted(false);
+      recordTurnStart({ started: false });
       try {
         if (projected && agentTarget) {
           if (terminal === 'error') {
@@ -463,6 +544,16 @@ export class AgentThreadService {
           }
         }
       }
+      if (!signal.aborted && envelope && !submission) {
+        submission = await prepareAgentSubmission({
+          binding,
+          envelope,
+          threadId: options.threadId,
+          canvasId: options.canvasId,
+          modelId: options.modelId,
+          logger: options.logger,
+        });
+      }
     } catch (error) {
       const cancelled =
         signal.aborted &&
@@ -484,6 +575,7 @@ export class AgentThreadService {
       ...options,
       agentTarget,
       envelope,
+      submission,
       signal,
       spacePrompt,
       externalRealization,
@@ -503,13 +595,16 @@ export class AgentThreadService {
       binding,
       fixedTarget,
       signal,
+      acceptance: turnStarted.then((state) =>
+        state.started ? (state.acceptance ?? null) : null,
+      ),
       events: this.runInvocation(
         effectiveOptions,
         binding,
         fixedTarget,
-        () => {
+        (acceptance) => {
           if (!signal.aborted) active.phase = 'executing';
-          resolveTurnStarted(true);
+          recordTurnStart({ started: true, acceptance });
         },
         settle,
         active,
@@ -532,6 +627,42 @@ export class AgentThreadService {
     return true;
   }
 
+  async stopAndWait(
+    threadId: string,
+    canvasId?: string,
+  ): Promise<{
+    stopped: boolean;
+    acceptance: AgentTurnAccepted | null;
+  }> {
+    const pending = [...(this.pendingPreparations.get(threadId) ?? [])].filter(
+      (preparation) =>
+        !preparation.abortController.signal.aborted &&
+        (canvasId === undefined || preparation.canvasId === canvasId),
+    );
+    for (const preparation of pending) preparation.abortController.abort();
+
+    const active = this.activeInvocations.get(threadId);
+    if (
+      active &&
+      !active.abortController.signal.aborted &&
+      (canvasId === undefined || active.canvasId === canvasId)
+    ) {
+      active.abortController.abort();
+      const state = active.turnStartState ?? { started: false as const };
+      active.resolveTurnStarted(state);
+      active.turnStartState = state;
+      return {
+        stopped: true,
+        acceptance: state.started && state.acceptance ? state.acceptance : null,
+      };
+    }
+
+    if (pending.length === 0) {
+      return { stopped: false, acceptance: null };
+    }
+    return { stopped: true, acceptance: null };
+  }
+
   isActive(threadId: string, canvasId?: string): boolean {
     const active = this.activeInvocations.get(threadId);
     if (!active) return false;
@@ -546,14 +677,14 @@ export class AgentThreadService {
     if (!active || (canvasId !== undefined && active.canvasId !== canvasId)) {
       return false;
     }
-    return active.turnStarted;
+    return active.turnStarted.then((state) => state.started);
   }
 
   private async *runInvocation(
     options: EffectiveAgentThreadInvocationOptions,
     binding: AgentBinding,
     fixedTarget: FixedAgentNodeTarget | null,
-    onTurnStarted: () => void,
+    onTurnStarted: (acceptance?: AgentTurnAccepted) => void,
     settle: (terminal: 'done' | 'error', message?: string) => Promise<void>,
     active: ActiveAgentInvocation,
     isSettled: () => boolean,
@@ -619,7 +750,7 @@ export class AgentThreadService {
     options: EffectiveAgentThreadInvocationOptions,
     binding: AgentBinding,
     fixedTarget: FixedAgentNodeTarget | null,
-    onTurnStarted: () => void,
+    onTurnStarted: (acceptance?: AgentTurnAccepted) => void,
   ): AsyncGenerator<AgentStreamEvent, unknown> {
     if (!options.envelope) throw new Error('Invocation input was not prepared');
     if (binding.kind === 'external') {

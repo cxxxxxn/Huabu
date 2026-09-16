@@ -21,13 +21,21 @@
  * a configurable output tail and emits a single `agent_end`.
  */
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+
+import { agentTurnAcceptedSchema } from '@huabu/shared';
+
+const { resolveModelForRoleAsync, resolveModelByIdAsync } = vi.hoisted(() => ({
+  resolveModelForRoleAsync: vi.fn(),
+  resolveModelByIdAsync: vi.fn(),
+}));
 
 // ─── Mocks ───────────────────────────────────────────────────────────────────
 
 // The output tail the fake Agent appends to its transcript on
 // `prompt()` / `continue()`.
 let mockOutputTail: Array<Record<string, unknown>> = [];
+let mockPromptWait: Promise<void> | undefined;
 
 vi.mock('@earendil-works/pi-agent-core', () => {
   class FakeAgent {
@@ -60,6 +68,7 @@ vi.mock('@earendil-works/pi-agent-core', () => {
       // (which appends the output tail) and emit `agent_end`.
       const turn = Array.isArray(message) ? message : [message];
       this.state.messages.push(...turn);
+      await mockPromptWait;
       this.state.messages.push(...mockOutputTail);
       this.cb?.({ type: 'agent_end' });
     }
@@ -78,7 +87,8 @@ vi.mock('@earendil-works/pi-agent-core', () => {
 vi.mock('./llm.js', () => ({
   getLLMModel: () => ({ id: 'mock-model' }),
   ensureApiKey: () => 'mock-key',
-  resolveModelForRoleAsync: () => Promise.resolve({ id: 'mock-model' }),
+  resolveModelForRoleAsync,
+  resolveModelByIdAsync,
   ensureApiKeyForRole: () => 'mock-key',
 }));
 
@@ -97,8 +107,14 @@ vi.mock('./conversation/prompt/build-prompt.js', () => ({
   ]),
 }));
 
+import { setWorkspacePath } from '../workspace.js';
+import { conversationEventLogStore } from './agenetes/conversation-stores.js';
 import { agenetes } from './agenetes/drivers.js';
+import { buildHuabuPiWorkloadSpec } from './agenetes/pi-driver.js';
 import { runAgent, syncDeploymentSystemPrompt } from './agent.service.js';
+import { InkVisualPreparationError } from './conversation/envelope.js';
+import { canvasAcpNamespace } from '../workspace/paths.js';
+import { renderInternalAgentInputs } from './conversation/prompt/build-prompt.js';
 
 import type { BuiltinHandle } from './agenetes/drivers.js';
 import type { ChatEnvelope } from './conversation/envelope.js';
@@ -131,13 +147,40 @@ const ASSISTANT_REPLY = {
   timestamp: 2,
 };
 
-// A minimal envelope — its content is irrelevant here because the render
-// is mocked; presence alone selects the delta-slice branch.
-const ENVELOPE = {} as ChatEnvelope;
+// A minimal envelope — its rendered content is mocked, but main's title
+// initialization still reads the canonical user text.
+const ENVELOPE: ChatEnvelope = {
+  user: { text: 'TURN_USER_MESSAGE', attachments: [] },
+  skills: { invokedIds: [], resolved: [] },
+  focus: {
+    selection: {
+      refs: [],
+      selectedIds: [],
+      imageAttachments: [],
+      snapshotAttachments: [],
+    },
+  },
+};
 
 beforeEach(() => {
+  const workspacePath = process.env.HUABU_DATA_DIR;
+  if (!workspacePath) throw new Error('Missing isolated test data directory');
+  setWorkspacePath(workspacePath);
   mockOutputTail = [{ ...ASSISTANT_REPLY }];
+  mockPromptWait = undefined;
+  resolveModelForRoleAsync.mockReset().mockResolvedValue({
+    id: 'default-text',
+    input: ['text'],
+  });
+  resolveModelByIdAsync
+    .mockReset()
+    .mockImplementation(async (modelId: string) => ({
+      id: modelId,
+      input: modelId === 'vision' ? ['text', 'image'] : ['text'],
+    }));
 });
+
+afterEach(() => vi.restoreAllMocks());
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
@@ -238,6 +281,47 @@ describe('runAgent output delta', () => {
     expect(onTurnStarted).not.toHaveBeenCalled();
   });
 
+  it('provides the persisted turn-start identity while the model is still pending', async () => {
+    const threadId = 'acceptance-pending';
+    const canvasId = 'acceptance-canvas';
+    const namespace = canvasAcpNamespace(canvasId);
+    let releasePrompt!: () => void;
+    mockPromptWait = new Promise<void>((resolve) => {
+      releasePrompt = resolve;
+    });
+    let notifyStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      notifyStarted = resolve;
+    });
+    const onTurnStarted = vi.fn(() => notifyStarted());
+    const iterator = runAgent({
+      scope: 'ask',
+      context: priorContext([]),
+      envelope: ENVELOPE,
+      workloadType: 'Deployment',
+      threadId,
+      canvasId,
+      onTurnStarted,
+    });
+    let settled = false;
+    const output = drain(iterator).finally(() => {
+      settled = true;
+    });
+    try {
+      await Promise.race([started, output]);
+      expect(settled).toBe(false);
+      expect(agenetes.logMetadata(namespace, threadId).eventCount).toBe(1);
+      expect(onTurnStarted).toHaveBeenCalledExactlyOnceWith({
+        threadId,
+        turnStartSeq: 1,
+      });
+    } finally {
+      releasePrompt();
+      await output;
+      agenetes.close(threadId);
+    }
+  });
+
   it('with an envelope: returns only the output delta, excluding the rendered user message', async () => {
     const prior = [
       { role: 'user', content: 'earlier question', timestamp: 0 },
@@ -285,6 +369,377 @@ describe('runAgent output delta', () => {
     // Output delta = the appended assistant reply.
     expect(output).toHaveLength(1);
     expect(output[0]).toMatchObject({ role: 'assistant' });
+  });
+});
+
+describe('runAgent Ink model requirements', () => {
+  it.each([false, true])(
+    'uses a persisted vision selection (recover: %s)',
+    async (recover) => {
+      const canvasId = 'ink-models';
+      const threadId = `persisted-vision-${recover}`;
+      const namespace = canvasAcpNamespace(canvasId);
+      const handle = agenetes.create(
+        buildHuabuPiWorkloadSpec({
+          kind: 'internal',
+          workloadType: 'Deployment',
+          namespace,
+          threadId,
+          toolNames: [],
+        }),
+      );
+      await handle.control({ type: 'set_model', data: { modelId: 'vision' } });
+      if (recover) agenetes.close(threadId);
+      resolveModelByIdAsync.mockClear();
+      const onTurnStarted = vi.fn();
+      try {
+        await drain(
+          runAgent({
+            scope: 'operate',
+            canvasId,
+            threadId,
+            workloadType: 'Deployment',
+            context: priorContext([]),
+            envelope: { user: { inputKind: 'ink-intent' } } as ChatEnvelope,
+            onTurnStarted,
+          }),
+        );
+        expect(resolveModelByIdAsync).toHaveBeenCalledWith('vision');
+        expect(onTurnStarted).toHaveBeenCalledExactlyOnceWith({
+          threadId,
+          turnStartSeq: 1,
+        });
+      } finally {
+        agenetes.close(threadId);
+      }
+    },
+  );
+
+  it('checks the persisted workload model context rather than the incoming hints', async () => {
+    const canvasId = 'ink-models';
+    const threadId = 'persisted-model-context';
+    const namespace = canvasAcpNamespace(canvasId);
+    agenetes.create(
+      buildHuabuPiWorkloadSpec({
+        kind: 'internal',
+        workloadType: 'Deployment',
+        namespace,
+        threadId,
+        toolNames: [],
+        modelRole: 'chat',
+        hasImage: false,
+      }),
+    );
+    agenetes.close(threadId);
+    resolveModelForRoleAsync.mockImplementation(async (role: string) => ({
+      id: role,
+      input: role === 'chat' ? ['text'] : ['text', 'image'],
+    }));
+    const onTurnStarted = vi.fn();
+    await expect(
+      drain(
+        runAgent({
+          scope: 'operate',
+          canvasId,
+          threadId,
+          workloadType: 'Deployment',
+          context: priorContext([]),
+          envelope: { user: { inputKind: 'ink-intent' } } as ChatEnvelope,
+          modelRole: 'skill',
+          hasImage: true,
+          onTurnStarted,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: 'ink_model_unsupported', modelId: 'chat' });
+    expect(resolveModelForRoleAsync).toHaveBeenCalledWith('chat', {
+      hasImage: false,
+    });
+    expect(onTurnStarted).not.toHaveBeenCalled();
+  });
+
+  it('accepts the default image-capable model without applying a model override', async () => {
+    resolveModelForRoleAsync.mockResolvedValue({
+      id: 'default-vision',
+      input: ['text', 'image'],
+    });
+    const threadId = 'default-vision';
+    const canvasId = 'ink-models';
+    const onTurnStarted = vi.fn();
+    try {
+      await drain(
+        runAgent({
+          scope: 'ask',
+          canvasId,
+          threadId,
+          workloadType: 'Deployment',
+          context: priorContext([]),
+          envelope: { user: { inputKind: 'ink-intent' } } as ChatEnvelope,
+          onTurnStarted,
+        }),
+      );
+      expect(onTurnStarted).toHaveBeenCalledExactlyOnceWith({
+        threadId,
+        turnStartSeq: 1,
+      });
+      expect(resolveModelByIdAsync).not.toHaveBeenCalled();
+      expect(
+        agenetes.record(canvasAcpNamespace(canvasId), threadId)?.state
+          .driverState,
+      ).not.toHaveProperty('modelId');
+    } finally {
+      agenetes.close(threadId);
+    }
+  });
+
+  it('does not run or accept if applying the selected model is rejected', async () => {
+    const run = vi.fn();
+    const handle = {
+      run,
+      control: vi
+        .fn()
+        .mockResolvedValue({ ok: false, error: 'model rejected' }),
+    } as unknown as BuiltinHandle;
+    vi.spyOn(agenetes, 'create').mockReturnValue(handle);
+    const onTurnStarted = vi.fn();
+    await expect(
+      drain(
+        runAgent({
+          scope: 'ask',
+          canvasId: 'ink-models',
+          threadId: 'rejected-model-control',
+          workloadType: 'Deployment',
+          context: priorContext([]),
+          envelope: { user: { inputKind: 'ink-intent' } } as ChatEnvelope,
+          modelId: 'vision',
+          onTurnStarted,
+        }),
+      ),
+    ).rejects.toThrow('Failed to apply thread model: model rejected');
+    expect(run).not.toHaveBeenCalled();
+    expect(onTurnStarted).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { source: 'default', scope: 'ask', recover: false },
+    { source: 'default', scope: 'operate', recover: false },
+    { source: 'request', scope: 'operate', recover: false },
+    { source: 'persisted', scope: 'ask', recover: false },
+    { source: 'persisted', scope: 'operate', recover: true },
+  ] as const)(
+    'rejects a text-only $source model in $scope (recover: $recover) before persistence',
+    async ({ source, scope, recover }) => {
+      const canvasId = 'ink-models';
+      const threadId = `${source}-${scope}-${recover}`;
+      const namespace = canvasAcpNamespace(canvasId);
+      if (source === 'persisted') {
+        const handle = agenetes.create(
+          buildHuabuPiWorkloadSpec({
+            kind: 'internal',
+            workloadType: 'Deployment',
+            namespace,
+            threadId,
+            toolNames: [],
+            modelRole: 'chat',
+          }),
+        );
+        await handle.control({
+          type: 'set_model',
+          data: { modelId: 'stored-text' },
+        });
+        if (recover) agenetes.close(threadId);
+        resolveModelByIdAsync.mockClear();
+        resolveModelForRoleAsync.mockResolvedValue({
+          id: 'default-vision',
+          input: ['text', 'image'],
+        });
+      }
+      const onTurnStarted = vi.fn();
+      try {
+        await expect(
+          drain(
+            runAgent({
+              scope,
+              canvasId,
+              threadId,
+              workloadType: 'Deployment',
+              context: priorContext([]),
+              envelope: { user: { inputKind: 'ink-intent' } } as ChatEnvelope,
+              modelId: source === 'request' ? 'chosen-text' : undefined,
+              onTurnStarted,
+            }),
+          ),
+        ).rejects.toMatchObject({
+          code: 'ink_model_unsupported',
+          modelId:
+            source === 'default'
+              ? 'default-text'
+              : source === 'request'
+                ? 'chosen-text'
+                : 'stored-text',
+        });
+        expect(onTurnStarted).not.toHaveBeenCalled();
+        expect(agenetes.logMetadata(namespace, threadId).eventCount).toBe(0);
+        if (source === 'persisted') {
+          expect(resolveModelByIdAsync).toHaveBeenCalledWith('stored-text');
+        }
+      } finally {
+        agenetes.close(threadId);
+      }
+    },
+  );
+
+  it('accepts the requested vision override without switching to the default text model', async () => {
+    const threadId = 'ink-vision-request';
+    const canvasId = 'ink-models';
+    const onTurnStarted = vi.fn();
+    try {
+      await drain(
+        runAgent({
+          scope: 'ask',
+          canvasId,
+          threadId,
+          workloadType: 'Deployment',
+          context: priorContext([]),
+          envelope: { user: { inputKind: 'ink-intent' } } as ChatEnvelope,
+          modelId: 'vision',
+          onTurnStarted,
+        }),
+      );
+      expect(onTurnStarted).toHaveBeenCalledExactlyOnceWith({
+        threadId,
+        turnStartSeq: 1,
+      });
+      expect(resolveModelByIdAsync).toHaveBeenCalledWith('vision');
+      expect(
+        agenetes.record(canvasAcpNamespace(canvasId), threadId)?.state
+          .driverState,
+      ).toMatchObject({ modelId: 'vision' });
+    } finally {
+      agenetes.close(threadId);
+    }
+  });
+});
+
+describe('runAgent durable acceptance failures', () => {
+  it('validates acceptance identity with the shared Zod schema', () => {
+    const identity = { threadId: 'thread-a', turnStartSeq: 3 };
+    expect(agentTurnAcceptedSchema.parse(identity)).toEqual(identity);
+    for (const data of [
+      null,
+      {},
+      { ...identity, threadId: '' },
+      { ...identity, turnStartSeq: 0 },
+      { ...identity, turnStartSeq: -1 },
+      { ...identity, turnStartSeq: 1.5 },
+      { ...identity, turnStartSeq: '3' },
+    ]) {
+      expect(agentTurnAcceptedSchema.safeParse(data).success).toBe(false);
+    }
+  });
+
+  it('does not accept a turn when required visual rendering fails', async () => {
+    const failure = new InkVisualPreparationError(['sketch-a']);
+    vi.mocked(renderInternalAgentInputs).mockRejectedValueOnce(failure);
+    const create = vi.spyOn(agenetes, 'create');
+    const onTurnStarted = vi.fn();
+    await expect(
+      drain(
+        runAgent({
+          scope: 'operate',
+          context: priorContext([]),
+          envelope: ENVELOPE,
+          onTurnStarted,
+        }),
+      ),
+    ).rejects.toBe(failure);
+    expect(create).not.toHaveBeenCalled();
+    expect(onTurnStarted).not.toHaveBeenCalled();
+  });
+
+  it('does not start a durable turn after cancellation wins preparation', async () => {
+    const canvasId = 'acceptance-canvas';
+    const threadId = 'acceptance-cancelled';
+    const controller = new AbortController();
+    const onTurnStarted = vi.fn();
+    controller.abort();
+    try {
+      await expect(
+        drain(
+          runAgent({
+            scope: 'ask',
+            canvasId,
+            threadId,
+            workloadType: 'Deployment',
+            context: priorContext([]),
+            envelope: ENVELOPE,
+            signal: controller.signal,
+            onTurnStarted,
+          }),
+        ),
+      ).resolves.toEqual([]);
+      expect(onTurnStarted).not.toHaveBeenCalled();
+      expect(
+        agenetes.logMetadata(canvasAcpNamespace(canvasId), threadId).eventCount,
+      ).toBe(0);
+    } finally {
+      agenetes.close(threadId);
+    }
+  });
+
+  it('does not accept a turn when Tier-1 persistence fails', async () => {
+    const failure = new Error('turn-start write failed');
+    vi.spyOn(
+      conversationEventLogStore,
+      'appendTurnStart',
+    ).mockImplementationOnce(() => {
+      throw failure;
+    });
+    const threadId = 'acceptance-write-failure';
+    const onTurnStarted = vi.fn();
+    try {
+      await expect(
+        drain(
+          runAgent({
+            scope: 'ask',
+            canvasId: 'acceptance-canvas',
+            threadId,
+            workloadType: 'Deployment',
+            context: priorContext([]),
+            envelope: ENVELOPE,
+            onTurnStarted,
+          }),
+        ),
+      ).rejects.toBe(failure);
+      expect(onTurnStarted).not.toHaveBeenCalled();
+    } finally {
+      agenetes.close(threadId);
+    }
+  });
+
+  it('uses the next Tier-1 sequence for a later turn', async () => {
+    const canvasId = 'acceptance-canvas';
+    const threadId = 'acceptance-later-turn';
+    const namespace = canvasAcpNamespace(canvasId);
+    const options = {
+      scope: 'ask' as const,
+      workloadType: 'Deployment' as const,
+      canvasId,
+      threadId,
+      context: priorContext([]),
+      envelope: ENVELOPE,
+    };
+    try {
+      await drain(runAgent(options));
+      const previousSeq = agenetes.logMetadata(namespace, threadId).eventCount;
+      const onTurnStarted = vi.fn();
+      await drain(runAgent({ ...options, onTurnStarted }));
+      expect(onTurnStarted).toHaveBeenCalledExactlyOnceWith({
+        threadId,
+        turnStartSeq: previousSeq + 1,
+      });
+    } finally {
+      agenetes.close(threadId);
+    }
   });
 });
 

@@ -20,86 +20,32 @@
  *     (+ derived snapshots) and the anchor node (+ its neighbourhood).
  */
 
+import { InkVisualPreparationError } from './prompt/required-ink-visuals.js';
 import { getSkill } from '../../../prompt/index.js';
 import { getNodeNeighbourhood } from '../../canvas/node-neighbourhood.js';
 import { describeNode } from '../../canvas/node-prompt.js';
-import { snapshotNodesToArtifacts } from '../../canvas/snapshot-nodes.js';
+import {
+  clusterToSvg,
+  filterSketchStrokes,
+  snapshotNodesToArtifacts,
+} from '../../canvas/snapshot-nodes.js';
 import { space } from '../../storage/index.js';
 import { isUserInvokableSkill } from '../skills.route.js';
 
-import type { NodeNeighbourhoodContext } from '../../canvas/node-neighbourhood.js';
 import type { NodeSnapshot } from '../../storage/index.js';
 import type { AgentNodePreview } from '../node-ref.js';
 import type {
+  AgentInputKind,
   ChatAttachment,
-  SelectedStrokeSubset,
+  ChatEnvelope,
+  ResolvedSkill,
   WireSelectionNode,
 } from '@huabu/shared';
+import type { CanvasNode } from '@huabu/shared/canvas-engine';
 import type { FastifyBaseLogger } from 'fastify';
 
-/** A user-invoked skill resolved to its body for this turn. */
-export interface ResolvedSkill {
-  id: string;
-  name: string;
-  body: string;
-}
-
-/** The structured context for one chat turn. */
-export interface ChatEnvelope {
-  /** What the user directly contributed this turn. */
-  user: {
-    text: string;
-    /** Off-canvas uploads carried in the request body. */
-    attachments: ChatAttachment[];
-  };
-  /** Capabilities the user invoked this turn. */
-  skills: {
-    /** Raw request ids, preserved for the persisted breadcrumb tag. */
-    invokedIds: string[];
-    /** Resolved, user-invokable skill bodies for the preamble. */
-    resolved: ResolvedSkill[];
-  };
-  /** Where the user pointed on the canvas + derived artifacts. */
-  focus: {
-    selection: {
-      /**
-       * Full reference list (frame children included) — the agent's
-       * up-front map of the selection, each enriched with a short
-       * `preview` line (server-side, same ladder as the neighbourhood).
-       */
-      refs: AgentNodePreview[];
-      /**
-       * Ids the user directly selected (top-level only, frame children
-       * excluded) — drives the reloaded user-message node chips so
-       * history shows the same selection the composer did.
-       */
-      selectedIds: string[];
-      /** Selection image attachments not consumed by a composite. */
-      imageAttachments: ChatAttachment[];
-      /** Composite PNG snapshots derived from selected sketch/image nodes. */
-      snapshotAttachments: ChatAttachment[];
-      /**
-       * Per-sketch-node partial stroke selections (the lassoed subset).
-       * Persisted with the envelope so history reload can re-surface
-       * “N strokes” + hover-highlight. Absent / empty = no partial
-       * selection (older persisted turns naturally lack it — zero
-       * migration).
-       */
-      strokeSubsets?: SelectedStrokeSubset[];
-    };
-    /**
-     * The node the request was anchored at (e.g. a question node), plus
-     * its surrounding neighbourhood. Present only for anchored turns.
-     * The anchor IS the user's focus, so its identity is named in the
-     * prompt; the neighbourhood disambiguates "this" / "above" refs.
-     */
-    anchor?: {
-      nodeId: string;
-      label?: string;
-      neighbourhood?: NodeNeighbourhoodContext;
-    };
-  };
-}
+export { InkVisualPreparationError } from './prompt/required-ink-visuals.js';
+export type { ChatEnvelope, ResolvedSkill } from '@huabu/shared';
 
 /**
  * Whether this turn carries any image content the model must be able to
@@ -119,6 +65,7 @@ export function envelopeHasImage(envelope: ChatEnvelope): boolean {
 export interface ChatEnvelopeParams {
   /** Raw user prompt text. */
   content: string;
+  inputKind?: AgentInputKind;
   /** User-uploaded (off-canvas) attachments from the request body. */
   attachments?: ChatAttachment[];
   /** Wire selection (top-level + frame children) for this turn. */
@@ -325,6 +272,7 @@ async function deriveSnapshotAttachments(
   selectionImageAttachments: ChatAttachment[],
   canvasId: string,
   logger: FastifyBaseLogger,
+  requireInkVisuals: boolean,
 ): Promise<{
   snapshotAttachments: ChatAttachment[];
   consumedImageIds: Set<string>;
@@ -344,6 +292,25 @@ async function deriveSnapshotAttachments(
   }
 
   try {
+    if (requireInkVisuals) {
+      const canvas = await space(canvasId).read();
+      const nodes = new Map(
+        ((canvas?.state.nodes ?? []) as CanvasNode[]).map((node) => [
+          node.id,
+          node,
+        ]),
+      );
+      for (const subset of strokeSubsets) {
+        const node = nodes.get(subset.nodeId);
+        if (
+          !node ||
+          node.type !== 'sketch' ||
+          !clusterToSvg([filterSketchStrokes(node, new Set(subset.strokeIds))])
+        ) {
+          throw new InkVisualPreparationError([subset.nodeId]);
+        }
+      }
+    }
     const rasterResults = await snapshotNodesToArtifacts({
       nodeIds: snapshotIds,
       canvasId,
@@ -390,7 +357,25 @@ async function deriveSnapshotAttachments(
         originNodeIds: r.originNodeIds,
       });
     }
+    if (requireInkVisuals) {
+      const representedIds = new Set(
+        snapshotAttachments.flatMap((attachment) =>
+          attachment.url ? (attachment.originNodeIds ?? []) : [],
+        ),
+      );
+      const missingIds = [...partialNodeIds].filter(
+        (nodeId) => !representedIds.has(nodeId),
+      );
+      if (missingIds.length > 0) {
+        throw new InkVisualPreparationError(missingIds);
+      }
+    }
   } catch (err) {
+    if (requireInkVisuals) {
+      throw err instanceof InkVisualPreparationError
+        ? err
+        : new InkVisualPreparationError([...partialNodeIds], { cause: err });
+    }
     logger.warn(
       { err, snapshotIds, canvasId },
       '[agent.route] selection auto-snapshot failed',
@@ -411,6 +396,7 @@ export async function buildChatEnvelope(
 ): Promise<ChatEnvelope> {
   const {
     content,
+    inputKind,
     attachments,
     selectedNodes,
     anchorNodeId,
@@ -418,6 +404,14 @@ export async function buildChatEnvelope(
     canvasId,
     logger,
   } = params;
+
+  const requireInkVisuals = inputKind === 'ink-intent';
+  const strokeSubsets = collectSketchStrokeSubsets(selectedNodes ?? []);
+  if (requireInkVisuals && (!canvasId || strokeSubsets.length === 0)) {
+    throw new InkVisualPreparationError(
+      strokeSubsets.map((subset) => subset.nodeId),
+    );
+  }
 
   // Focus: anchor neighbourhood for anchored requests (Workspace memory
   // now rides in the agent's system prompt). Stored structured; both
@@ -458,6 +452,7 @@ export async function buildChatEnvelope(
       selectionImageAttachments,
       canvasId,
       logger,
+      requireInkVisuals,
     );
     snapshotAttachments = derived.snapshotAttachments;
     consumedImageIds = derived.consumedImageIds;
@@ -473,6 +468,7 @@ export async function buildChatEnvelope(
   return {
     user: {
       text: content,
+      ...(inputKind ? { inputKind } : {}),
       attachments: attachments ?? [],
     },
     skills: {
@@ -485,9 +481,7 @@ export async function buildChatEnvelope(
         selectedIds: selectedNodes ? collectSelectedNodeIds(selectedNodes) : [],
         imageAttachments: dedupedImageAttachments,
         snapshotAttachments,
-        strokeSubsets: selectedNodes
-          ? collectSketchStrokeSubsets(selectedNodes)
-          : [],
+        strokeSubsets,
       },
       ...(anchor ? { anchor } : {}),
     },

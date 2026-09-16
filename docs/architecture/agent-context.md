@@ -25,6 +25,8 @@ Chat is deliberately thin: everything else (geometry / edges / content / screens
 
 Chat context is assembled by [conversation/](../../apps/server/src/modules/agent/conversation) into a `ChatEnvelope`, then serialised into pi-ai messages.
 
+The normalized user input kind is `text` or `ink-intent`. An `ink-intent` turn may have empty text but must contain at least one partial Sketch selection with non-empty `strokeIds`; its selected strokes are the user's request rather than merely optional context. Envelope construction and canonical rendering therefore require a real image part for every required partial-Ink source and reject before Agent invocation if snapshotting or inlining fails. Legacy text turns retain best-effort optional visual behavior.
+
 ```
 POST /api/agent (agent.route.ts)
   ├─ loadAgent(mode)                  # system prompt + tool set
@@ -99,6 +101,8 @@ The web retains `AgentConversationView` for anchored Question conversations. Its
 History, reconnect, `/api/agent`, tools, lifecycle writes, binding/mode, and change records use the conversation owner's Canvas. The Question is sent as `anchorNodeId`; Canvas selection is included only when it belongs to that same Canvas. Unbound Chat has no anchored conversation view and uses its session Canvas.
 
 First-turn composition requires `status: idle` and no non-empty authored `content` on the ordinary Question. No separately resolved World-reference content flag participates in this decision.
+
+For every anchored `/api/agent` request, the server resolves `(canvasId, threadId)` to the authoritative Question owner before constructing the envelope. A client anchor that differs from that node, or an anchor for a thread with no Question owner, is rejected; the resolved node also supplies the effective persisted mode and fixed binding policy.
 
 For both selection and anchor, the server enriches each node into an agent-facing object via the shared `describeNode` assembler (see §5) — `filename` (`nodes/<safeLabel>.md`) + `preview` (ladder `summary > content[:120] > src`) + `rev`, plus the parent label for frames. **No content / geometry sent** — content via `read("nodes/<id>.md")`, layout/style via `inspect_nodes`.
 

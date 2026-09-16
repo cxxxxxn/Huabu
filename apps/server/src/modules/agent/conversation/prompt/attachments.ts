@@ -35,6 +35,7 @@ import path from 'node:path';
 
 import { resolveImageUrl, MAX_INLINE_IMAGE_BYTES } from './image-inlining.js';
 import { escapeXmlAttr, escapeXmlText } from './node-element.js';
+import { InkVisualPreparationError } from './required-ink-visuals.js';
 import { isRasterizableImageMime } from '../../../../utils/mime.js';
 import { ARTIFACT_URL_REGEX } from '../../../artifact/utils.js';
 import { space } from '../../../storage/index.js';
@@ -65,8 +66,10 @@ export type UserContent = string | ContentPart[];
 export async function buildAttachmentParts(
   attachments: ChatAttachment[],
   canvasId: string | null,
+  opts: { requiredImageNodeIds?: readonly string[] } = {},
 ): Promise<ContentPart[]> {
   const parts: ContentPart[] = [];
+  const missingImageNodeIds = new Set(opts.requiredImageNodeIds);
 
   for (const att of attachments) {
     const label = att.label ?? att.filename ?? 'attachment';
@@ -102,13 +105,27 @@ export async function buildAttachmentParts(
         }
         // Resolve image URL to base64 for vision
         if (att.url) {
-          const resolved = await resolveImageUrl(att.url, canvasId);
+          const resolved = await resolveImageUrl(att.url, canvasId).catch(
+            (cause: unknown) => {
+              const requiredIds = originIds.filter((nodeId) =>
+                missingImageNodeIds.has(nodeId),
+              );
+              if (requiredIds.length > 0) {
+                throw new InkVisualPreparationError(requiredIds, { cause });
+              }
+              throw cause;
+            },
+          );
           if (resolved.kind === 'inline') {
             parts.push({
               type: 'image',
               data: resolved.data,
               mimeType: resolved.mimeType,
             });
+            if (resolved.data.length > 0) {
+              for (const nodeId of originIds)
+                missingImageNodeIds.delete(nodeId);
+            }
           } else if (resolved.reason === 'too_large') {
             // Don't silently drop a too-large image — tell the agent
             // exactly why and how to recover. The placeholder carries the
@@ -250,6 +267,9 @@ export async function buildAttachmentParts(
         break;
       }
     }
+  }
+  if (missingImageNodeIds.size > 0) {
+    throw new InkVisualPreparationError([...missingImageNodeIds]);
   }
   return parts;
 }

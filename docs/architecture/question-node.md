@@ -143,6 +143,8 @@ As the canvas zooms out, a question node's agent mark **takes over** as the node
 
 All questions run through `/api/agent` ([agent.ts](../../apps/web/src/api/agent.ts) → [AgentThreadService](../../apps/server/src/modules/agent/agent-thread.service.ts)). `useAgentStream` awaits acknowledged node creation and the latest draft save before resolving the owner-first binding and dispatching:
 
+The server resolves the request's `(canvasId, threadId)` against current Canvas state before using an `anchorNodeId`. That resolved Question is authoritative for the neighbourhood anchor and persisted mode; a mismatched anchor or a thread with no Question owner is rejected rather than combining one conversation's Agent with another node's spatial context.
+
 - **internal**: built-in Huabu Agent, `agentMode` = `operate` (default) / `ask`
 - **external**: ACP agent resolved server-side from `profileId`
 

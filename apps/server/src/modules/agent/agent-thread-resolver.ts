@@ -228,12 +228,10 @@ export class AgentThreadResolver {
       nodeId: node.id as CanvasNodeId,
       threadId,
       agentBinding: parsedBinding.data,
+      agentMode: node.data.agentMode === 'operate' ? 'operate' : 'ask',
       ...(launchOverrides ? { launchOverrides } : {}),
       status: getQuestionNodeStatus(node.data),
       content,
-      ...(node.data?.agentMode === 'ask' || node.data?.agentMode === 'operate'
-        ? { agentMode: node.data.agentMode }
-        : {}),
       ...(node.data?.bindingState === 'bound' ||
       node.data?.bindingState === 'editing'
         ? { bindingState: node.data.bindingState }

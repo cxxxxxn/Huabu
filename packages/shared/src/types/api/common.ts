@@ -78,11 +78,6 @@ export interface ContextTokensResponse {
   fromProvider: boolean;
 }
 
-/** Response for `POST /api/agent/stop/:threadId`. */
-export interface StopThreadResponse {
-  stopped: boolean;
-}
-
 /** Response for `POST /api/llm/oauth/logout`. */
 export interface OAuthLogoutResponse {
   ok: true;

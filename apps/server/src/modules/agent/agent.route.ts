@@ -18,6 +18,7 @@ import {
 } from '@agenetes/agenetes';
 
 import {
+  AGENT_HOST_SSE_EVENTS,
   AGENT_SSE_EVENTS,
   agentCanvasIdQuerySchema,
   agentHistoryPageParamsSchema,
@@ -37,11 +38,16 @@ import { agentThreadResolver } from './agent-thread-resolver.js';
 import conversationTitleRoutes from './conversation-title.route.js';
 import { ExternalAgentRealizationError } from '../agent/acp/external-agent-realization.js';
 import { agenetes, INTERNAL_DRIVER_KIND } from '../agent/agenetes/drivers.js';
+import { InkModelCapabilityError } from '../agent/agent-submission.js';
+import { AgentThreadResolutionError } from '../agent/agent-thread-resolver.js';
 import {
   AgentThreadBusyError,
   agentThreadService,
 } from '../agent/agent-thread.service.js';
-import { buildChatEnvelope } from '../agent/conversation/envelope.js';
+import {
+  buildChatEnvelope,
+  InkVisualPreparationError,
+} from '../agent/conversation/envelope.js';
 import { buildHistoryFromTurns } from '../agent/conversation/transcript/history.js';
 import { getLLMModel } from '../agent/llm.js';
 import { canvasAcpNamespace } from '../workspace/paths.js';
@@ -52,6 +58,7 @@ import type {
   AgentHistoryPageParams,
   AgentHistoryPageQuery,
   AgentHistoryPageResponse,
+  AgentHostStreamEvent,
   AgentRequest,
   AgentStreamEvent,
   ApiResult,
@@ -352,13 +359,17 @@ const agentRoutes: FastifyPluginAsync = async (
    */
   fastify.post<{
     Params: { threadId: string };
+    Querystring: AgentCanvasIdQuery;
     Reply: ApiResult<StopThreadResponse>;
   }>('/stop/:threadId', async function (request, reply) {
     const { threadId } = request.params;
-    if (agentThreadService.stop(threadId)) {
-      return reply.send({ stopped: true });
+    const parsedQuery = agentCanvasIdQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return reply.code(400).send({ message: 'Invalid query parameters' });
     }
-    return reply.send({ stopped: false });
+    return reply.send(
+      await agentThreadService.stopAndWait(threadId, parsedQuery.data.canvasId),
+    );
   });
 
   /**
@@ -650,6 +661,7 @@ const agentRoutes: FastifyPluginAsync = async (
         .send({ message: parsed.error.issues[0]?.message ?? 'Invalid body' });
     }
     const {
+      inputKind,
       content,
       threadId,
       mode = 'ask',
@@ -664,11 +676,54 @@ const agentRoutes: FastifyPluginAsync = async (
     } = parsed.data;
 
     const resolvedThreadId = getOrCreateThreadId(threadId);
-    const fixedTarget = await agentThreadService.resolveFixedTarget(
-      canvasId,
+    const preparation = agentThreadService.beginPreparation(
       resolvedThreadId,
+      canvasId,
     );
-    const effectiveBinding = fixedTarget?.agentBinding ?? agentBinding;
+    let preparationFinished = false;
+    const finishPreparation = () => {
+      if (preparationFinished) return;
+      preparationFinished = true;
+      preparation.finish();
+    };
+    reply.raw.once('close', finishPreparation);
+    let fixedTarget;
+    let agentTarget;
+    try {
+      fixedTarget = await agentThreadService.resolveFixedTarget(
+        canvasId,
+        resolvedThreadId,
+      );
+      agentTarget =
+        fixedTarget ??
+        (await agentThreadService.resolveTarget(canvasId, resolvedThreadId));
+    } catch (error) {
+      if (error instanceof AgentThreadResolutionError) {
+        return reply
+          .code(error.code === 'canvas_not_found' ? 404 : 409)
+          .send({ message: error.message, code: error.code });
+      }
+      throw error;
+    }
+    if (
+      anchorNodeId !== undefined &&
+      (!agentTarget || anchorNodeId !== agentTarget.nodeId)
+    ) {
+      return reply.code(409).send({
+        message: agentTarget
+          ? `Thread ${resolvedThreadId} belongs to Question ${agentTarget.nodeId}, not ${anchorNodeId}`
+          : `Thread ${resolvedThreadId} has no Question owner for anchor ${anchorNodeId}`,
+        code: 'conversation_owner_mismatch',
+      });
+    }
+    const effectiveMode = agentTarget?.agentMode ?? mode;
+    const effectiveBinding = agentThreadService.resolveBinding({
+      canvasId,
+      threadId: resolvedThreadId,
+      requestBinding: agentBinding,
+      agentTarget,
+      fixedTarget,
+    });
     if (effectiveBinding?.kind === 'external') {
       request.log.info(
         {
@@ -698,10 +753,11 @@ const agentRoutes: FastifyPluginAsync = async (
     // transcript (it is re-derived from the envelope on reload).
     const envelope = () =>
       buildChatEnvelope({
+        inputKind,
         content,
         attachments,
         selectedNodes: canvasContext?.selectedNodes,
-        anchorNodeId: fixedTarget?.nodeId ?? anchorNodeId,
+        anchorNodeId: agentTarget?.nodeId ?? anchorNodeId,
         invokedSkills,
         canvasId: canvasId ?? null,
         logger: request.log,
@@ -714,7 +770,7 @@ const agentRoutes: FastifyPluginAsync = async (
       mode:
         effectiveBinding?.kind === 'external'
           ? `external:${effectiveBinding.alias}`
-          : mode,
+          : effectiveMode,
       logger: request.log,
     };
 
@@ -724,12 +780,14 @@ const agentRoutes: FastifyPluginAsync = async (
         threadId: resolvedThreadId,
         canvasId,
         content,
-        mode,
+        mode: effectiveMode,
         envelope,
         requestBinding: agentBinding,
+        agentTarget,
         fixedTarget,
         modelId,
         reasoningEffort,
+        signal: preparation.signal,
         logger: request.log,
         debugPrompt,
       });
@@ -749,8 +807,24 @@ const agentRoutes: FastifyPluginAsync = async (
           code: error.code,
         });
       }
+      if (
+        error instanceof InkVisualPreparationError ||
+        error instanceof InkModelCapabilityError
+      ) {
+        return reply.code(409).send({
+          message: error.message,
+          code: error.code,
+        });
+      }
+      if (preparation.signal.aborted) {
+        return reply.code(409).send({
+          message: 'The Agent request was stopped before execution.',
+          code: 'request_stopped',
+        });
+      }
       throw error;
     }
+    finishPreparation();
 
     try {
       // SSE streaming
@@ -768,7 +842,7 @@ const agentRoutes: FastifyPluginAsync = async (
       // Send thread ID
       const metaEvent: AgentStreamEvent = {
         type: AGENT_SSE_EVENTS.Meta,
-        data: { threadId: resolvedThreadId, mode },
+        data: { threadId: resolvedThreadId, mode: effectiveMode },
       };
       writeSSE(reply.raw, metaEvent);
     } catch (error) {
@@ -779,7 +853,7 @@ const agentRoutes: FastifyPluginAsync = async (
     // Emit an event to the connected client. Reconnecting clients replay
     // from L2's tail (see `/stream`), so there is no host-side buffer or
     // subscriber fan-out to maintain here.
-    const emit = (event: AgentStreamEvent) => {
+    const emit = (event: AgentHostStreamEvent) => {
       if (clientConnected) {
         writeSSE(reply.raw, event);
       }
@@ -798,6 +872,15 @@ const agentRoutes: FastifyPluginAsync = async (
     reply.raw.once('close', onDisconnect);
     socket?.once('close', onDisconnect);
 
+    const acceptanceForwarded = invocation.acceptance.then((acceptance) => {
+      if (acceptance) {
+        emit({
+          type: AGENT_HOST_SSE_EVENTS.Accepted,
+          data: acceptance,
+        });
+      }
+    });
+
     try {
       // Consume the dispatch stream, forwarding events to the connected
       // client. L2 tees every event into the Tier-1 log and folds the
@@ -809,6 +892,7 @@ const agentRoutes: FastifyPluginAsync = async (
       const iterator = invocation.events[Symbol.asyncIterator]();
       while (true) {
         const { value, done } = await iterator.next();
+        await acceptanceForwarded;
         if (done) break;
         if (invocation.signal.aborted) continue;
         emit(value);
@@ -819,6 +903,7 @@ const agentRoutes: FastifyPluginAsync = async (
       }
     } catch (error) {
       if (!invocation.signal.aborted) {
+        await acceptanceForwarded;
         request.log.error(error);
         const errorMsg =
           error instanceof Error ? error.message : 'Internal Error';

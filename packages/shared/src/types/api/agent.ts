@@ -177,65 +177,102 @@ export const agentBindingSchema = z.discriminatedUnion('kind', [
   }),
 ]) satisfies z.ZodType<AgentBinding>;
 
+export const agentInputKindSchema = z.enum(['text', 'ink-intent']);
+export type AgentInputKind = z.infer<typeof agentInputKindSchema>;
+
+function hasPartialSketchSelection(nodes: WireSelectionNode[]): boolean {
+  return nodes.some(
+    (node) =>
+      (node.type === 'sketch' &&
+        !!node.strokeIds?.length &&
+        node.strokeIds.every((strokeId) => strokeId.trim().length > 0)) ||
+      (node.type === 'frame' && hasPartialSketchSelection(node.children ?? [])),
+  );
+}
+
 /** Body for `POST /api/agent`. */
-export const agentRequestSchema = z.object({
-  content: z.string().min(1, 'Message content is required'),
-  threadId: z.string().min(1).optional(),
-  mode: z.enum(['ask', 'operate']).optional(),
-  canvasContext: agentChatContextSchema.optional(),
-  canvasId: z.string().min(1).optional(),
-  attachments: z.array(chatAttachmentSchema).optional(),
-  /**
-   * Anchor a node-neighbourhood preamble to this node id. When set,
-   * the server resolves the node's surrounding-canvas context (see
-   * `getNodeNeighbourhood` / `renderNodeNeighbourhoodMarkdown`) and
-   * pushes a `[SYSTEM Context]` preamble — rendered from the Ask
-   * agent's `nodeNeighbourhoodPreamble` template — before the actual
-   * user message. Sent today by `useQuestionRunner` so the prompt
-   * wording and the (potentially large) spatial graph stay off the
-   * wire and out of the frontend bundle. Anchor-type agnostic; can
-   * back any future "describe what's around X" flow.
-   */
-  anchorNodeId: z.string().min(1).optional(),
-  /**
-   * Thread-level agent binding. When omitted or `{ kind: 'internal' }`
-   * the request is dispatched to Huabu's built-in agent loop
-   * (`runAgent`). When `{ kind: 'external', alias, profileId }`
-   * the request is dispatched to the ACP service, which resolves the
-   * profile to a live agent (spawning one via the daemon if needed).
-   * Carried per-request so the server is stateless about thread bindings;
-   * the persistent ChatStore on the client is the source of truth.
-   */
-  agentBinding: agentBindingSchema.optional(),
-  /**
-   * User-invoked skill ids parsed from leading `/<id>` tokens in the
-   * chat input (see `useInternalSlashCommands` on the web side). The
-   * server fetches each skill's body and prepends a dedicated SYSTEM
-   * preamble for this turn, forcing the agent to apply the skill
-   * instead of relying on it to discover the skill via the catalogue.
-   *
-   * Mirrors Claude Code's "explicitly invoked skill" semantics: when
-   * the user types `/canvas-memory`, the corresponding SKILL.md body
-   * is guaranteed to be in context.
-   *
-   * Server-side rules:
-   *  - Only `user` / `merged` skills are honoured. Unknown or
-   *    system-only ids are dropped silently (with a log line) so a
-   *    stale client cannot smuggle system skills into the turn.
-   *  - Capped at 8 to keep the context budget sane.
-   */
-  invokedSkills: z.array(z.string().min(1)).max(8).optional(),
-  /**
-   * Built-in agent per-thread capability selection carried with this
-   * turn. Lets the client apply a model / reasoning-effort picked before
-   * the thread's first message (when the per-thread settings endpoints
-   * have no persisted record to target yet). Ignored for external (ACP)
-   * bindings. `reasoningEffort` accepts pi thinking levels plus `off`
-   * (the "Auto" / model-default choice).
-   */
-  modelId: z.string().min(1).optional(),
-  reasoningEffort: z.enum(REASONING_EFFORT_VALUES).optional(),
-});
+export const agentRequestSchema = z
+  .object({
+    inputKind: agentInputKindSchema.optional(),
+    content: z.string(),
+    threadId: z.string().min(1).optional(),
+    mode: z.enum(['ask', 'operate']).optional(),
+    canvasContext: agentChatContextSchema.optional(),
+    canvasId: z.string().min(1).optional(),
+    attachments: z.array(chatAttachmentSchema).optional(),
+    /**
+     * Anchor a node-neighbourhood preamble to this node id. When set,
+     * the server resolves the node's surrounding-canvas context (see
+     * `getNodeNeighbourhood` / `renderNodeNeighbourhoodMarkdown`) and
+     * pushes a `[SYSTEM Context]` preamble — rendered from the Ask
+     * agent's `nodeNeighbourhoodPreamble` template — before the actual
+     * user message. Sent today by `useQuestionRunner` so the prompt
+     * wording and the (potentially large) spatial graph stay off the
+     * wire and out of the frontend bundle. Anchor-type agnostic; can
+     * back any future "describe what's around X" flow.
+     */
+    anchorNodeId: z.string().min(1).optional(),
+    /**
+     * Thread-level agent binding. When omitted or `{ kind: 'internal' }`
+     * the request is dispatched to Huabu's built-in agent loop
+     * (`runAgent`). When `{ kind: 'external', alias, profileId }`
+     * the request is dispatched to the ACP service, which resolves the
+     * profile to a live agent (spawning one via the daemon if needed).
+     * Carried per-request so the server is stateless about thread bindings;
+     * the persistent ChatStore on the client is the source of truth.
+     */
+    agentBinding: agentBindingSchema.optional(),
+    /**
+     * User-invoked skill ids parsed from leading `/<id>` tokens in the
+     * chat input (see `useInternalSlashCommands` on the web side). The
+     * server fetches each skill's body and prepends a dedicated SYSTEM
+     * preamble for this turn, forcing the agent to apply the skill
+     * instead of relying on it to discover the skill via the catalogue.
+     *
+     * Mirrors Claude Code's "explicitly invoked skill" semantics: when
+     * the user types `/canvas-memory`, the corresponding SKILL.md body
+     * is guaranteed to be in context.
+     *
+     * Server-side rules:
+     *  - Only `user` / `merged` skills are honoured. Unknown or
+     *    system-only ids are dropped silently (with a log line) so a
+     *    stale client cannot smuggle system skills into the turn.
+     *  - Capped at 8 to keep the context budget sane.
+     */
+    invokedSkills: z.array(z.string().min(1)).max(8).optional(),
+    /**
+     * Built-in agent per-thread capability selection carried with this
+     * turn. Lets the client apply a model / reasoning-effort picked before
+     * the thread's first message (when the per-thread settings endpoints
+     * have no persisted record to target yet). Ignored for external (ACP)
+     * bindings. `reasoningEffort` accepts pi thinking levels plus `off`
+     * (the "Auto" / model-default choice).
+     */
+    modelId: z.string().min(1).optional(),
+    reasoningEffort: z.enum(REASONING_EFFORT_VALUES).optional(),
+  })
+  .superRefine((request, context) => {
+    if (request.inputKind !== 'ink-intent') {
+      if (request.content.length === 0) {
+        context.addIssue({
+          code: 'custom',
+          path: ['content'],
+          message: 'Message content is required',
+        });
+      }
+      return;
+    }
+    if (
+      !request.canvasId ||
+      !hasPartialSketchSelection(request.canvasContext?.selectedNodes ?? [])
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['canvasContext'],
+        message: 'Ink requests require a Canvas and selected Sketch strokes',
+      });
+    }
+  });
 export type AgentRequest = z.infer<typeof agentRequestSchema>;
 
 /** Querystring for `GET /api/agent/history` and `/api/agent/context-tokens`. */
@@ -267,3 +304,15 @@ export interface ForkThreadResponse {
   /** False when the source thread had no persisted history to copy. */
   forked: boolean;
 }
+
+export const agentTurnAcceptedSchema = z.object({
+  threadId: z.string().min(1),
+  turnStartSeq: z.number().int().positive(),
+});
+export type AgentTurnAccepted = z.infer<typeof agentTurnAcceptedSchema>;
+
+export const stopThreadResponseSchema = z.object({
+  stopped: z.boolean(),
+  acceptance: agentTurnAcceptedSchema.nullable(),
+});
+export type StopThreadResponse = z.infer<typeof stopThreadResponseSchema>;

@@ -26,9 +26,11 @@
  */
 
 import { buildAttachmentParts } from './attachments.js';
+import { INK_INTENT_DIRECTIVE } from './ink-intent.js';
 import { renderInvokedSkillsSection } from './invoked-skills.js';
 import { renderNeighbourhoodSection } from './neighbourhood.js';
 import { INTERNAL_PROFILE } from './profile.js';
+import { InkVisualPreparationError } from './required-ink-visuals.js';
 import { renderSelectedNodesSection } from './selected-nodes.js';
 import { renderSketchRasterHint } from './sketch-hint.js';
 import { chatEnvelopeFromSubmission } from '../../agenetes/handle.js';
@@ -100,6 +102,22 @@ export async function renderTurn(
   const { imageAttachments, snapshotAttachments } = env.focus.selection;
   const uploads = env.user.attachments;
   const selection = [...imageAttachments, ...snapshotAttachments];
+  const isInkIntent = env.user.inputKind === 'ink-intent';
+  const requiredImageNodeIds = isInkIntent
+    ? [
+        ...new Set(
+          (env.focus.selection.strokeSubsets ?? [])
+            .filter((subset) => subset.strokeIds.length > 0)
+            .map((subset) => subset.nodeId),
+        ),
+      ]
+    : [];
+  if (
+    isInkIntent &&
+    (!profile.includeSelectionVisuals || requiredImageNodeIds.length === 0)
+  ) {
+    throw new InkVisualPreparationError(requiredImageNodeIds);
+  }
 
   const skillsSection = renderInvokedSkillsSection(env.skills.resolved);
   const selectedNodesSection = renderSelectedNodesSection(
@@ -117,10 +135,19 @@ export async function renderTurn(
     ? renderNeighbourhoodSection(env.focus.anchor, profile)
     : undefined;
   const hasContext = Boolean(
-    skillsSection || selectedNodesSection || neighbourhoodSection,
+    isInkIntent ||
+    skillsSection ||
+    selectedNodesSection ||
+    neighbourhoodSection,
   );
-  const selectionParts =
-    profile.includeSelectionVisuals && selection.length > 0
+  const selectionParts = isInkIntent
+    ? [
+        ...(await buildAttachmentParts(imageAttachments, canvasId)),
+        ...(await buildAttachmentParts(snapshotAttachments, canvasId, {
+          requiredImageNodeIds,
+        })),
+      ]
+    : profile.includeSelectionVisuals && selection.length > 0
       ? await buildAttachmentParts(selection, canvasId ?? null)
       : [];
   const uploadParts =
@@ -152,6 +179,7 @@ export async function renderTurn(
   }
 
   const parts: ContentPart[] = [];
+  if (isInkIntent) parts.push({ type: 'text', text: INK_INTENT_DIRECTIVE });
   if (skillsSection) parts.push({ type: 'text', text: skillsSection });
   if (selectedNodesSection) {
     parts.push({ type: 'text', text: selectedNodesSection });

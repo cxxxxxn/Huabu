@@ -67,6 +67,57 @@ function buildInternal(turns: AgentTurn[]): ChatHistoryItem[] {
 }
 
 describe('buildHistoryFromTurns', () => {
+  it.each([undefined, 'text'] as const)(
+    'keeps honest text history for %s',
+    (inputKind) => {
+      const envelope = makeEnvelope('hello');
+      if (inputKind) envelope.user.inputKind = inputKind;
+      expect(
+        build([{ request: createChatSubmission(envelope), transcript: [] }]),
+      ).toStrictEqual([
+        { role: 'user', content: 'hello', ...(inputKind ? { inputKind } : {}) },
+      ]);
+    },
+  );
+
+  it('projects Ink kind and stroke sources without synthetic user text or the directive', () => {
+    const envelope = makeEnvelope('');
+    envelope.user.inputKind = 'ink-intent';
+    envelope.focus.selection.selectedIds = ['ink-1', 'note-1'];
+    envelope.focus.selection.strokeSubsets = [
+      { nodeId: 'ink-1', strokeIds: ['stroke-1'] },
+    ];
+    envelope.focus.selection.snapshotAttachments = [
+      {
+        type: 'image',
+        source: 'selection',
+        url: 'ink.png',
+        originNodeIds: ['ink-1'],
+      },
+    ];
+    const request = createChatSubmission(envelope, [
+      { type: 'text', text: '<ink_intent>host directive</ink_intent>' },
+    ]);
+
+    expect(build([{ request, transcript: [] }])).toStrictEqual([
+      {
+        role: 'user',
+        content: '',
+        inputKind: 'ink-intent',
+        selectedNodeIds: ['ink-1', 'note-1'],
+        selectedStrokeIds: [{ nodeId: 'ink-1', strokeIds: ['stroke-1'] }],
+      },
+    ]);
+  });
+
+  it('retains the Ink user row even when source chips are unavailable', () => {
+    const envelope = makeEnvelope('');
+    envelope.user.inputKind = 'ink-intent';
+    expect(
+      build([{ request: createChatSubmission(envelope), transcript: [] }]),
+    ).toStrictEqual([{ role: 'user', content: '', inputKind: 'ink-intent' }]);
+  });
+
   it('rebuilds the user bubble from the envelope and assistant text from the transcript', () => {
     const out = build([
       makeTurn('hello there', [

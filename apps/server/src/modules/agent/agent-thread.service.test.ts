@@ -7,7 +7,10 @@ vi.mock('./memory/index.js', () => ({
   readWorkspaceMemory: () => '',
 }));
 
-import { createInteractiveViewSubmission } from './agenetes/handle.js';
+import {
+  createChatSubmission,
+  createInteractiveViewSubmission,
+} from './agenetes/handle.js';
 import {
   AgentThreadBusyError,
   AgentThreadService,
@@ -25,6 +28,7 @@ import type { ChatEnvelope } from './conversation/envelope.js';
 import type {
   AgentBinding,
   AgentStreamEvent,
+  AgentTurnAccepted,
   CanvasNodeId,
 } from '@huabu/shared';
 import type { FastifyBaseLogger } from 'fastify';
@@ -94,6 +98,8 @@ function createHarness(options?: {
   persistedSpacePrompt?: { realised: boolean; markdown?: string };
   collectedSpacePrompt?: string;
   canonicalBinding?: AgentBinding;
+  acceptance?: AgentTurnAccepted;
+  internalGate?: Promise<void>;
 }) {
   const release = vi.fn();
   const startLifecycle = options?.startError
@@ -103,23 +109,32 @@ function createHarness(options?: {
     ? vi.fn().mockRejectedValue(options.finishError)
     : vi.fn().mockResolvedValue(undefined);
   const failLifecycle = vi.fn().mockResolvedValue(undefined);
-  const runExternal = vi.fn((runOptions: { onTurnStarted?: () => void }) => {
-    runOptions.onTurnStarted?.();
-    return events(
-      options?.externalEvents ?? [
-        { type: 'text_delta', data: { content: 'Result' } },
-        { type: 'done', data: { message: 'Done' } },
-      ],
-    );
-  });
-  const runInternal = vi.fn((runOptions: { onTurnStarted?: () => void }) => {
-    runOptions.onTurnStarted?.();
-    async function* emptyInternalStream(): ReturnType<typeof runAgent> {
-      yield* [];
-      return [];
-    }
-    return emptyInternalStream();
-  });
+  const runExternal = vi.fn(
+    (runOptions: {
+      onTurnStarted?: (acceptance?: AgentTurnAccepted) => void;
+    }) => {
+      runOptions.onTurnStarted?.(options?.acceptance);
+      return events(
+        options?.externalEvents ?? [
+          { type: 'text_delta', data: { content: 'Result' } },
+          { type: 'done', data: { message: 'Done' } },
+        ],
+      );
+    },
+  );
+  const runInternal = vi.fn(
+    (runOptions: {
+      onTurnStarted?: (acceptance?: AgentTurnAccepted) => void;
+    }) => {
+      runOptions.onTurnStarted?.(options?.acceptance);
+      async function* emptyInternalStream(): ReturnType<typeof runAgent> {
+        await options?.internalGate;
+        yield* [];
+        return [];
+      }
+      return emptyInternalStream();
+    },
+  );
   const collectSpacePrompt = vi.fn().mockResolvedValue({
     markdown: options?.collectedSpacePrompt ?? 'Space prompt',
     diagnostics: {
@@ -546,6 +561,27 @@ describe('AgentThreadService', () => {
     expect(externalBindingFromWorkloadSpec({ binding: {} })).toBeNull();
   });
 
+  it('uses the same persisted binding resolution before preparation and invocation', () => {
+    const persistedBinding = {
+      kind: 'external' as const,
+      profileId: 'profile-persisted',
+      alias: 'Persisted Agent',
+    };
+    const harness = createHarness({
+      target: null,
+      persistedBinding,
+    });
+
+    expect(
+      harness.service.resolveBinding({
+        canvasId: 'canvas-a',
+        threadId: 'thread-a',
+        requestBinding: { kind: 'internal' },
+        fixedTarget: null,
+      }),
+    ).toEqual(persistedBinding);
+  });
+
   it('reads built-in Space Prompt snapshots without inferring from ACP preambles', () => {
     expect(
       spacePromptFromWorkloadSpec({
@@ -596,7 +632,8 @@ describe('AgentThreadService', () => {
   });
 
   it('uses persisted fixed binding and overrides under one leased lifecycle', async () => {
-    const harness = createHarness();
+    const acceptance = { threadId: 'thread-a', turnStartSeq: 3 };
+    const harness = createHarness({ acceptance });
     const invocation = await harness.service.invoke(invocationOptions());
 
     expect(harness.startLifecycle).toHaveBeenCalledWith(
@@ -696,6 +733,76 @@ describe('AgentThreadService', () => {
         spacePrompt: 'Space prompt',
       }),
     );
+  });
+
+  it('uses the persisted Question mode instead of a request-side elevation', async () => {
+    const target: FixedAgentNodeTarget = {
+      ...TARGET,
+      agentBinding: { kind: 'internal' },
+      agentMode: 'ask',
+    };
+    const harness = createHarness({ target });
+    const invocation = await harness.service.invoke({
+      ...invocationOptions(),
+      mode: 'operate',
+      requestBinding: { kind: 'internal' },
+      fixedTarget: target,
+    });
+
+    for await (const _event of invocation.events) {
+      // Drain the canonical invocation stream.
+    }
+
+    expect(harness.runInternal).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: 'ask' }),
+    );
+  });
+
+  it('realizes and dispatches Ink through an external target', async () => {
+    const acceptance = { threadId: 'thread-a', turnStartSeq: 3 };
+    const harness = createHarness({ acceptance });
+    const envelope: ChatEnvelope = {
+      ...ENVELOPE,
+      user: { ...ENVELOPE.user, inputKind: 'ink-intent' },
+    };
+
+    const invocation = await harness.service.invoke({
+      ...invocationOptions(),
+      envelope,
+      submission: createChatSubmission(envelope, [
+        { type: 'text', text: 'Prepared Ink request' },
+      ]),
+    });
+    for await (const _event of invocation.events) {
+      // Drain the external invocation.
+    }
+
+    expect(harness.realizeExternal).toHaveBeenCalledOnce();
+    expect(harness.runExternal).toHaveBeenCalledWith(
+      expect.objectContaining({ envelope }),
+    );
+    expect(harness.startLifecycle).toHaveBeenCalledOnce();
+    await expect(invocation.acceptance).resolves.toEqual(acceptance);
+  });
+
+  it('preserves the durable acceptance identity outside the Agent event log', async () => {
+    const acceptance = { threadId: 'thread-a', turnStartSeq: 3 };
+    const target: FixedAgentNodeTarget = {
+      ...TARGET,
+      agentBinding: { kind: 'internal' },
+    };
+    const harness = createHarness({ target, acceptance });
+    const invocation = await harness.service.invoke({
+      ...invocationOptions(),
+      requestBinding: { kind: 'internal' },
+      fixedTarget: target,
+    });
+
+    for await (const _event of invocation.events) {
+      // Drain the canonical invocation stream.
+    }
+
+    await expect(invocation.acceptance).resolves.toEqual(acceptance);
   });
 
   it('collects a Space Prompt for a selectable built-in Agent Node', async () => {
@@ -833,6 +940,54 @@ describe('AgentThreadService', () => {
     await invocation.dispose();
   });
 
+  it('reports durable acceptance while stopping an active invocation', async () => {
+    const acceptance = { threadId: 'thread-a', turnStartSeq: 4 };
+    let releaseRun!: () => void;
+    const internalGate = new Promise<void>((resolve) => {
+      releaseRun = resolve;
+    });
+    const harness = createHarness({
+      acceptance,
+      agentTarget: SELECTABLE_TARGET,
+      target: null,
+      internalGate,
+    });
+    const invocation = await harness.service.invoke({
+      ...invocationOptions(),
+      fixedTarget: null,
+      requestBinding: { kind: 'internal' },
+    });
+    const draining = invocation.events.next();
+    await invocation.acceptance;
+
+    await expect(harness.service.stopAndWait('thread-a')).resolves.toEqual({
+      stopped: true,
+      acceptance,
+    });
+    releaseRun();
+    await draining;
+  });
+
+  it('does not wait for acceptance when stopped before lazy stream consumption', async () => {
+    const harness = createHarness({
+      acceptance: { threadId: 'thread-a', turnStartSeq: 4 },
+      agentTarget: SELECTABLE_TARGET,
+      target: null,
+    });
+    const invocation = await harness.service.invoke({
+      ...invocationOptions(),
+      fixedTarget: null,
+      requestBinding: { kind: 'internal' },
+    });
+
+    await expect(harness.service.stopAndWait('thread-a')).resolves.toEqual({
+      stopped: true,
+      acceptance: null,
+    });
+    expect(invocation.signal.aborted).toBe(true);
+    await invocation.dispose();
+  });
+
   it('registers before lifecycle start and exposes durable turn readiness', async () => {
     const startLifecycle = vi.fn(async () => {
       expect(service.isActive('thread-a', 'canvas-a')).toBe(true);
@@ -892,4 +1047,90 @@ describe('AgentThreadService', () => {
     await expect(readiness).resolves.toBe(false);
     expect(harness.service.isActive('thread-a', 'canvas-a')).toBe(false);
   });
+});
+
+it('does not stop an invocation owned by another Canvas', async () => {
+  let releaseGate!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+  const harness = createHarness({
+    target: null,
+    agentTarget: null,
+    internalGate: gate,
+  });
+  const invocation = await harness.service.invoke({
+    ...invocationOptions(),
+    requestBinding: { kind: 'internal' },
+    fixedTarget: null,
+    agentTarget: null,
+  });
+  const draining = (async () => {
+    for await (const _event of invocation.events) {
+      // Keep the invocation active until the gate is released.
+    }
+  })();
+
+  await expect(
+    harness.service.stopAndWait('thread-a', 'canvas-b'),
+  ).resolves.toEqual({ stopped: false, acceptance: null });
+  expect(invocation.signal.aborted).toBe(false);
+
+  releaseGate();
+  await draining;
+});
+
+it('stops pending preparation before durable invocation starts', async () => {
+  const harness = createHarness({ target: null, agentTarget: null });
+  const preparation = harness.service.beginPreparation('thread-a', 'canvas-a');
+
+  await expect(
+    harness.service.stopAndWait('thread-a', 'canvas-a'),
+  ).resolves.toEqual({ stopped: true, acceptance: null });
+  expect(preparation.signal.aborted).toBe(true);
+  await expect(
+    harness.service.invoke({
+      ...invocationOptions(),
+      requestBinding: { kind: 'internal' },
+      fixedTarget: null,
+      agentTarget: null,
+      signal: preparation.signal,
+    }),
+  ).rejects.toMatchObject({ name: 'AbortError' });
+  expect(harness.runInternal).not.toHaveBeenCalled();
+  preparation.finish();
+});
+
+it('stops pending preparation together with an active turn', async () => {
+  let releaseGate!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+  const harness = createHarness({
+    target: null,
+    agentTarget: null,
+    internalGate: gate,
+  });
+  const invocation = await harness.service.invoke({
+    ...invocationOptions(),
+    requestBinding: { kind: 'internal' },
+    fixedTarget: null,
+    agentTarget: null,
+  });
+  const draining = (async () => {
+    for await (const _event of invocation.events) {
+      // Keep the invocation active until the gate is released.
+    }
+  })();
+  const preparation = harness.service.beginPreparation('thread-a', 'canvas-a');
+
+  await expect(
+    harness.service.stopAndWait('thread-a', 'canvas-a'),
+  ).resolves.toMatchObject({ stopped: true });
+  expect(invocation.signal.aborted).toBe(true);
+  expect(preparation.signal.aborted).toBe(true);
+
+  releaseGate();
+  await draining;
+  preparation.finish();
 });
