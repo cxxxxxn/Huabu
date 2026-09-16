@@ -29,6 +29,7 @@ import {
 import {
   COMMAND_META,
   applyDeltas,
+  applySharedPostEffects,
   applySharedPostEffectsFromWriteResult,
   executeCanvasCommands,
   FRAME_POINTER_CAPTURE_MARGIN,
@@ -2867,6 +2868,19 @@ const useCanvasStore = create<RFState>()(
           return live.position.x !== start.x || live.position.y !== start.y;
         });
         if (moved) {
+          // Free moves may apply no command, bypassing executeCommands and
+          // its routing effects. Reconcile against final geometry before the
+          // existing gesture save; frames can move un-dragged edge endpoints
+          // and unconnected nodes can change another edge's obstacle path.
+          const edges = get().edges;
+          const routed = applySharedPostEffects({
+            nodes: liveNodes,
+            edges,
+            requiresEdgeReroute: true,
+          });
+          if (routed.edges !== edges) {
+            get()._setStateNoAutosave({ edges: routed.edges });
+          }
           structureScheduler.schedule();
           // A real move: the pre-drag snapshot beginGesture took is a
           // legitimate undo entry — keep it (executeCommands already

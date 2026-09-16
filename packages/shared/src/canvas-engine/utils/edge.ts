@@ -8,11 +8,17 @@
  * the relative positions of source and target nodes.
  */
 
+import { Position } from '@xyflow/system';
+
+import { flattenEdgePath, getEdgeLineType, getEdgePath } from './edgePath.js';
+import { getGroupRoutingDirections } from './edgeRoutingGroups.js';
 import { getLayoutNodeSize } from './nodeSizes.js';
 import { EDGE_STROKE_WIDTHS, resolveAccent } from '../../index.js';
 import { readFrameGridConfig } from '../autoLayout/gridLayout.js';
+import { createAbsolutePositionGetter } from '../container/tree.js';
 
-import type { EdgeStyle } from '../../index.js';
+import type { RouteDir } from './edgeRoutingGroups.js';
+import type { EdgeLineType, EdgeStyle } from '../../index.js';
 import type { Node, Edge } from '@xyflow/react';
 
 /** Handle pair returned by smart-handle selection. */
@@ -64,9 +70,6 @@ export function getInternalEdgeFrameIds(
   return [...frameIds];
 }
 
-/** Cardinal routing direction (source → target). */
-type RouteDir = 'right' | 'left' | 'down' | 'up';
-
 /** Handle pair for each routing direction. */
 const DIR_HANDLES: Record<RouteDir, HandlePair> = {
   right: { sourceHandle: 'right-source', targetHandle: 'left-target' },
@@ -74,35 +77,6 @@ const DIR_HANDLES: Record<RouteDir, HandlePair> = {
   down: { sourceHandle: 'bottom-source', targetHandle: 'top-target' },
   up: { sourceHandle: 'top-source', targetHandle: 'bottom-target' },
 };
-
-/**
- * Handles for an edge whose endpoints share a **structured** Frame.
- *
- * There the solver owns every child position and guarantees they do not
- * overlap, so the shortest mutually-facing pair on the dominant axis is
- * always clean — and obstacle avoidance would only pick a detour that
- * leaves the Frame it belongs to.
- *
- * A `free` Frame carries no such guarantee: its children can sit
- * anywhere, including on top of each other, so those edges keep the
- * general obstacle-aware router.
- */
-function getInternalFrameHandles(source: Node, target: Node): HandlePair {
-  const sourceSize = getLayoutNodeSize(source);
-  const targetSize = getLayoutNodeSize(target);
-  const dx =
-    target.position.x +
-    targetSize.w / 2 -
-    (source.position.x + sourceSize.w / 2);
-  const dy =
-    target.position.y +
-    targetSize.h / 2 -
-    (source.position.y + sourceSize.h / 2);
-  if (Math.abs(dx) >= Math.abs(dy)) {
-    return dx >= 0 ? DIR_HANDLES.right : DIR_HANDLES.left;
-  }
-  return dy >= 0 ? DIR_HANDLES.down : DIR_HANDLES.up;
-}
 
 /**
  * L-shaped candidates: source exits one side, target enters from a
@@ -129,6 +103,9 @@ const L_CANDIDATES: HandlePair[] = [
 
 /** Padding (px) added around each obstacle so edges don't graze corners. */
 const OBSTACLE_MARGIN = 8;
+
+/** Treat crowded routes alike rather than counting every crossed card. */
+const MAX_OBSTACLE_HITS = 3;
 
 /**
  * Map our domain `lineType` to React Flow edge type names.
@@ -261,37 +238,38 @@ function sameSidePair(side: HandleSide): HandlePair {
 
 type Pt = { x: number; y: number };
 
-/**
- * Maximum length (px) of the straight stub an edge travels along a handle's
- * outward normal before curving toward the other end. Mirrors how a bezier /
- * smooth-step edge leaves a handle, and is what the obstacle test uses to
- * approximate the rendered curve. For short edges the stub is clamped to half
- * the chord so it never overshoots the far endpoint.
- */
-const ROUTE_STUB_PX = 40;
+const HANDLE_POSITIONS: Record<HandleSide, Position> = {
+  top: Position.Top,
+  right: Position.Right,
+  bottom: Position.Bottom,
+  left: Position.Left,
+};
 
 /**
- * Approximate the *rendered* edge path (bezier / smooth-step) between two
- * handles as a 4-point polyline: a short stub out of each handle along its
- * outward normal, joined by a straight middle segment. Edges leave a handle
- * along its normal, so this hugs the real curve far better than the straight
- * diagonal chord between the two anchors — which would cut the corner and
- * report false crossings for routes that visually clear an obstacle.
+ * Sample the renderer path with a fixed budget, not a connector between stubs.
+ * Candidate handles are canonical, so their prefixes are known sides.
  */
 function buildRoutePath(
   a: Pt,
   b: Pt,
   sourceHandle: string,
   targetHandle: string,
+  lineType: EdgeLineType,
 ): Pt[] {
-  const sn = handleNormal(sourceHandle);
-  const tn = handleNormal(targetHandle);
-  // Clamp the stub for short edges so it can't overshoot the far endpoint and
-  // fold the middle segment back on itself (which would mis-test obstacles).
-  const stub = Math.min(ROUTE_STUB_PX, dist(a, b) / 2);
-  const p1 = { x: a.x + sn.x * stub, y: a.y + sn.y * stub };
-  const p2 = { x: b.x + tn.x * stub, y: b.y + tn.y * stub };
-  return [a, p1, p2, b];
+  const [path] = getEdgePath(
+    {
+      sourceX: a.x,
+      sourceY: a.y,
+      targetX: b.x,
+      targetY: b.y,
+      sourcePosition:
+        HANDLE_POSITIONS[sourceHandle.split('-')[0] as HandleSide],
+      targetPosition:
+        HANDLE_POSITIONS[targetHandle.split('-')[0] as HandleSide],
+    },
+    lineType,
+  );
+  return flattenEdgePath(path);
 }
 
 /** True when any segment of the polyline crosses the rectangle. */
@@ -322,6 +300,7 @@ function segIntersectsRect(
   const minY = rect.y - margin;
   const maxX = rect.x + rect.w + margin;
   const maxY = rect.y + rect.h + margin;
+  if (minX >= maxX || minY >= maxY) return false;
 
   const dx = x1 - x0;
   const dy = y1 - y0;
@@ -366,68 +345,28 @@ function dist(
 }
 
 /** All candidate handle pairs (4 direct + 8 L-shaped). */
-const CANDIDATES: HandlePair[] = [
-  ...Object.values(DIR_HANDLES),
-  ...L_CANDIDATES,
-];
+const DIRECT_CANDIDATES = Object.values(DIR_HANDLES);
+const CANDIDATES: HandlePair[] = [...DIRECT_CANDIDATES, ...L_CANDIDATES];
 
-/**
- * Returns the best source/target handle pair for an edge between two nodes
- * based on their relative positions on the canvas.
- *
- * Two regimes:
- *
- * **Outside (the two rects are side-by-side, possibly diagonal):** scores
- * 12 candidate pairs (4 direct + 8 L-shaped) on length, obstacle hits,
- * axis miss, and facing. Picks the handles that produce the most direct,
- * least-crossing path:
- * - Target primarily to the right → right-source / left-target
- * - Target primarily to the left  → left-source  / right-target
- * - Target primarily below        → bottom-source / top-target
- * - Target primarily above        → top-source   / bottom-target
- *
- * **Inside (one rect fully contains the other — typically a frame and a
- * descendant):** the generic scoring would route a chord through the
- * container interior, which looks broken. Instead we short-circuit:
- * divide the container into 4 triangular wedges along its diagonals,
- * see which wedge the inner node's centre lands in (top / right /
- * bottom / left), and use the *same* side on both handles
- * (`left-source` ↔ `left-target`, etc.) so the rendered curve exits
- * the container on that side, arcs around the outside, and re-enters
- * the inner node on the matching side — a clean external loop. The
- * wedge test is a proportional comparison (`|offsetX| > |offsetY|`),
- * not nearest absolute edge, so wide frames still produce left/right
- * connections when the child sits in the left/right half. Detected by
- * geometry so a child dragged past the frame edge falls back to the
- * outside regime.
- *
- * When `obstacles` are supplied, each candidate is scored by:
- *   score = pathLength
- *         + obstacleHits * OBSTACLE_PENALTY_PX
- *         + axisMisses   * AXIS_WEIGHT_PX
- *         + facingPenalty * FACING_WEIGHT_PX
- * Obstacle hits are tested against a normal-aligned stub polyline that
- * approximates the rendered (bezier / smooth-step) curve, not the straight
- * chord between the two anchors — an edge leaves each handle along its
- * outward normal, so the chord would cut the corner and falsely report
- * crossings for routes that visually clear the obstacle. The candidate with
- * the lowest score wins.
- * Crossing an obstacle costs a
- * fixed virtual length, so the router only detours when the extra path is
- * shorter than the penalty — this avoids absurd long loops just to avoid a
- * single node. When the two nodes are clearly separated on one axis (and
- * overlap on the other), each handle that sits on the wrong axis is
- * penalised: a node stacked directly above/below another should connect
- * bottom↔top, not via a side that merely happens to be a few pixels
- * closer. The facing term is a final tie-breaker that rewards handles whose
- * outward normal points toward the other node. Both extra weights are kept
- * strictly below OBSTACLE_PENALTY_PX so neither can push an edge through an
- * obstacle.
- */
+interface RoutingOptions {
+  preferred?: HandlePair;
+  previous?: { sourceHandle?: string | null; targetHandle?: string | null };
+  lineType?: EdgeLineType;
+  structured?: boolean;
+}
+
+function sameHandles(a: RoutingOptions['previous'], b: HandlePair): boolean {
+  return (
+    a?.sourceHandle === b.sourceHandle && a.targetHandle === b.targetHandle
+  );
+}
+
+/** Prefer a local layout's ports, with bounded obstacle fallback and hysteresis. */
 export function getSmartHandles(
   sourceNode: Node,
   targetNode: Node,
   obstacles?: readonly ObstacleRect[],
+  options: RoutingOptions = {},
 ): HandlePair {
   const { w: sw, h: sh } = getLayoutNodeSize(sourceNode);
   const { w: tw, h: th } = getLayoutNodeSize(targetNode);
@@ -487,101 +426,159 @@ export function getSmartHandles(
     return sameSidePair(closestContainerSide(srcRect, tgtRect));
   }
 
-  const candidates = CANDIDATES;
-  const skipSource = sourceNode.id;
-  const skipTarget = targetNode.id;
-
-  // Early prune: every candidate path lives inside the union of the
-  // two endpoint rects inflated by `ROUTE_STUB_PX` (L-shaped stubs)
-  // plus `OBSTACLE_MARGIN` (hit-test slop). Obstacles outside this
-  // search bbox can never be crossed by any candidate, so we filter
-  // the list once instead of testing all N obstacles per candidate.
-  // On large canvases this turns the per-edge cost from O(12 · N)
-  // into O(12 · k) where k is the local obstacle density.
-  let obstacleList = obstacles ?? [];
-  if (obstacleList.length > 0) {
-    const slack = ROUTE_STUB_PX + OBSTACLE_MARGIN;
-    const minX = Math.min(sx, tx) - slack;
-    const minY = Math.min(sy, ty) - slack;
-    const maxX = Math.max(sx + sw, tx + tw) + slack;
-    const maxY = Math.max(sy + sh, ty + th) + slack;
-    obstacleList = obstacleList.filter((o) => {
-      if (o.id === skipSource || o.id === skipTarget) return false;
-      return (
-        o.x <= maxX && o.x + o.w >= minX && o.y <= maxY && o.y + o.h >= minY
-      );
-    });
-  }
-
-  // Virtual length (px) charged for each obstacle a connector crosses.
-  // The router will only detour around an obstacle when doing so adds less
-  // than this much extra path length — keeps detours proportionate.
-  const OBSTACLE_PENALTY_PX = 600;
-
-  // Penalty (px) per handle that sits on the “wrong” axis when the two nodes
-  // are clearly separated on one axis. Two of these (max 2 * weight) stay
-  // below OBSTACLE_PENALTY_PX so a side detour is still allowed when the
-  // axis-aligned route is blocked.
-  const AXIS_WEIGHT_PX = 200;
-
-  // Per-unit facing penalty. Kept well below OBSTACLE_PENALTY_PX (max total
-  // facing penalty is 4 * weight) so a facing preference can never outweigh
-  // an obstacle crossing.
-  const FACING_WEIGHT_PX = 120;
-
-  // When the nodes are clearly stacked on one axis, handles on the other
-  // axis are “wrong”: a node directly below another should connect via
-  // bottom↔top, not via a side that is incidentally a few pixels closer.
-  const penalizeHorizontalHandles = clearlyVertical;
-  const penalizeVerticalHandles = clearlyHorizontal;
-
-  // Center-to-center unit direction (source → target) for facing scores.
+  const preferred =
+    options.preferred ??
+    (clearlyHorizontal
+      ? dx >= 0
+        ? DIR_HANDLES.right
+        : DIR_HANDLES.left
+      : clearlyVertical
+        ? dy >= 0
+          ? DIR_HANDLES.down
+          : DIR_HANDLES.up
+        : undefined);
   const dirLen = Math.hypot(dx, dy) || 1;
   const ux = dx / dirLen;
   const uy = dy / dirLen;
-
-  let bestPair = candidates[0];
-  let bestScore = Infinity;
-  for (const pair of candidates) {
+  const candidates = options.structured ? DIRECT_CANDIDATES : CANDIDATES;
+  const minX = Math.min(sx, tx);
+  const minY = Math.min(sy, ty);
+  const maxX = Math.max(sx + sw, tx + tw);
+  const maxY = Math.max(sy + sh, ty + th);
+  // A conservative envelope covers default XYFlow control points and step
+  // offsets, including backwards-facing candidates, before path subdivision.
+  const slack = Math.max(100, maxX - minX, maxY - minY) + OBSTACLE_MARGIN;
+  const localObstacles = (obstacles ?? []).filter(
+    (o) =>
+      o.id !== sourceNode.id &&
+      o.id !== targetNode.id &&
+      o.x <= maxX + slack &&
+      o.x + o.w >= minX - slack &&
+      o.y <= maxY + slack &&
+      o.y + o.h >= minY - slack,
+  );
+  const evaluate = (pair: HandlePair) => {
     const a = handleAnchor(srcRect, pair.sourceHandle);
     const b = handleAnchor(tgtRect, pair.targetHandle);
-    const path = buildRoutePath(a, b, pair.sourceHandle, pair.targetHandle);
-
+    const path = buildRoutePath(
+      a,
+      b,
+      pair.sourceHandle,
+      pair.targetHandle,
+      options.lineType ?? 'bezier',
+    );
+    let length = 0;
+    let minX = Infinity,
+      minY = Infinity,
+      maxX = -Infinity,
+      maxY = -Infinity;
+    for (let i = 0; i < path.length; i++) {
+      const p = path[i];
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+      if (i > 0) length += dist(path[i - 1], p);
+    }
     let hits = 0;
-    for (const o of obstacleList) {
-      if (polylineHitsRect(path, o, OBSTACLE_MARGIN)) hits++;
+    for (const o of localObstacles) {
+      if (
+        o.x > maxX + OBSTACLE_MARGIN ||
+        o.x + o.w < minX - OBSTACLE_MARGIN ||
+        o.y > maxY + OBSTACLE_MARGIN ||
+        o.y + o.h < minY - OBSTACLE_MARGIN
+      )
+        continue;
+      // Saturate the score, not the number of attempted checks: clear routes
+      // still inspect every local obstacle. Endpoint checks remain separate.
+      if (polylineHitsRect(path, o, OBSTACLE_MARGIN)) {
+        hits++;
+        if (hits >= MAX_OBSTACLE_HITS) break;
+      }
     }
 
-    // Count handles that sit on the wrong axis for a clearly-stacked layout.
     let axisMisses = 0;
-    if (penalizeHorizontalHandles) {
+    if (clearlyVertical) {
       if (isHorizontalHandle(pair.sourceHandle)) axisMisses++;
       if (isHorizontalHandle(pair.targetHandle)) axisMisses++;
-    } else if (penalizeVerticalHandles) {
+    } else if (clearlyHorizontal) {
       if (!isHorizontalHandle(pair.sourceHandle)) axisMisses++;
       if (!isHorizontalHandle(pair.targetHandle)) axisMisses++;
     }
-
-    // Reward handles whose outward normal faces the other node: the source
-    // handle should point toward the target, the target handle toward the
-    // source. Each term is in [0, 2]; the sum is in [0, 4].
     const sn = handleNormal(pair.sourceHandle);
     const tn = handleNormal(pair.targetHandle);
     const facing =
       1 - (sn.x * ux + sn.y * uy) + (1 - (tn.x * -ux + tn.y * -uy));
-
-    const score =
-      dist(a, b) +
-      hits * OBSTACLE_PENALTY_PX +
-      axisMisses * AXIS_WEIGHT_PX +
-      facing * FACING_WEIGHT_PX;
-
-    if (score < bestScore) {
-      bestScore = score;
-      bestPair = pair;
-    }
+    // Inset endpoint checks permit attachment but penalize sampled re-entry.
+    const endpointHits =
+      Number(polylineHitsRect(path, srcRect, -1)) +
+      Number(polylineHitsRect(path, tgtRect, -1));
+    const outward =
+      (b.x - a.x) * sn.x + (b.y - a.y) * sn.y >= -4 &&
+      (a.x - b.x) * tn.x + (a.y - b.y) * tn.y >= -4;
+    return {
+      pair,
+      length,
+      hits,
+      endpointHits,
+      outward,
+      score: length + hits * 600 + axisMisses * 200 + facing * 120,
+    };
+  };
+  const preferredCandidate = candidates.find((pair) =>
+    sameHandles(preferred, pair),
+  );
+  const preferredEvaluation = preferredCandidate
+    ? evaluate(preferredCandidate)
+    : undefined;
+  if (
+    preferredEvaluation &&
+    preferredEvaluation.outward &&
+    preferredEvaluation.hits === 0 &&
+    preferredEvaluation.endpointHits === 0
+  ) {
+    // Chords are lower bounds on every candidate's sampled length, so passing
+    // this budget accepts the preference without sampling the rest.
+    const shortestChord = Math.min(
+      ...candidates.map((pair) =>
+        dist(
+          handleAnchor(srcRect, pair.sourceHandle),
+          handleAnchor(tgtRect, pair.targetHandle),
+        ),
+      ),
+    );
+    if (preferredEvaluation.length <= shortestChord * 1.8 + 80)
+      return preferredEvaluation.pair;
   }
-  return bestPair;
+  const routes = candidates.map((pair) =>
+    pair === preferredCandidate && preferredEvaluation
+      ? preferredEvaluation
+      : evaluate(pair),
+  );
+  const minEndpointHits = Math.min(...routes.map((r) => r.endpointHits));
+  const safe = routes.filter((r) => r.endpointHits === minEndpointHits);
+  const shortest = Math.min(...safe.map((r) => r.length));
+  // Avoid absurd detours even if they happen to clear every obstacle.
+  const simple = safe.filter((r) => r.length <= shortest * 1.8 + 80);
+  const best = simple.reduce((a, b) => (b.score < a.score ? b : a));
+  const preferredRoute = simple.find((r) => sameHandles(preferred, r.pair));
+  if (
+    preferredRoute &&
+    preferredRoute.outward &&
+    preferredRoute.hits <= best.hits
+  ) {
+    return preferredRoute.pair;
+  }
+  const previous = simple.find((r) => sameHandles(options.previous, r.pair));
+  if (
+    previous &&
+    previous.outward &&
+    previous.hits <= best.hits &&
+    previous.score <= best.score + Math.max(32, best.length * 0.12)
+  ) {
+    return previous.pair;
+  }
+  return best.pair;
 }
 
 /**
@@ -597,34 +594,14 @@ export function rerouteAllEdges<
     target: string;
     sourceHandle?: string | null;
     targetHandle?: string | null;
+    type?: string;
+    data?: Record<string, unknown>;
   },
 >(nodes: Node[], edges: E[]): E[] {
   const nodeMap = new Map(nodes.map((n) => [n.id, n]));
 
-  // Resolve absolute positions so framed nodes are compared correctly
-  // against nodes outside the frame (or in a different frame).
-  const absPos = new Map<string, { x: number; y: number }>();
-  const resolve = (nodeId: string): { x: number; y: number } | null => {
-    const cached = absPos.get(nodeId);
-    if (cached) return cached;
-    const n = nodeMap.get(nodeId);
-    if (!n) return null;
-    if (!n.parentId) {
-      absPos.set(nodeId, n.position);
-      return n.position;
-    }
-    const parentAbs = resolve(n.parentId);
-    if (!parentAbs) {
-      absPos.set(nodeId, n.position);
-      return n.position;
-    }
-    const abs = {
-      x: parentAbs.x + n.position.x,
-      y: parentAbs.y + n.position.y,
-    };
-    absPos.set(nodeId, abs);
-    return abs;
-  };
+  const resolve = createAbsolutePositionGetter(nodeMap);
+  const rects = new Map<string, Rect>();
 
   // Build the obstacle list once (absolute rects of every non-frame node).
   // Frames are containers — edges legitimately cross their backgrounds — so
@@ -632,12 +609,14 @@ export function rerouteAllEdges<
   // `getSmartHandles` via the obstacle `id`.
   const obstacles: ObstacleRect[] = [];
   for (const n of nodes) {
-    if (n.type === 'frame') continue;
     const abs = resolve(n.id);
     if (!abs) continue;
     const { w, h } = getLayoutNodeSize(n);
-    obstacles.push({ id: n.id, x: abs.x, y: abs.y, w, h });
+    const rect = { x: abs.x, y: abs.y, w, h };
+    rects.set(n.id, rect);
+    if (n.type !== 'frame') obstacles.push({ id: n.id, ...rect });
   }
+  const directions = getGroupRoutingDirections(rects, edges);
 
   let changed = false;
   const result = edges.map((edge) => {
@@ -667,10 +646,21 @@ export function rerouteAllEdges<
     // `free` one does not, so its internal edges still need to route
     // around whatever sits between the endpoints.
     const sharedFrame = sharedFrameId ? nodeMap.get(sharedFrameId) : undefined;
-    const handles =
+    const structured = !!(
       sharedFrame?.type === 'frame' && readFrameGridConfig(sharedFrame)
-        ? getInternalFrameHandles(srcNode, tgtNode)
-        : getSmartHandles(srcNode, tgtNode, obstacles);
+    );
+    const direction = directions.get(edge);
+    const handles = getSmartHandles(
+      srcNode,
+      tgtNode,
+      structured ? [] : obstacles,
+      {
+        preferred: direction ? DIR_HANDLES[direction] : undefined,
+        previous: edge,
+        lineType: getEdgeLineType(edge.data, edge.type),
+        structured,
+      },
+    );
     if (
       edge.sourceHandle === handles.sourceHandle &&
       edge.targetHandle === handles.targetHandle
