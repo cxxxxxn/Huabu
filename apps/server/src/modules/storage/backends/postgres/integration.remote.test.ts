@@ -224,6 +224,20 @@ it('persists extension documents and concurrent log appends across independent p
   );
 });
 
+it('resolves an existing extension namespace without drawing identity values', async () => {
+  const h = await open();
+  const space = h.store.space('space');
+  const first = await space.extension('agent.first');
+  for (let i = 0; i < 3; i++)
+    expect(await space.extension('agent.first')).toEqual(first);
+  const second = await space.extension('agent.second');
+  if (first?.kind !== 'postgres' || second?.kind !== 'postgres')
+    throw new Error('Expected Postgres substrates');
+  // Memory reads resolve their namespace on every turn; an upsert would burn
+  // one INTEGER identity per call until the sequence is exhausted.
+  expect(second.extensionId).toBe(first.extensionId + 1);
+});
+
 it('deletes every owned row while preserving a neighboring space and its extension', async () => {
   const h = await open();
   const space = h.store.space('space');

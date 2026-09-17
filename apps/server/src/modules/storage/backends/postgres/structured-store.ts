@@ -67,12 +67,20 @@ export class PostgresStructuredStore implements StructuredStore {
         return context.transaction(async (database) => {
           if (!(await spaceRowExists(database, workspaceId, canvasId)))
             return null;
-          const row = await database.get(
-            `INSERT INTO space_extensions (canvas_id, namespace)
-            VALUES (?, ?) ON CONFLICT(canvas_id, namespace) DO UPDATE SET namespace = excluded.namespace RETURNING extension_id`,
-            canvasId,
-            namespace,
-          );
+          // Look up before inserting: an upsert draws an identity value on
+          // every call, and memory reads resolve their namespace each turn.
+          // The transaction's write lock makes lookup-then-insert race-free.
+          const row =
+            (await database.get(
+              'SELECT extension_id FROM space_extensions WHERE canvas_id = ? AND namespace = ?',
+              canvasId,
+              namespace,
+            )) ??
+            (await database.get(
+              'INSERT INTO space_extensions (canvas_id, namespace) VALUES (?, ?) RETURNING extension_id',
+              canvasId,
+              namespace,
+            ));
           const extensionId = row?.['extension_id'];
           if (typeof extensionId !== 'number')
             throw new Error('Invalid Postgres extension id');
