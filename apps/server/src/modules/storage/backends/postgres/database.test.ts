@@ -25,7 +25,9 @@ beforeEach(() => {
   pg.query.mockImplementation(async (sql: string) => ({
     rows: sql.startsWith('SELECT version')
       ? [{ version: POSTGRES_MIGRATIONS.length }]
-      : [],
+      : sql.startsWith('SELECT current_database()')
+        ? [{ database: 'test', schema: 'public' }]
+        : [],
     rowCount: 0,
   }));
   pg.pool.query.mockResolvedValue({ rows: [], rowCount: null });
@@ -70,7 +72,13 @@ it('rolls back a failed migration and permits a later initialization attempt', a
   expect(pg.release).toHaveBeenLastCalledWith(false);
   expect(() => context.connection()).toThrow(/not initialized/);
   pg.query.mockResolvedValue({
-    rows: [{ version: POSTGRES_MIGRATIONS.length }],
+    rows: [
+      {
+        version: POSTGRES_MIGRATIONS.length,
+        database: 'test',
+        schema: 'public',
+      },
+    ],
   });
   await context.init();
   expect(context.connection()).toBe(pg.pool);

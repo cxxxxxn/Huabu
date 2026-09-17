@@ -158,9 +158,9 @@ export class PostgresWorkspaceRepository implements WorkspaceRepository {
    * A database nobody has opened before holds no Workspace, and a Server with
    * no Workspace has nothing to show. The Disk profile answers this by asking
    * the user for a folder; a SQL profile has nothing to ask for, so it starts
-   * one. Idempotent, and narrower than "create if absent": it mints a
-   * Workspace only when the database holds none at all, so forgetting the last
-   * one does not silently mint a second.
+   * one. Idempotent while a registered Workspace remains: forgetting the last
+   * registered Workspace causes the next call to create a new one, while the
+   * forgotten Workspace and its data remain intact.
    */
   async ensureDefault(name: string): Promise<WorkspaceHandle> {
     const trimmed = requireName(name);

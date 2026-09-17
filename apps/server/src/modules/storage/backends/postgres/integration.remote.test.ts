@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 
 import { PostgresStoreContext } from './database.js';
 import { PostgresStructuredStore } from './structured-store.js';
@@ -25,6 +25,107 @@ async function open() {
   await h.store.spaces().create({ canvasId: 'space', title: 'Test' });
   return h;
 }
+
+it('fences peer mutations during deletion and releases admission on abort and finish', async () => {
+  const h = await open();
+  const peer = new PostgresStoreContext({
+    ...h.config,
+    max: 1,
+    application_name: 'deletion-peer',
+    options: `${h.config.options},public`,
+  });
+  cleanup.push(() => peer.close());
+  await peer.init();
+  peer.useWorkspace(h.workspaceId);
+  const second = new PostgresStructuredStore(peer);
+  const space = second.space('space');
+  const isolated = await open();
+  for (const finish of [false, true]) {
+    const deletion = await h.store.spaces().beginDelete({ canvasId: 'space' });
+    if (!deletion.ok) throw new Error('Expected deletion session');
+    try {
+      await expect(
+        space.nodes.put({ nodeId: 'node', record: note() }),
+      ).rejects.toThrow(/deletion is pending/);
+      await expect(space.tasks.create(task())).rejects.toThrow(
+        /deletion is pending/,
+      );
+      await expect(space.events.append([event()])).rejects.toThrow(
+        /deletion is pending/,
+      );
+      await expect(space.extension('agent.documents')).rejects.toThrow(
+        /deletion is pending/,
+      );
+      // The same canvas id in a different schema has independent admission.
+      expect(
+        await isolated.store
+          .space('space')
+          .nodes.put({ nodeId: 'node', record: note() }),
+      ).toMatchObject({ ok: true });
+      if (finish) {
+        await deletion.session.finish();
+        await second.spaces().create({ canvasId: 'space', title: 'Recreated' });
+      }
+    } finally {
+      await deletion.session.abort();
+    }
+    expect(
+      await space.nodes.put({ nodeId: 'node', record: note() }),
+    ).toMatchObject({ ok: true });
+  }
+});
+
+it('drains a peer transaction and its queued writes before granting deletion', async () => {
+  const h = await open();
+  const peer = new PostgresStoreContext(h.config);
+  cleanup.push(() => peer.close());
+  await peer.init();
+  peer.useWorkspace(h.workspaceId);
+  const space = new PostgresStructuredStore(peer).space('space');
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let resume!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  const running = peer.transaction(async (db) => {
+    await db.run(
+      'UPDATE spaces SET title = ? WHERE canvas_id = ?',
+      'Admitted',
+      'space',
+    );
+    entered();
+    await gate;
+  });
+  await started;
+  const queued = space.nodes.put({ nodeId: 'node', record: note() });
+  const acquired = vi.fn();
+  const deletion = h.context.acquireDelete('space').then((release) => {
+    acquired();
+    return release;
+  });
+  try {
+    // Let the event loop turn while the real transaction remains open.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(acquired).not.toHaveBeenCalled();
+    await expect(space.events.append([event()])).rejects.toThrow(
+      /deletion is pending/,
+    );
+  } finally {
+    resume();
+    const release = await deletion;
+    try {
+      await running;
+      expect(await queued).toMatchObject({ ok: true });
+      expect((await space.read())?.title).toBe('Admitted');
+      expect(await space.nodes.read('node')).not.toBeNull();
+    } finally {
+      release();
+    }
+  }
+});
 
 it('serializes CAS and label allocation across independent connections, then reopens', async () => {
   const h = await open();

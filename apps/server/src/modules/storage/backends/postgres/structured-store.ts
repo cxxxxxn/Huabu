@@ -14,7 +14,7 @@ import { assertValidNamespace } from '../../ports/namespace.js';
 import type { SpaceHandle, StructuredStore } from '../../ports/structured.js';
 import type { PoolConfig } from 'pg';
 
-/** Async structured persistence for the selectable Postgres profile. */
+/** Async Postgres adapter foundation; profile selection awaits application activation. */
 export class PostgresStructuredStore implements StructuredStore {
   readonly kind = 'postgres' as const;
   readonly context: PostgresStoreContext;

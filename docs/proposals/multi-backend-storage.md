@@ -2758,29 +2758,9 @@ isolation, restart, and destruction with the Space.
 
 ### 12.10 Phase 6 — adapter foundation and application activation
 
-Phase 6 is split into two reviewable steps. This foundation implements native
-Postgres structured repositories and Azure Blob storage, shared SQL codecs,
-validation, name allocation, and Task/Run rules, plus async extension-document
-helpers. Existing Disk and SQLite behavior remains covered by its tests.
-`pnpm test:storage-backends` uses Vitest global setup and Testcontainers to
-provision disposable PostgreSQL 18 and Azurite
-services and runs the adapter contracts, including rollback, independent
-connection CAS, Workspace isolation, staged-upload failure, and same-key
-upload serialization. The suite also exercises fresh and existing v1 schemas,
-migration failure recovery, database constraints, multi-batch reads, extension
-documents, and deletion cascades. Competing writes use independent PostgreSQL
-pools. Each test owns an isolated schema or blob container; Testcontainers
-owns service readiness and teardown, including partial startup failures.
-Docker is required and missing infrastructure fails the suite. CI runs the
-same command. Co-located unit suites run with the normal server test command
-and cover SQL rules, adapter validation and failures, and container lifecycle
-without Docker.
+Phase 6 is split into two reviewable steps. This foundation implements native Postgres structured repositories and Azure Blob storage, shared SQL codecs, validation, name allocation, and Task/Run rules, plus async extension-document helpers. Existing Disk and SQLite behavior remains covered by its tests. `pnpm test:storage-backends` uses Vitest global setup and Testcontainers to provision disposable PostgreSQL 18 and Azurite services and runs the adapter contracts, including rollback, independent connection CAS, Workspace isolation, staged-upload failure, and same-key upload serialization. The suite also exercises fresh and existing v1 schemas, migration failure recovery, database constraints, multi-batch reads, extension documents, and deletion cascades. Competing writes use independent PostgreSQL pools. Each test owns an isolated schema or blob container; Testcontainers owns service readiness and teardown, including partial startup failures. Docker is required and missing infrastructure fails the suite. CI runs the same command. Co-located unit suites run with the normal server test command and cover SQL rules, adapter validation and failures, and container lifecycle without Docker.
 
-This foundation does not select the new adapters for the application. The
-stacked follow-up migrates Agenetes persistence and its callers to async,
-activates all six structured/blob pairings, and adds conversation and product
-coverage to the same harness. The earlier phase sections below and above
-record their original scope; this section defines the current Phase 6 split.
+This foundation does not select the new adapters for the application. The stacked follow-up migrates Agenetes persistence and its callers to async, activates all six structured/blob pairings, and adds conversation and product coverage to the same harness. The earlier phase sections below and above record their original scope; this section defines the current Phase 6 split.
 
 ### 12.11 Later phases — provisional
 

@@ -1,11 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { randomUUID } from 'node:crypto';
-
 import { Pool, type PoolClient, type PoolConfig } from 'pg';
 
 import { POSTGRES_MIGRATIONS } from './schema.js';
+import { createKeyedMutex } from '../../../../utils/keyed-mutex.js';
 import {
   assertSpaceMutationAllowed,
   beginSpaceDeleteAdmission,
@@ -17,6 +16,7 @@ export const SQL_WORLD_COLLISION_KEY = '.world';
 // One transactional write order across this database. This conservative first
 // adapter prioritizes the existing CAS/name-allocation contract over throughput.
 const WRITE_LOCK = 184202606;
+const serializeTransactions = createKeyedMutex<string>();
 
 /** Adapter-internal statements. Parameters are always bound, never interpolated. */
 export class PgExecutor {
@@ -56,7 +56,7 @@ export class PgExecutor {
 export class PostgresStoreContext {
   readonly now: () => number;
   readonly #pool: Pool;
-  readonly #admissionScope = `postgres:${randomUUID()}`;
+  #admissionScope = 'postgres:uninitialized';
   #state: 'new' | 'open' | 'closed' = 'new';
   #workspaceId: string | null = null;
   #tail: Promise<unknown> = Promise.resolve();
@@ -111,7 +111,23 @@ export class PostgresStoreContext {
         );
         version = migration.version;
       }
+      // Resolve the actual table namespace, not the configured search_path or
+      // connection URL: aliases, credentials, and pool options cannot split the
+      // lifecycle gate. Matching database/schema names on different servers
+      // conservatively share coordination too. No persistent identity is needed.
+      const scope = (
+        await client.query(`SELECT current_database() AS database,
+          n.nspname AS schema FROM pg_class c
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE c.oid = 'huabu_schema_version'::regclass`)
+      ).rows[0];
+      if (
+        typeof scope?.database !== 'string' ||
+        typeof scope?.schema !== 'string'
+      )
+        throw new Error('Could not resolve Postgres store namespace');
       await client.query('COMMIT');
+      this.#admissionScope = `postgres:${JSON.stringify([scope.database, scope.schema])}`;
       this.#state = 'open';
     } catch (error) {
       try {
@@ -183,7 +199,9 @@ export class PostgresStoreContext {
       canvasId,
     );
     try {
-      await this.#tail.catch(() => {});
+      // Admission is already closed. A barrier in the shared queue drains
+      // writes admitted by every peer before composition starts blob cleanup.
+      await serializeTransactions(this.#admissionScope, () => {});
       this.assertOpen();
       return release;
     } catch (error) {
@@ -195,38 +213,34 @@ export class PostgresStoreContext {
   transaction<T>(operation: (database: PgExecutor) => Promise<T>): Promise<T> {
     this.assertOpen();
     const bound = this.#workspaceId;
-    const result = this.#tail
-      .catch(() => {})
-      .then(async () => {
-        this.assertOpen();
+    const result = serializeTransactions(this.#admissionScope, async () => {
+      this.assertOpen();
+      if (bound !== this.#workspaceId)
+        throw new Error('Postgres operation belongs to an inactive Workspace');
+      const client = await this.#pool.connect();
+      let broken = false;
+      try {
+        await client.query('BEGIN');
+        await client.query("SET LOCAL lock_timeout = '5s'");
+        await client.query('SELECT pg_advisory_xact_lock($1)', [WRITE_LOCK]);
         if (bound !== this.#workspaceId)
           throw new Error(
             'Postgres operation belongs to an inactive Workspace',
           );
-        const client = await this.#pool.connect();
-        let broken = false;
+        const value = await operation(new PgExecutor(client));
+        await client.query('COMMIT');
+        return value;
+      } catch (error) {
         try {
-          await client.query('BEGIN');
-          await client.query("SET LOCAL lock_timeout = '5s'");
-          await client.query('SELECT pg_advisory_xact_lock($1)', [WRITE_LOCK]);
-          if (bound !== this.#workspaceId)
-            throw new Error(
-              'Postgres operation belongs to an inactive Workspace',
-            );
-          const value = await operation(new PgExecutor(client));
-          await client.query('COMMIT');
-          return value;
-        } catch (error) {
-          try {
-            await client.query('ROLLBACK');
-          } catch {
-            broken = true;
-          }
-          throw error;
-        } finally {
-          client.release(broken);
+          await client.query('ROLLBACK');
+        } catch {
+          broken = true;
         }
-      });
+        throw error;
+      } finally {
+        client.release(broken);
+      }
+    });
     this.#tail = result;
     return result;
   }
