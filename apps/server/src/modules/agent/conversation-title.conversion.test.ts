@@ -364,6 +364,61 @@ forEachProductProfile((profile, label) => {
       await dispatcher.preprocess(request);
       expect((await current()).data.label).toBe('Generated title');
     });
+    it.each([
+      { source: 'fallback', collision: false },
+      { source: 'fallback', collision: true },
+      { source: 'acp', collision: false },
+      { source: 'acp', collision: true },
+      { source: 'generated', collision: false },
+      { source: 'generated', collision: true },
+    ] as const)(
+      'preserves punctuation in $source titles with collision=$collision across repeated writes and reload',
+      async ({ source, collision }) => {
+        const title = 'Plan: next steps?';
+        await create({ content: title });
+        if (collision) {
+          await executeOnServer({
+            canvasId,
+            originator: { source: 'ui' },
+            commands: [
+              {
+                type: 'CREATE_NODES',
+                nodes: [
+                  {
+                    nodeType: 'note',
+                    position: { x: 300, y: 0 },
+                    data: { label: 'Plan_ next steps_' },
+                  },
+                ],
+              },
+            ],
+          });
+        }
+        generate.mockResolvedValue({ label: title });
+        const synchronize = () =>
+          source === 'fallback'
+            ? service.ensureFallback(canvasId, threadId, title)
+            : source === 'acp'
+              ? notify(title)
+              : service.initialize(canvasId, threadId, title);
+        await synchronize();
+        const expected = collision ? `${title} (2)` : title;
+        expect((await current()).data.label).toBe(expected);
+        expect(await service.get(canvasId, threadId)).toEqual({
+          title: expected,
+          source,
+        });
+        const version = (await space(canvasId).read())?.version;
+        await synchronize();
+        expect((await space(canvasId).read())?.version).toBe(version);
+        await mounted.reopen();
+        expect((await current()).data.label).toBe(expected);
+        expect(await service.get(canvasId, threadId)).toEqual({
+          title: expected,
+          source,
+        });
+      },
+    );
     it('uses the canonical deduplicated label without a repeat write', async () => {
       await create();
       await executeOnServer({

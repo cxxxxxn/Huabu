@@ -100,7 +100,10 @@ export const conversationTitleNodeStore = {
         const taken = [...records]
           .filter(([id]) => id !== node.id)
           .map(([, snapshot]) => toSafeFilename(snapshot.record.label));
-        next.title = dedupeName(toSafeFilename(next.title), taken);
+        const safeTitle = toSafeFilename(next.title);
+        const allocated = dedupeName(safeTitle, taken);
+        // Allocate by filename, but preserve the original display title.
+        next.title = `${next.title}${allocated.slice(safeTitle.length)}`;
       }
       const labelSource = next.source === 'user' ? 'user' : 'auto';
       if (

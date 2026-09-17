@@ -64,6 +64,8 @@ Question naming uses the same `ConversationTitleService` as panel Chat, with one
 
 ## 3. Node lifecycle
 
+Automatic Question naming compares safe filenames to detect collisions but preserves the original display title, including punctuation. When a collision requires a suffix such as ` (2)`, the suffix is appended to the original title rather than replacing it with the sanitized filename. Storage path safety remains owned by the canonical persistence path.
+
 Saving a panel Chat as a Question uses [saveChatAsQuestion](../../apps/web/src/components/Panels/ChatPanel/saveChatAsQuestion.ts) and canonical node creation to transfer naming authority to the node. A manual title becomes `labelSource: 'user'`; an ACP, generated, or fallback title becomes `labelSource: 'auto'`, with its provenance in `conversationTitleSource`. At creation the server adopts the latest effective thread title when the incoming node label is not user/agent-protected, rather than treating a stale browser cache as authoritative. Without a current title, the helper preserves the supplied node data and existing node-creation fallback. Later in-flight generation and ACP updates resolve the new Question owner and update its canonical label when priority and current-label protection permit; this is one naming service writing the current owner, not ongoing synchronization between two title values. Manual naming retains no hidden automatic candidate.
 
 Created like any node via `CREATE_NODES` ([resolveAddNodes.ts](../../apps/web/src/handler/canvasCommand/resolvers/resolveAddNodes.ts)) with `nodeType: 'question'` and empty `content`. Missing `status` is the idle state, and nothing fires automatically. From there:
