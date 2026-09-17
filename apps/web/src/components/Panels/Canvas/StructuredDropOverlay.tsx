@@ -85,7 +85,7 @@ export const StructuredDropOverlay: React.FC<{
   const tracksAreRows = preview.context.axis === 'row';
 
   return (
-    <>
+    <div data-canvas-grounding-exclude className="contents">
       <TrackBands
         bands={projected.tracks}
         active={preview.context.activeTrack}
@@ -97,7 +97,7 @@ export const StructuredDropOverlay: React.FC<{
         orientation="horizontal"
       />
       <DropMark preview={preview} rect={projected.drop} />
-    </>
+    </div>
   );
 });
 

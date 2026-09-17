@@ -751,6 +751,7 @@
     "generationInterrupted": "Generation interrupted",
     "somethingWentWrong": "Something went wrong",
     "inkRequest": "Ink request",
+    "inferredInkRequest": "Inferred Ink request: {{intent}}",
     "retry": "Retry",
     "addAsNote": "Add as note",
     "copyMessage": "Copy message",

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT license.
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -50,12 +53,62 @@ function inkEnvelope(
   };
 }
 
+function withGrounding(envelope: ChatEnvelope): ChatEnvelope {
+  return {
+    ...envelope,
+    focus: {
+      ...envelope.focus,
+      groundingVisual: {
+        kind: 'visible-canvas',
+        dataUrl: IMAGE_URL,
+        viewport: {
+          x: 0,
+          y: 0,
+          zoom: 0.75,
+          width: 1200,
+          height: 800,
+          devicePixelRatio: 2,
+        },
+        crop: { x: 120, y: 80, width: 640, height: 420 },
+        selectedNodeIds: ['note-1'],
+        strokeSubsets: [
+          { nodeId: 'ink-1', strokeIds: ['stroke-1'] },
+          { nodeId: 'ink-2', strokeIds: ['stroke-1'] },
+        ],
+      },
+    },
+  };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe('Ink-intent rendering', () => {
+  it.each([INTERNAL_PROFILE, ACP_PROFILE])(
+    'renders hidden visible-Canvas grounding for %j',
+    async (profile) => {
+      const parts = await renderTurn(
+        withGrounding(inkEnvelope()),
+        profile,
+        OPTIONS,
+      );
+      expect(parts).toContainEqual({
+        type: 'image',
+        data: IMAGE_BYTES,
+        mimeType: 'image/png',
+      });
+      expect(
+        parts.some(
+          (part) =>
+            part.type === 'text' &&
+            part.text.includes('<visible_canvas_grounding>') &&
+            part.text.includes('Viewport zoom: 0.75'),
+        ),
+      ).toBe(true);
+    },
+  );
   it.each([[image(['ink-1', 'ink-2'])], [image(['ink-1']), image(['ink-2'])]])(
     'requires each partial Sketch but accepts clustered or separate images: %j',
     async (...snapshotAttachments) => {

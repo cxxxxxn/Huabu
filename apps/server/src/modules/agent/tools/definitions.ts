@@ -24,6 +24,7 @@ import {
   getSpaceOutlineQueryParamsSchema,
   inspectEdgesQueryParamsSchema,
   inspectNodesQueryParamsSchema,
+  inkIntentReportSchema,
   snapshotNodesQueryParamsSchema,
   completeTaskRunToolParamsSchema,
   startTaskRunToolParamsSchema,
@@ -104,6 +105,19 @@ export const webSearchTool: ToolDefinition = {
   description:
     'Search the internet for up-to-date facts, documentation, or news using Tavily.',
   parameters: webSearchParamsSchema,
+};
+
+export const reportInkIntentParamsSchema = zodToToolSchema(
+  inkIntentReportSchema,
+);
+
+export const reportInkIntentTool: ToolDefinition = {
+  name: 'report_ink_intent',
+  label: 'Interpret Ink request',
+  description:
+    'Report the concise actionable intent you infer from an Ink request before acting. Use status="inferred" with one plain-text line (max 120 characters), status="clarify" before asking a clarification question, or status="unsupported" when the Ink cannot be interpreted. Call only for an <ink_intent> turn.',
+  parameters: reportInkIntentParamsSchema,
+  executionMode: 'sequential',
 };
 
 // ==================== Canvas Read-Only Tools ====================
@@ -513,6 +527,7 @@ export const TOOL_REGISTRY: Readonly<Record<string, ToolDefinition>> =
     Object.fromEntries(
       [
         webSearchTool,
+        reportInkIntentTool,
         getCanvasOutlineTool,
         inspectNodesTool,
         inspectEdgesTool,

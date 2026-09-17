@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+import { useReactFlow } from '@xyflow/react';
 import { ArrowUp, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -31,6 +32,10 @@ import {
   DEFAULT_STROKE_SIZE,
 } from '@/components/Nodes/sketch/sketchPath';
 import {
+  blobToDataUrl,
+  captureVisibleCanvasGrounding,
+} from '@/handler/canvasCommand/utils/screenshot';
+import {
   captureAgentTurnSources,
   dispatchAgentTurn,
   prepareAgentTurn,
@@ -59,12 +64,14 @@ import type {
   CanvasCommand,
   CanvasNodeId,
   SketchStroke,
+  VisibleCanvasGrounding,
 } from '@huabu/shared';
 
 interface InkSubmissionAttempt {
   identity: string;
   session: ChatSession;
   mode: AgentMode;
+  groundingVisual?: VisibleCanvasGrounding;
 }
 
 /**
@@ -79,6 +86,7 @@ interface InkSubmissionAttempt {
  */
 export const StrokeSelectionToolbar = () => {
   const { t } = useTranslation();
+  const { getViewport } = useReactFlow();
   // Subscribe to `nodes` so the anchor + representative style track edits.
   const nodes = useCanvasStore((s) => s.nodes);
   const addNode = useCanvasStore((s) => s.addNode);
@@ -161,12 +169,79 @@ export const StrokeSelectionToolbar = () => {
       let attempt =
         attemptRef.current?.identity === identity ? attemptRef.current : null;
       if (!attempt) {
+        let groundingVisual: VisibleCanvasGrounding | undefined;
+        const strokeNodeIds = new Set(
+          Object.keys(freshCandidate.strokeSelection),
+        );
+        const groundingNodeIds = freshCandidate.selectedNodeIds.filter(
+          (nodeId) => !strokeNodeIds.has(nodeId),
+        );
+        if (groundingNodeIds.length > 0) {
+          const ordinaryNodeIds = new Set(groundingNodeIds);
+          const selectedNodes = canvas.nodes.filter((node) =>
+            ordinaryNodeIds.has(node.id),
+          );
+          const nodeBounds = getSelectionBounds(selectedNodes, canvas.nodes);
+          const currentStrokeBounds =
+            getSketchStrokeSelectionBounds(strokeSelection);
+          const sourceBounds = unionSelectionBounds(
+            currentStrokeBounds,
+            nodeBounds
+              ? {
+                  x: nodeBounds.minX,
+                  y: nodeBounds.minY,
+                  width: nodeBounds.width,
+                  height: nodeBounds.height,
+                }
+              : null,
+          );
+          if (!sourceBounds) return;
+          const viewport = getViewport();
+          const captured = await captureVisibleCanvasGrounding({
+            bounds: {
+              x: sourceBounds.x * viewport.zoom + viewport.x,
+              y: sourceBounds.y * viewport.zoom + viewport.y,
+              width: sourceBounds.width * viewport.zoom,
+              height: sourceBounds.height * viewport.zoom,
+            },
+          });
+          const currentViewport = getViewport();
+          if (
+            currentSelectionIdentity() !== identity ||
+            currentViewport.x !== viewport.x ||
+            currentViewport.y !== viewport.y ||
+            currentViewport.zoom !== viewport.zoom
+          ) {
+            throw new Error(
+              'Canvas view changed during Ink grounding capture. Submit again.',
+            );
+          }
+          const dataUrl = await blobToDataUrl(captured.blob);
+          groundingVisual = {
+            kind: 'visible-canvas',
+            dataUrl,
+            viewport: {
+              x: viewport.x,
+              y: viewport.y,
+              zoom: viewport.zoom,
+              width: captured.viewport.width,
+              height: captured.viewport.height,
+              devicePixelRatio: captured.devicePixelRatio,
+            },
+            crop: captured.crop,
+            selectedNodeIds: groundingNodeIds,
+            strokeSubsets: Object.entries(freshCandidate.strokeSelection).map(
+              ([nodeId, strokeIds]) => ({ nodeId, strokeIds }),
+            ),
+          };
+        }
         if (freshCandidate.target) {
           const { nodeId, threadId, mode } = freshCandidate.target;
           attempt = {
             identity,
             mode:
               mode ?? selectThreadLastAction(useChatStore.getState(), threadId),
+            groundingVisual,
             session: {
               canvasId: canvas.canvasId,
               ownerCanvasId: canvas.canvasId,
@@ -211,10 +286,12 @@ export const StrokeSelectionToolbar = () => {
             binding: { kind: 'internal' },
             mode: 'operate',
             label: 'New ink request',
+            pendingInkIntentLabel: true,
           });
           attempt = {
             identity,
             mode: 'operate',
+            groundingVisual,
             session: {
               canvasId: canvas.canvasId,
               ownerCanvasId: canvas.canvasId,
@@ -231,6 +308,7 @@ export const StrokeSelectionToolbar = () => {
         inputKind: 'ink-intent',
         content: '',
         mode: attempt.mode,
+        groundingVisual: attempt.groundingVisual,
         sources: captureAgentTurnSources(attempt.session, {
           nodeIds: freshCandidate.selectedNodeIds,
           strokeSelection: freshCandidate.strokeSelection,
@@ -255,7 +333,7 @@ export const StrokeSelectionToolbar = () => {
       preparingRef.current = false;
       setIsPreparing(false);
     }
-  }, [addNode, clearSelection, currentSelectionIdentity]);
+  }, [addNode, clearSelection, currentSelectionIdentity, getViewport]);
 
   // Representative color / size for the swatches: the first selected stroke.
   const { color, size } = useMemo(() => {

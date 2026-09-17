@@ -203,6 +203,7 @@ export function createQuestionNode(opts: {
   binding?: AgentBinding;
   mode?: AgentMode;
   label?: string;
+  pendingInkIntentLabel?: boolean;
 }): {
   nodeId: CanvasNodeId;
   threadId: string;
@@ -221,6 +222,7 @@ export function createQuestionNode(opts: {
       ...(opts.binding ? { agentBinding: opts.binding } : {}),
       ...(opts.mode ? { agentMode: opts.mode } : {}),
       ...(opts.label ? { label: opts.label } : {}),
+      ...(opts.pendingInkIntentLabel ? { pendingInkIntentLabel: true } : {}),
       origin: { type: 'user-created' },
     },
   });

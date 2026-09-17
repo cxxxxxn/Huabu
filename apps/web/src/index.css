@@ -445,8 +445,11 @@ body,
 /* Highlight selected edges with a glow effect for clear visual feedback. */
 .react-flow__edge.selected path,
 .react-flow__edge.selected .react-flow__edge-interaction {
-  stroke: var(--color-info) !important;
-  filter: drop-shadow(0 0 2px var(--color-info-light));
+  stroke: var(--canvas-grounding-edge-stroke, var(--color-info)) !important;
+  filter: var(
+    --canvas-grounding-edge-filter,
+    drop-shadow(0 0 2px var(--color-info-light))
+  );
 }
 
 .huabu-edge-label:empty:not(:focus)::before {

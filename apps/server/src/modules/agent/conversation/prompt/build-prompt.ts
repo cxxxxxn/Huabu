@@ -100,6 +100,7 @@ export async function renderTurn(
 ): Promise<ContentPart[]> {
   const { canvasId, includeNeighbourhood = true } = opts;
   const { imageAttachments, snapshotAttachments } = env.focus.selection;
+  const groundingVisual = env.focus.groundingVisual;
   const uploads = env.user.attachments;
   const selection = [...imageAttachments, ...snapshotAttachments];
   const isInkIntent = env.user.inputKind === 'ink-intent';
@@ -154,6 +155,29 @@ export async function renderTurn(
     uploads.length > 0
       ? await buildAttachmentParts(uploads, canvasId ?? null)
       : [];
+  const groundingOriginIds = groundingVisual
+    ? [
+        ...new Set([
+          ...groundingVisual.selectedNodeIds,
+          ...groundingVisual.strokeSubsets.map((subset) => subset.nodeId),
+        ]),
+      ]
+    : [];
+  const groundingParts = groundingVisual
+    ? await buildAttachmentParts(
+        [
+          {
+            type: 'image',
+            source: 'selection',
+            url: groundingVisual.dataUrl,
+            label: 'Visible Canvas relationship at submission zoom',
+            originNodeIds: groundingOriginIds,
+          },
+        ],
+        canvasId ?? null,
+        { requiredImageNodeIds: groundingOriginIds },
+      )
+    : [];
   // Both backends raster the selection, so both get the reuse hint when
   // pre-snapshotted artifacts are present; the wording (built-in tools vs
   // asking the canvas agent) is chosen per profile inside the renderer.
@@ -195,6 +219,18 @@ export async function renderTurn(
     });
     parts.push(...selectionParts);
     parts.push({ type: 'text', text: '</selected_nodes_visuals>' });
+  }
+  if (groundingParts.length > 0) {
+    parts.push({
+      type: 'text',
+      text: [
+        '<visible_canvas_grounding>',
+        'This hidden image preserves the Canvas relationship visible to the user at submission time. Use it only to ground where the selected Ink points at the selected objects. Do not infer text or detail that is not visibly rendered at this zoom.',
+        `Viewport zoom: ${groundingVisual?.viewport.zoom}. Crop: ${groundingVisual?.crop.x},${groundingVisual?.crop.y} ${groundingVisual?.crop.width}x${groundingVisual?.crop.height}.`,
+      ].join('\n'),
+    });
+    parts.push(...groundingParts);
+    parts.push({ type: 'text', text: '</visible_canvas_grounding>' });
   }
   if (neighbourhoodSection) {
     parts.push({ type: 'text', text: neighbourhoodSection });

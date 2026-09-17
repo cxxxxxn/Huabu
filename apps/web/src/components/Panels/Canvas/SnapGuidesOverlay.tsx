@@ -54,6 +54,7 @@ export const SnapGuidesOverlay: React.FC<Props> = ({
   return (
     <svg
       aria-hidden="true"
+      data-canvas-grounding-exclude
       className="pointer-events-none absolute inset-0 z-40 h-full w-full"
     >
       {segments.map((seg, i) => {

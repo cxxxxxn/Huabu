@@ -1,8 +1,12 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT license.
+
 import { z } from 'zod';
 
 import {
   agentInputKindSchema,
   chatAttachmentSchema,
+  visibleCanvasGroundingSchema,
   wireNodeRefSchema,
 } from './agent.js';
 
@@ -58,6 +62,7 @@ export const chatEnvelopeSchema = z.object({
     resolved: z.array(resolvedSkillSchema),
   }),
   focus: z.object({
+    groundingVisual: visibleCanvasGroundingSchema.optional(),
     selection: z.object({
       refs: z.array(envelopeNodeSchema),
       selectedIds: z.array(z.string()),

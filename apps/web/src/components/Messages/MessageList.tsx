@@ -369,6 +369,7 @@ export const MessageList = memo(function MessageList({
                     <UserMessage
                       content={msg.content}
                       inputKind={msg.inputKind}
+                      inferredIntent={msg.inferredIntent}
                       attachments={msg.attachments}
                       selectedNodeIds={msg.selectedNodeIds}
                       selectedStrokeIds={msg.selectedStrokeIds}

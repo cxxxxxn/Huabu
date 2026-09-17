@@ -762,6 +762,8 @@ export interface QuestionNodeData extends BaseNodeData {
   errorMessage?: string;
   /** Short AI response shown on node after completion. */
   responseSummary?: string;
+  /** Untouched Ink placeholder may be replaced by the first inferred intent. */
+  pendingInkIntentLabel?: boolean;
   /** Whether the user has viewed the completed response in the chat panel. */
   viewed?: boolean;
   /**

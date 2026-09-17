@@ -34,11 +34,16 @@ import type { CanvasSearchEvent, CanvasSearchRequest } from '@huabu/shared';
  * the scanner can be exercised without writing `chat_v2/` fixtures.
  */
 const turnsByThread = vi.hoisted(() => new Map<string, AgentTurn[]>());
+const driverByThread = vi.hoisted(() => new Map<string, string>());
 
 vi.mock('../agent/agenetes/drivers.js', () => ({
+  INTERNAL_DRIVER_KIND: 'internal',
   agenetes: {
     history: (_ns: unknown, threadId: string) => ({
       turns: turnsByThread.get(threadId) ?? [],
+    }),
+    record: (_ns: unknown, threadId: string) => ({
+      spec: { kind: driverByThread.get(threadId) ?? 'internal' },
     }),
   },
 }));
@@ -652,6 +657,99 @@ describe('searchCanvas — conversation tier', () => {
       { query: 'SECRETTOKEN', fields: ['conversation'] },
     );
     expect(hitTool.filter((e) => e.type === 'match')).toHaveLength(0);
+  });
+
+  it('indexes only the validated inferred intent from its hidden tool call', async () => {
+    turnsByThread.clear();
+    const envelope = {
+      user: { text: '', inputKind: 'ink-intent', attachments: [] },
+      skills: { invokedIds: [], resolved: [] },
+      focus: {
+        selection: {
+          refs: [],
+          selectedIds: [],
+          imageAttachments: [],
+          snapshotAttachments: [],
+        },
+      },
+    } as unknown as ChatEnvelope;
+    turnsByThread.set('t1', [
+      {
+        request: createChatSubmission(envelope),
+        transcript: [
+          {
+            type: 'tool_call',
+            data: {
+              toolCallId: 'intent-1',
+              title: 'report_ink_intent',
+              status: 'completed',
+              rawInput: {
+                status: 'inferred',
+                text: 'Expand the third comparison step',
+              },
+              rawOutput: 'DO_NOT_INDEX_OUTPUT',
+            },
+          } as unknown as AgentTurn['transcript'][number],
+        ],
+      },
+    ]);
+
+    const hitIntent = await collect(
+      [mkNode('q1', 'question', 't1')],
+      [mkContent('q1', 'question', { content: '' })],
+      { query: 'comparison', fields: ['conversation'] },
+    );
+    expect(hitIntent.filter((event) => event.type === 'match')).toHaveLength(1);
+
+    const hitOutput = await collect(
+      [mkNode('q1', 'question', 't1')],
+      [mkContent('q1', 'question', { content: '' })],
+      { query: 'DO_NOT_INDEX_OUTPUT', fields: ['conversation'] },
+    );
+    expect(hitOutput.filter((event) => event.type === 'match')).toHaveLength(0);
+  });
+
+  it('does not treat an external tool with the same title as inferred intent', async () => {
+    turnsByThread.clear();
+    driverByThread.set('external-thread', 'acp');
+    const envelope = {
+      user: { text: '', inputKind: 'ink-intent', attachments: [] },
+      skills: { invokedIds: [], resolved: [] },
+      focus: {
+        selection: {
+          refs: [],
+          selectedIds: [],
+          imageAttachments: [],
+          snapshotAttachments: [],
+        },
+      },
+    } as unknown as ChatEnvelope;
+    turnsByThread.set('external-thread', [
+      {
+        request: createChatSubmission(envelope),
+        transcript: [
+          {
+            type: 'tool_call',
+            data: {
+              toolCallId: 'external-intent',
+              title: 'report_ink_intent',
+              status: 'completed',
+              rawInput: {
+                status: 'inferred',
+                text: 'External title collision',
+              },
+            },
+          } as unknown as AgentTurn['transcript'][number],
+        ],
+      },
+    ]);
+
+    const events = await collect(
+      [mkNode('q1', 'question', 'external-thread')],
+      [mkContent('q1', 'question', { content: '' })],
+      { query: 'collision', fields: ['conversation'] },
+    );
+    expect(events.filter((event) => event.type === 'match')).toHaveLength(0);
   });
 
   it('skips the conversation tier for single-node (nodeId) searches', async () => {

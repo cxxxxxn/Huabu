@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT license.
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { agentApi } from './agent';
@@ -38,6 +41,40 @@ afterEach(() => {
 });
 
 describe('agent API host acceptance', () => {
+  it('sends hidden visible-Canvas grounding with an Ink request', async () => {
+    const fetchMock = respond([{ type: 'end', data: {} }]);
+    const groundingVisual = {
+      kind: 'visible-canvas' as const,
+      dataUrl: 'data:image/png;base64,cG5n',
+      viewport: {
+        x: 0,
+        y: 0,
+        zoom: 1,
+        width: 100,
+        height: 100,
+        devicePixelRatio: 1,
+      },
+      crop: { x: 0, y: 0, width: 100, height: 100 },
+      selectedNodeIds: ['note-1'],
+      strokeSubsets: [{ nodeId: 'sketch-1', strokeIds: ['stroke-1'] }],
+    };
+
+    await agentApi.streamMessage('', 'thread-a', 'operate', callbacks(), {
+      inputKind: 'ink-intent',
+      canvasId: 'canvas-a',
+      canvasContext: {
+        selectedNodes: [
+          { id: 'sketch-1', type: 'sketch', strokeIds: ['stroke-1'] },
+          { id: 'note-1', type: 'note' },
+        ],
+      },
+      groundingVisual,
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string);
+    expect(body.groundingVisual).toEqual(groundingVisual);
+  });
+
   it('returns durable acceptance from stop', async () => {
     vi.stubGlobal(
       'fetch',

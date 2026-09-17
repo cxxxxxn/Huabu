@@ -2,7 +2,7 @@
 // Licensed under the MIT license.
 
 import type { AssistantHistoryPart } from './assistant-parts.js';
-import type { AgentInputKind } from '../api/agent.js';
+import type { AgentInputKind, VisibleCanvasGrounding } from '../api/agent.js';
 
 export { chatEnvelopeSchema } from '../api/chat-envelope.js';
 export type { ChatEnvelope, ResolvedSkill } from '../api/chat-envelope.js';
@@ -58,6 +58,9 @@ export type ChatHistoryItem =
       role: 'user';
       content: string;
       inputKind?: AgentInputKind;
+      inferredIntent?: string;
+      /** Hidden retry metadata; never rendered as a Chat attachment. */
+      groundingVisual?: VisibleCanvasGrounding;
       /** Image attachments recovered from multimodal messages. */
       attachments?: ChatAttachment[];
       /** IDs of canvas nodes that were selected when this message was sent. */

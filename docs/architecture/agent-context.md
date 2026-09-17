@@ -27,6 +27,8 @@ Chat context is assembled by [conversation/](../../apps/server/src/modules/agent
 
 The normalized user input kind is `text` or `ink-intent`. An `ink-intent` turn may have empty text but must contain at least one partial Sketch selection with non-empty `strokeIds`; its selected strokes are the user's request rather than merely optional context. Envelope construction and canonical rendering therefore require a real image part for every required partial-Ink source and reject before Agent invocation if snapshotting or inlining fails. Legacy text turns retain best-effort optional visual behavior.
 
+A mixed `ink-intent` turn also carries `focus.groundingVisual`: a bounded PNG captured from the browser's currently rendered React Flow DOM before asynchronous submission work. It preserves the user's current zoom-driven LOD, text truncation, clipping, and Ink/object placement while excluding selection outlines, retained-Lasso chrome, handles, toolbars, and drag/snap previews. The request schema requires its selected node IDs and stroke subsets to match the submitted selection exactly. The image is rendered as a hidden canonical vision part for built-in and ACP Agents, persists in `AgentSubmission.rendered`, and is never projected as a user attachment or source chip.
+
 ```
 POST /api/agent (agent.route.ts)
   ├─ loadAgent(mode)                  # system prompt + tool set

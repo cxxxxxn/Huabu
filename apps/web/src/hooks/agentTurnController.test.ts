@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT license.
+
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -13,6 +16,7 @@ import {
 import {
   captureAgentTurnSources,
   dispatchAgentTurn,
+  handleStreamEvent,
   prepareAgentTurn,
   prepareAgentTurnRetry,
   stopAgentTurn,
@@ -141,6 +145,83 @@ afterEach(() => {
 });
 
 describe('shared Agent turn input', () => {
+  it('projects inferred Ink intent without rendering its tool call', () => {
+    useChatStore.getState().addMessage('thread-1', {
+      id: 'ink-user',
+      role: 'user',
+      content: '',
+      inputKind: 'ink-intent',
+    });
+
+    handleStreamEvent(
+      {
+        type: 'tool_call',
+        data: {
+          toolCallId: 'intent-1',
+          title: 'report_ink_intent',
+          status: 'pending',
+          rawInput: {
+            status: 'inferred',
+            text: 'Expand the third comparison step',
+          },
+          internalToolName: 'report_ink_intent',
+        },
+      },
+      { threadId: 'thread-1', assistantId: 'assistant-1' },
+    );
+    handleStreamEvent(
+      {
+        type: 'tool_call_update',
+        data: {
+          toolCallId: 'intent-1',
+          status: 'completed',
+          rawOutput: '{}',
+        },
+      },
+      { threadId: 'thread-1', assistantId: 'assistant-1' },
+    );
+
+    expect(selectThreadMessages(useChatStore.getState(), 'thread-1')).toEqual([
+      expect.objectContaining({
+        id: 'ink-user',
+        inferredIntent: 'Expand the third comparison step',
+      }),
+    ]);
+  });
+
+  it('keeps the Ink fallback when intent reporting fails', () => {
+    useChatStore.getState().addMessage('thread-1', {
+      id: 'ink-user',
+      role: 'user',
+      content: '',
+      inputKind: 'ink-intent',
+    });
+    handleStreamEvent(
+      {
+        type: 'tool_call',
+        data: {
+          toolCallId: 'intent-failed',
+          title: 'report_ink_intent',
+          status: 'pending',
+          rawInput: { status: 'inferred', text: 'Do not display' },
+          internalToolName: 'report_ink_intent',
+        },
+      },
+      { threadId: 'thread-1', assistantId: 'assistant-1' },
+    );
+    handleStreamEvent(
+      {
+        type: 'tool_call_update',
+        data: { toolCallId: 'intent-failed', status: 'failed' },
+      },
+      { threadId: 'thread-1', assistantId: 'assistant-1' },
+    );
+
+    expect(selectThreadMessages(useChatStore.getState(), 'thread-1')).toEqual([
+      expect.not.objectContaining({ inferredIntent: expect.anything() }),
+    ]);
+  });
+
   it('preserves text, explicit extras, settings and captured sources across async saving', async () => {
     const gate = deferred();
     mocks.save.mockReturnValueOnce(gate.promise);
@@ -331,7 +412,12 @@ describe('shared Agent turn input', () => {
           id: 'question-1',
           type: 'question',
           position: { x: 0, y: 0 },
-          data: { content: '', threadId: 'thread-1', status: 'idle' },
+          data: {
+            content: '',
+            threadId: 'thread-1',
+            status: 'idle',
+            pendingInkIntentLabel: true,
+          },
         },
         {
           id: 'sketch-1',

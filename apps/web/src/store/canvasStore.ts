@@ -2541,10 +2541,23 @@ const useCanvasStore = create<RFState>()(
       const currentLabelSource = (
         target.data as Record<string, unknown> | undefined
       )?.['labelSource'];
+      const currentPendingInkIntentLabel = (
+        target.data as Record<string, unknown> | undefined
+      )?.['pendingInkIntentLabel'];
       if (normalize(currentLabel) === normalize(trimmed)) {
-        // No-op: avoid a needless dispatch.
-        if (currentLabel !== trimmed) {
-          get().updateNodeData(id, { label: trimmed, labelSource: 'user' });
+        // An explicit no-op rename still claims the label for the user and
+        // prevents a delayed inferred Ink intent from replacing it.
+        if (currentLabel !== trimmed || currentPendingInkIntentLabel === true) {
+          get().updateNodeData(id, {
+            label: trimmed,
+            labelSource: 'user',
+            pendingInkIntentLabel: false,
+          });
+          try {
+            await nodeContentQueue.flushNow(canvasId, id, { source: 'user' });
+          } catch {
+            return false;
+          }
         }
         return true;
       }
@@ -2566,7 +2579,11 @@ const useCanvasStore = create<RFState>()(
       // Optimistic patch — the per-node content middleware schedules a
       // debounced PUT. We force-flush immediately so the user sees the
       // 409 toast at rename time rather than ~500 ms later.
-      get().updateNodeData(id, { label: trimmed, labelSource: 'user' });
+      get().updateNodeData(id, {
+        label: trimmed,
+        labelSource: 'user',
+        pendingInkIntentLabel: false,
+      });
       try {
         await nodeContentQueue.flushNow(canvasId, id, { source: 'user' });
         return true;
@@ -2586,8 +2603,11 @@ const useCanvasStore = create<RFState>()(
               // can restore the original provenance exactly — including
               // the "was previously absent" case (omit the key entirely
               // rather than leaving a literal `undefined` value behind).
-              const { labelSource: _omitted, ...rest } = (n.data ??
-                {}) as Record<string, unknown>;
+              const {
+                labelSource: _omitted,
+                pendingInkIntentLabel: _pendingOmitted,
+                ...rest
+              } = (n.data ?? {}) as Record<string, unknown>;
               return {
                 ...n,
                 data: {
@@ -2598,6 +2618,11 @@ const useCanvasStore = create<RFState>()(
                   // provenance ('user' / 'agent') to 'auto' on revert.
                   ...(currentLabelSource !== undefined
                     ? { labelSource: currentLabelSource }
+                    : {}),
+                  ...(currentPendingInkIntentLabel !== undefined
+                    ? {
+                        pendingInkIntentLabel: currentPendingInkIntentLabel,
+                      }
                     : {}),
                 },
               };

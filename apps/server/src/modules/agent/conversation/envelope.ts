@@ -39,6 +39,7 @@ import type {
   ChatAttachment,
   ChatEnvelope,
   ResolvedSkill,
+  VisibleCanvasGrounding,
   WireSelectionNode,
 } from '@huabu/shared';
 import type { CanvasNode } from '@huabu/shared/canvas-engine';
@@ -56,6 +57,7 @@ export type { ChatEnvelope, ResolvedSkill } from '@huabu/shared';
 export function envelopeHasImage(envelope: ChatEnvelope): boolean {
   return (
     envelope.user.attachments.some((a) => a.type === 'image') ||
+    envelope.focus.groundingVisual !== undefined ||
     envelope.focus.selection.imageAttachments.length > 0 ||
     envelope.focus.selection.snapshotAttachments.length > 0
   );
@@ -68,6 +70,7 @@ export interface ChatEnvelopeParams {
   inputKind?: AgentInputKind;
   /** User-uploaded (off-canvas) attachments from the request body. */
   attachments?: ChatAttachment[];
+  groundingVisual?: VisibleCanvasGrounding;
   /** Wire selection (top-level + frame children) for this turn. */
   selectedNodes?: WireSelectionNode[];
   /** Anchor node for neighbourhood preamble (e.g. question nodes). */
@@ -398,6 +401,7 @@ export async function buildChatEnvelope(
     content,
     inputKind,
     attachments,
+    groundingVisual,
     selectedNodes,
     anchorNodeId,
     invokedSkills,
@@ -476,6 +480,7 @@ export async function buildChatEnvelope(
       resolved: resolveInvokedSkills(invokedSkills, logger),
     },
     focus: {
+      ...(groundingVisual ? { groundingVisual } : {}),
       selection: {
         refs: selectionRefs,
         selectedIds: selectedNodes ? collectSelectedNodeIds(selectedNodes) : [],

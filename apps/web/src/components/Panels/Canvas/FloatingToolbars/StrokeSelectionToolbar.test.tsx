@@ -23,6 +23,18 @@ const mocks = vi.hoisted(() => ({
   dispatch: vi.fn(),
   createQuestion: vi.fn(),
   placement: vi.fn(),
+  captureGrounding: vi.fn(),
+  blobToDataUrl: vi.fn(),
+  getViewport: vi.fn(),
+}));
+
+vi.mock('@xyflow/react', async (original) => ({
+  ...((await original()) as object),
+  useReactFlow: () => ({ getViewport: mocks.getViewport }),
+}));
+vi.mock('@/handler/canvasCommand/utils/screenshot', () => ({
+  captureVisibleCanvasGrounding: mocks.captureGrounding,
+  blobToDataUrl: mocks.blobToDataUrl,
 }));
 
 vi.mock('@/components/Common/CanvasFloatingPopover', async () => {
@@ -139,6 +151,14 @@ beforeEach(() => {
     },
   });
   mocks.placement.mockReturnValue({ x: 10, y: 100 });
+  mocks.getViewport.mockReturnValue({ x: 0, y: 0, zoom: 1 });
+  mocks.captureGrounding.mockResolvedValue({
+    blob: new Blob(['png'], { type: 'image/png' }),
+    crop: { x: 0, y: 0, width: 220, height: 100 },
+    devicePixelRatio: 2,
+    viewport: { width: 1200, height: 800 },
+  });
+  mocks.blobToDataUrl.mockResolvedValue('data:image/png;base64,cG5n');
 });
 
 afterEach(() => {
@@ -153,6 +173,7 @@ describe('StrokeSelectionToolbar Ink submission', () => {
         {
           id: 'sketch-1',
           type: 'sketch',
+          selected: true,
           position: { x: 0, y: 0 },
           data: {},
         },
@@ -177,6 +198,42 @@ describe('StrokeSelectionToolbar Ink submission', () => {
     expect(submit?.disabled).toBe(false);
     expect(submit?.className).toContain('bg-inverse');
     expect(submit?.className).toContain('rounded-full');
+  });
+
+  it('captures hidden grounding before dispatching mixed Ink and objects', async () => {
+    useCanvasStore.getState()._setStateNoAutosave({
+      nodes: [
+        {
+          id: 'sketch-1',
+          type: 'sketch',
+          selected: true,
+          position: { x: 0, y: 0 },
+          data: {},
+        },
+        {
+          id: 'note-1',
+          type: 'note',
+          selected: true,
+          position: { x: 120, y: 0 },
+          data: {},
+        },
+      ],
+    });
+    mocks.dispatch.mockResolvedValueOnce({ status: 'completed' });
+    const button = await renderToolbar();
+
+    await act(async () => button.click());
+
+    expect(mocks.captureGrounding).toHaveBeenCalledOnce();
+    expect(mocks.blobToDataUrl).toHaveBeenCalledWith(expect.any(Blob));
+    expect(mocks.prepare).toHaveBeenCalledWith(
+      expect.objectContaining({
+        groundingVisual: expect.objectContaining({
+          dataUrl: 'data:image/png;base64,cG5n',
+          selectedNodeIds: ['note-1'],
+        }),
+      }),
+    );
   });
 
   it('exposes a disabled explanation for multiple Question targets', async () => {

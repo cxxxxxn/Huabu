@@ -22,6 +22,7 @@ export type ConversationOwnerSource = {
   agentBindingPolicy?: 'selectable' | 'fixed';
   bindingState?: 'editing' | 'bound';
   invocationToken?: string;
+  pendingInkIntentLabel?: boolean;
   content?: unknown;
 };
 

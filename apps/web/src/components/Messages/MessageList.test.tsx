@@ -17,6 +17,8 @@ const renderCounts = vi.hoisted(() => ({
   assistant: new Map<string, number>(),
   user: 0,
   userInputKinds: [] as Array<string | undefined>,
+  userInferredIntents: [] as Array<string | undefined>,
+  userGroundingValues: [] as unknown[],
 }));
 
 vi.mock('./AIMessage', async () => {
@@ -41,11 +43,17 @@ vi.mock('./UserMessage', async () => {
   return {
     UserMessage: memo(function MockUserMessage({
       inputKind,
+      inferredIntent,
+      groundingVisual,
     }: {
       inputKind?: string;
+      inferredIntent?: string;
+      groundingVisual?: unknown;
     }) {
       renderCounts.user++;
       renderCounts.userInputKinds.push(inputKind);
+      renderCounts.userInferredIntents.push(inferredIntent);
+      renderCounts.userGroundingValues.push(groundingVisual);
       return <div data-user-message />;
     }),
   };
@@ -98,6 +106,8 @@ beforeEach(() => {
   renderCounts.assistant.clear();
   renderCounts.user = 0;
   renderCounts.userInputKinds = [];
+  renderCounts.userInferredIntents = [];
+  renderCounts.userGroundingValues = [];
   vi.spyOn(HTMLElement.prototype, 'scrollTo').mockImplementation(() => {});
 });
 
@@ -119,6 +129,22 @@ describe('MessageList render isolation', () => {
             role: 'user',
             content: '',
             inputKind: 'ink-intent',
+            inferredIntent: 'Expand the third step',
+            groundingVisual: {
+              kind: 'visible-canvas',
+              dataUrl: 'data:image/png;base64,cG5n',
+              viewport: {
+                x: 0,
+                y: 0,
+                zoom: 1,
+                width: 100,
+                height: 100,
+                devicePixelRatio: 1,
+              },
+              crop: { x: 0, y: 0, width: 100, height: 100 },
+              selectedNodeIds: ['note-1'],
+              strokeSubsets: [{ nodeId: 'sketch-1', strokeIds: ['stroke-1'] }],
+            },
           },
         ]}
         isLoading={false}
@@ -126,6 +152,8 @@ describe('MessageList render isolation', () => {
     );
 
     expect(renderCounts.userInputKinds).toEqual(['ink-intent']);
+    expect(renderCounts.userInferredIntents).toEqual(['Expand the third step']);
+    expect(renderCounts.userGroundingValues).toEqual([undefined]);
   });
 
   it('does not rerender historical messages when a sibling draft changes', () => {

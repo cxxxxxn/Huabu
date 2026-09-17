@@ -28,4 +28,29 @@ describe('UserMessage', () => {
     expect(container.querySelector('[data-chat-user-message]')).not.toBeNull();
     act(() => root.unmount());
   });
+
+  it('renders inferred intent as Agent-derived Ink text', () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    act(() => {
+      root.render(
+        <UserMessage
+          content=""
+          inputKind="ink-intent"
+          inferredIntent="Expand the third comparison step"
+        />,
+      );
+    });
+
+    expect(container.textContent).toContain('Expand the third comparison step');
+    expect(container.textContent).not.toContain('Ink request');
+    expect(
+      container.querySelector(
+        '[aria-label="Inferred Ink request: Expand the third comparison step"]',
+      ),
+    ).not.toBeNull();
+    act(() => root.unmount());
+  });
 });

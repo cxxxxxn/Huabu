@@ -18,6 +18,7 @@ import type {
 interface UserMessageProps {
   content: string;
   inputKind?: AgentInputKind;
+  inferredIntent?: string;
   attachments?: ChatAttachment[];
   selectedNodeIds?: string[];
   /**
@@ -39,6 +40,7 @@ interface UserMessageProps {
 export const UserMessage = memo(function UserMessage({
   content,
   inputKind,
+  inferredIntent,
   attachments,
   selectedNodeIds,
   selectedStrokeIds,
@@ -67,9 +69,18 @@ export const UserMessage = memo(function UserMessage({
         <div className="bg-bg-default text-fg-default overflow-hidden rounded-md border border-none px-4 py-2 text-sm">
           <div className="leading-relaxed wrap-anywhere whitespace-pre-wrap">
             {inputKind === 'ink-intent' && (
-              <span className="inline-flex items-center gap-1.5 font-medium">
+              <span
+                className="inline-flex items-center gap-1.5 font-medium"
+                aria-label={
+                  inferredIntent
+                    ? t('messages.inferredInkRequest', {
+                        intent: inferredIntent,
+                      })
+                    : undefined
+                }
+              >
                 <PenLine className="size-3.5" aria-hidden="true" />
-                {t('messages.inkRequest')}
+                {inferredIntent ?? t('messages.inkRequest')}
               </span>
             )}
             {hasSkills &&

@@ -37,7 +37,9 @@ import { canvasAcpNamespace } from '../workspace/paths.js';
 import { renderInternalAgentInputs } from './conversation/prompt/build-prompt.js';
 import { dumpAssembledPrompt } from './conversation/prompt/debug-prompt.js';
 import { conversationTitleService } from './conversation-title.service.js';
-import { type ToolScope } from './tools/index.js';
+import { beginActiveInkIntentTurn } from './ink-intent-runtime.js';
+import { getSessionReadSet } from './session-read-set.js';
+import { buildAgentToolsByNames, type ToolScope } from './tools/index.js';
 
 import type { HuabuSubmission } from './agenetes/handle.js';
 import type { ChatEnvelope } from './conversation/envelope.js';
@@ -209,6 +211,8 @@ export interface AgentRunOptions {
   hasImage?: boolean;
   /** Frozen Space Prompt captured when a fixed Agent Node is first realised. */
   spacePrompt?: string;
+  /** Server-resolved Question owner eligible for pending Ink auto-naming. */
+  inkIntentOwnerNodeId?: string;
   /**
    * Per-thread model override id carried with this turn (built-in chat).
    * Applied to the thread before the run, so a model picked before the
@@ -288,6 +292,7 @@ export async function* runAgent(
     modelRole,
     hasImage,
     spacePrompt,
+    inkIntentOwnerNodeId,
     modelId,
     reasoningEffort,
     maxIterations,
@@ -438,11 +443,29 @@ export async function* runAgent(
     );
   }
   if (signal?.aborted) return [];
+  const finishInkIntentTurn =
+    envelope?.user?.inputKind === 'ink-intent' && canvasId && deploymentThreadId
+      ? beginActiveInkIntentTurn(
+          canvasId,
+          deploymentThreadId,
+          inkIntentOwnerNodeId,
+        )
+      : () => undefined;
+  const turnTools =
+    envelope?.user?.inputKind === 'ink-intent'
+      ? buildAgentToolsByNames(['report_ink_intent'], {
+          canvasId,
+          origin,
+          threadId: deploymentThreadId,
+          readSet: getSessionReadSet(deploymentThreadId),
+        })
+      : undefined;
   const iterator = handle.run(submission, {
     maxIterations: maxIterations ?? agentCfg.runtime.maxIterations,
     signal,
     logger,
     onRendered,
+    tools: turnTools,
   });
   onTurnStarted?.(
     deploymentThreadId
@@ -454,23 +477,27 @@ export async function* runAgent(
       : undefined,
   );
 
-  while (true) {
-    const next = await iterator.next();
-    if (next.done) return next.value;
-    const event = next.value;
-    if (event.type === 'tool_call') {
-      yield {
-        ...event,
-        data: {
-          ...event.data,
-          internalToolName:
-            event.data.title && event.data.title.length > 0
-              ? event.data.title
-              : undefined,
-        },
-      };
-      continue;
+  try {
+    while (true) {
+      const next = await iterator.next();
+      if (next.done) return next.value;
+      const event = next.value;
+      if (event.type === 'tool_call') {
+        yield {
+          ...event,
+          data: {
+            ...event.data,
+            internalToolName:
+              event.data.title && event.data.title.length > 0
+                ? event.data.title
+                : undefined,
+          },
+        };
+        continue;
+      }
+      yield event;
     }
-    yield event;
+  } finally {
+    finishInkIntentTurn();
   }
 }

@@ -95,6 +95,21 @@ describe('buildHistoryFromTurns', () => {
         originNodeIds: ['ink-1'],
       },
     ];
+    envelope.focus.groundingVisual = {
+      kind: 'visible-canvas',
+      dataUrl: 'data:image/png;base64,cG5n',
+      viewport: {
+        x: 0,
+        y: 0,
+        zoom: 1,
+        width: 1200,
+        height: 800,
+        devicePixelRatio: 2,
+      },
+      crop: { x: 10, y: 20, width: 400, height: 300 },
+      selectedNodeIds: ['note-1'],
+      strokeSubsets: [{ nodeId: 'ink-1', strokeIds: ['stroke-1'] }],
+    };
     const request = createChatSubmission(envelope, [
       { type: 'text', text: '<ink_intent>host directive</ink_intent>' },
     ]);
@@ -104,6 +119,7 @@ describe('buildHistoryFromTurns', () => {
         role: 'user',
         content: '',
         inputKind: 'ink-intent',
+        groundingVisual: envelope.focus.groundingVisual,
         selectedNodeIds: ['ink-1', 'note-1'],
         selectedStrokeIds: [{ nodeId: 'ink-1', strokeIds: ['stroke-1'] }],
       },
@@ -116,6 +132,56 @@ describe('buildHistoryFromTurns', () => {
     expect(
       build([{ request: createChatSubmission(envelope), transcript: [] }]),
     ).toStrictEqual([{ role: 'user', content: '', inputKind: 'ink-intent' }]);
+  });
+
+  it('projects inferred intent from a hidden built-in tool call', () => {
+    const envelope = makeEnvelope('');
+    envelope.user.inputKind = 'ink-intent';
+    const report = {
+      type: 'tool_call',
+      data: {
+        toolCallId: 'intent-1',
+        title: 'report_ink_intent',
+        status: 'completed',
+        rawInput: {
+          status: 'inferred',
+          text: 'Expand the third comparison step',
+        },
+      },
+    } as FoldedMessage;
+
+    expect(
+      buildInternal([
+        { request: createChatSubmission(envelope), transcript: [report] },
+      ]),
+    ).toEqual([
+      {
+        role: 'user',
+        content: '',
+        inputKind: 'ink-intent',
+        inferredIntent: 'Expand the third comparison step',
+      },
+    ]);
+  });
+
+  it('keeps the fallback and hides malformed intent reports', () => {
+    const envelope = makeEnvelope('');
+    envelope.user.inputKind = 'ink-intent';
+    const report = {
+      type: 'tool_call',
+      data: {
+        toolCallId: 'intent-1',
+        title: 'report_ink_intent',
+        status: 'completed',
+        rawInput: { status: 'inferred', text: 'line one\nline two' },
+      },
+    } as FoldedMessage;
+
+    expect(
+      buildInternal([
+        { request: createChatSubmission(envelope), transcript: [report] },
+      ]),
+    ).toEqual([{ role: 'user', content: '', inputKind: 'ink-intent' }]);
   });
 
   it('rebuilds the user bubble from the envelope and assistant text from the transcript', () => {

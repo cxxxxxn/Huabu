@@ -219,6 +219,7 @@ const FrameFitPreviewOverlay: React.FC<{
 
   return (
     <div
+      data-canvas-grounding-exclude
       className="bg-info-bg/40 shadow-bottom pointer-events-none absolute z-40 transition-all duration-150"
       style={{
         left: screenRect.left,

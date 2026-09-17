@@ -36,9 +36,8 @@ import {
   validateConversationView,
 } from '@/store/conversationOwner';
 import {
-  receiveAcpConversationTitle,
+  invalidateConversationTitle,
   refreshConversationTitleAfterStream,
-  seedConversationTitle,
 } from '@/store/conversationTitleStore';
 import { useGesturePreviewStore } from '@/store/gesturePreviewStore';
 import { isPageUnloading } from '@/utils/pageLifecycle';
@@ -57,6 +56,7 @@ import type {
   AgentRequest,
   AgentStreamEvent,
   ChatAttachment,
+  VisibleCanvasGrounding,
   SelectedStrokeSubset,
 } from '@huabu/shared';
 
@@ -171,6 +171,32 @@ const turnAcceptanceSinks = new Map<
   string,
   (accepted: AgentTurnAccepted) => void
 >();
+const hiddenInkIntentToolCalls = new Map<
+  string,
+  { messageId?: string; inferredIntent?: string }
+>();
+
+function hiddenToolKey(threadId: string, toolCallId: string): string {
+  return `${threadId}\0${toolCallId}`;
+}
+
+function clearHiddenIntentCalls(threadId: string): void {
+  const prefix = `${threadId}\0`;
+  for (const key of hiddenInkIntentToolCalls.keys()) {
+    if (key.startsWith(prefix)) hiddenInkIntentToolCalls.delete(key);
+  }
+}
+
+export function parseInferredInkIntent(rawInput: unknown): string | undefined {
+  if (!rawInput || typeof rawInput !== 'object') return undefined;
+  const report = rawInput as Record<string, unknown>;
+  if (report.status !== 'inferred' || typeof report.text !== 'string')
+    return undefined;
+  const text = report.text.trim();
+  return text.length > 0 && text.length <= 120 && !/[\r\n]/.test(text)
+    ? text
+    : undefined;
+}
 
 function turnKey(canvasId: string, threadId: string): string {
   return `${canvasId}\0${threadId}`;
@@ -496,6 +522,23 @@ export function handleStreamEvent(
     }
   } else if (event.type === 'tool_call') {
     const data = event.data;
+    if (data.internalToolName === 'report_ink_intent') {
+      const inferredIntent = parseInferredInkIntent(data.rawInput);
+      const inkMessage = [...ownerMessages]
+        .reverse()
+        .find(
+          (message) =>
+            message.role === 'user' && message.inputKind === 'ink-intent',
+        );
+      hiddenInkIntentToolCalls.set(
+        hiddenToolKey(ctx.threadId, data.toolCallId),
+        {
+          ...(inkMessage ? { messageId: inkMessage.id } : {}),
+          ...(inferredIntent ? { inferredIntent } : {}),
+        },
+      );
+      return;
+    }
     // Internal pi-ai tools carry `internalToolName` → resolve the rich
     // variant + stash provisional args. External ACP tools leave it
     // undefined → render as `generic` from ACP-spec fields only.
@@ -528,6 +571,29 @@ export function handleStreamEvent(
     }
   } else if (event.type === 'tool_call_update') {
     const data = event.data;
+    const hiddenKey = hiddenToolKey(ctx.threadId, data.toolCallId);
+    const hiddenIntent = hiddenInkIntentToolCalls.get(hiddenKey);
+    if (hiddenIntent) {
+      if (
+        data.status === 'completed' &&
+        hiddenIntent.messageId &&
+        hiddenIntent.inferredIntent
+      ) {
+        updateMessage(ctx.threadId, hiddenIntent.messageId, (message) =>
+          message.role === 'user' && !message.inferredIntent
+            ? { ...message, inferredIntent: hiddenIntent.inferredIntent }
+            : message,
+        );
+      }
+      if (
+        data.rawOutput !== undefined ||
+        data.status === 'completed' ||
+        data.status === 'failed'
+      ) {
+        hiddenInkIntentToolCalls.delete(hiddenKey);
+      }
+      return;
+    }
     ensureAssistantMessage(ctx);
     // An internal tool's completion arrives as a `tool_call_update`
     // carrying `rawOutput` (the JSON-stringified `ToolResponse`). The
@@ -618,12 +684,12 @@ export function handleStreamEvent(
     // the owning ChatPanel's mode/model/config selector dropdowns. If
     // that thread has no mounted panel (e.g. headless reconnect), drop.
     acpSessionMetaSinks.get(ctx.threadId)?.(event);
-    if (event.type === 'session_info_update' && ctx.titleCanvasId) {
-      receiveAcpConversationTitle(
-        ctx.titleCanvasId,
-        ctx.threadId,
-        event.data.title,
-      );
+    if (
+      event.type === 'session_info_update' &&
+      event.data.title !== undefined &&
+      ctx.titleCanvasId
+    ) {
+      invalidateConversationTitle(ctx.titleCanvasId, ctx.threadId);
     }
   }
 }
@@ -642,6 +708,7 @@ export interface AgentTurnInput {
   mode: AgentMode;
   sources: CapturedAgentTurnSources;
   attachments?: ChatAttachment[];
+  groundingVisual?: VisibleCanvasGrounding;
   invokedSkills?: string[];
 }
 
@@ -765,6 +832,7 @@ export function prepareAgentTurnRetry(
     inputKind: message.inputKind ?? 'text',
     attachments: message.attachments,
     invokedSkills: message.invokedSkills,
+    groundingVisual: message.groundingVisual,
   });
 }
 
@@ -901,9 +969,6 @@ export async function dispatchAgentTurn(
         streamClaim.release();
     }
     setThreadLastAction(threadId, agentMode);
-    if (!conversationView) {
-      seedConversationTitle(session.ownerCanvasId, threadId, prompt);
-    }
     callbacks.onStarted?.();
 
     addMessage(threadId, {
@@ -911,6 +976,7 @@ export async function dispatchAgentTurn(
       role: 'user',
       content: prompt,
       inputKind,
+      groundingVisual: prepared.groundingVisual,
       attachments,
       ...(sentSelectedNodeIds.length > 0
         ? { selectedNodeIds: sentSelectedNodeIds }
@@ -971,7 +1037,6 @@ export async function dispatchAgentTurn(
     };
     const acceptanceKey = turnKey(requestScope.canvasId, threadId);
     turnAcceptanceSinks.set(acceptanceKey, acceptTurn);
-
     // Make sure any buffered behavioural events have hit the server
     // before the agent builds its request context. Failures are
     // swallowed inside the flush helper — we never want a transient
@@ -1049,6 +1114,7 @@ export async function dispatchAgentTurn(
         },
         {
           inputKind,
+          groundingVisual: prepared.groundingVisual,
           canvasContext,
           canvasId: requestScope.canvasId || undefined,
           attachments,
@@ -1094,6 +1160,7 @@ export async function dispatchAgentTurn(
         result.error ??=
           error instanceof Error ? error : new Error(String(error));
       } finally {
+        clearHiddenIntentCalls(threadId);
         if (turnAcceptanceSinks.get(acceptanceKey) === acceptTurn) {
           turnAcceptanceSinks.delete(acceptanceKey);
         }

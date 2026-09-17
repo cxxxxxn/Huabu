@@ -15,7 +15,11 @@
  * is unit-testable in isolation.
  */
 
-import { commandFromRawInput, variantForInternalTool } from '@huabu/shared';
+import {
+  commandFromRawInput,
+  inkIntentReportSchema,
+  variantForInternalTool,
+} from '@huabu/shared';
 
 import { projectUserVisibleAttachments } from './attachment-chips.js';
 import {
@@ -46,6 +50,40 @@ type FoldedToolCallData = Extract<
   /** Result payload folded from `tool_call_update.rawOutput`. */
   rawOutput?: unknown;
 };
+
+export function inferredIntentFromFoldedToolCall(
+  message: FoldedMessage,
+  recoverInternalToolName: boolean,
+): string | undefined {
+  if (!isInkIntentReportToolCall(message, recoverInternalToolName))
+    return undefined;
+  const data = message.data as FoldedToolCallData;
+  if (data.status !== 'completed') return undefined;
+  let input = data.rawInput;
+  if (typeof input === 'string') {
+    try {
+      input = JSON.parse(input) as unknown;
+    } catch {
+      return undefined;
+    }
+  }
+  const report = inkIntentReportSchema.safeParse(input);
+  return report.success && report.data.status === 'inferred'
+    ? report.data.text
+    : undefined;
+}
+
+export function isInkIntentReportToolCall(
+  message: FoldedMessage,
+  recoverInternalToolName: boolean,
+): boolean {
+  if (message.type !== 'tool_call') return false;
+  const data = message.data as FoldedToolCallData;
+  return (
+    data.internalToolName === 'report_ink_intent' ||
+    (recoverInternalToolName && data.title === 'report_ink_intent')
+  );
+}
 
 /**
  * Parse a tool-result text payload into the canonical
@@ -261,6 +299,7 @@ export function buildHistoryFromTurns(
   for (const turn of turns) {
     const envelope = envelopeOf(turn);
     const viewEvent = interactiveViewEventFromSubmission(turn.request);
+    let inkUserItem: Extract<ChatHistoryItem, { role: 'user' }> | null = null;
 
     // 1. User item, straight from the structured envelope.
     if (envelope) {
@@ -282,11 +321,14 @@ export function buildHistoryFromTurns(
         attachments.length > 0 ||
         selectedNodeIds.length > 0
       ) {
-        messages.push({
+        const userItem: Extract<ChatHistoryItem, { role: 'user' }> = {
           role: 'user',
           content: envelope.user.text,
           ...(envelope.user.inputKind && {
             inputKind: envelope.user.inputKind,
+          }),
+          ...(envelope.focus.groundingVisual && {
+            groundingVisual: envelope.focus.groundingVisual,
           }),
           ...(attachments.length > 0 && {
             attachments: attachments as ChatAttachment[],
@@ -294,7 +336,9 @@ export function buildHistoryFromTurns(
           ...(selectedNodeIds.length > 0 && { selectedNodeIds }),
           ...(selectedStrokeIds.length > 0 && { selectedStrokeIds }),
           ...(invokedSkills.length > 0 && { invokedSkills }),
-        });
+        };
+        messages.push(userItem);
+        if (envelope.user.inputKind === 'ink-intent') inkUserItem = userItem;
       }
     } else if (viewEvent) {
       messages.push({
@@ -338,6 +382,21 @@ export function buildHistoryFromTurns(
           }
           break;
         case 'tool_call':
+          if (
+            isInkIntentReportToolCall(
+              msg,
+              options.recoverInternalToolNames === true,
+            )
+          ) {
+            const inferredIntent = inferredIntentFromFoldedToolCall(
+              msg,
+              options.recoverInternalToolNames === true,
+            );
+            if (inkUserItem && inferredIntent && !inkUserItem.inferredIntent) {
+              inkUserItem.inferredIntent = inferredIntent;
+            }
+            break;
+          }
           pushAssistantParts([
             buildToolPart(
               msg.data as FoldedToolCallData,

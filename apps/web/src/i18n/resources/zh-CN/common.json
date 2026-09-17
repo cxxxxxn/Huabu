@@ -751,6 +751,7 @@
     "generationInterrupted": "生成已中断",
     "somethingWentWrong": "出了点问题",
     "inkRequest": "笔迹请求",
+    "inferredInkRequest": "推断的笔迹请求：{{intent}}",
     "retry": "重试",
     "addAsNote": "添加为笔记",
     "copyMessage": "复制消息",

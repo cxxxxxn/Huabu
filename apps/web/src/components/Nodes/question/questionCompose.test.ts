@@ -133,6 +133,7 @@ describe('Question conversation presentation', () => {
       binding: { kind: 'internal' },
       mode: 'operate',
       label: 'New ink request',
+      pendingInkIntentLabel: true,
     });
     expect(addNode).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -143,6 +144,7 @@ describe('Question conversation presentation', () => {
           agentBinding: { kind: 'internal' },
           agentMode: 'operate',
           label: 'New ink request',
+          pendingInkIntentLabel: true,
         }),
       }),
     );

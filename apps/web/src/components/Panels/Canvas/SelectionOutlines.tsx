@@ -105,6 +105,7 @@ export const SelectionOutlines = () => {
     return (
       <div
         key={n.id}
+        data-canvas-grounding-exclude
         className="pointer-events-none absolute z-998"
         style={{
           left,

@@ -783,6 +783,11 @@ describe('AgentThreadService', () => {
     );
     expect(harness.startLifecycle).toHaveBeenCalledOnce();
     await expect(invocation.acceptance).resolves.toEqual(acceptance);
+    expect(harness.finishLifecycle).toHaveBeenCalledWith(
+      TARGET,
+      expect.any(String),
+      { consumePendingInkIntentLabel: true },
+    );
   });
 
   it('preserves the durable acceptance identity outside the Agent event log', async () => {

@@ -405,17 +405,39 @@ export class AgentThreadService {
       recordTurnStart({ started: false });
       try {
         if (projected && agentTarget) {
+          const terminalOptions =
+            active.turnStartState?.started === true &&
+            envelope?.user.inputKind === 'ink-intent'
+              ? { consumePendingInkIntentLabel: true }
+              : undefined;
           if (terminal === 'error') {
-            await this.dependencies.failLifecycle(
-              agentTarget,
-              message ?? 'Internal Error',
-              invocationToken,
-            );
+            if (terminalOptions) {
+              await this.dependencies.failLifecycle(
+                agentTarget,
+                message ?? 'Internal Error',
+                invocationToken,
+                terminalOptions,
+              );
+            } else {
+              await this.dependencies.failLifecycle(
+                agentTarget,
+                message ?? 'Internal Error',
+                invocationToken,
+              );
+            }
           } else {
-            await this.dependencies.finishLifecycle(
-              agentTarget,
-              invocationToken,
-            );
+            if (terminalOptions) {
+              await this.dependencies.finishLifecycle(
+                agentTarget,
+                invocationToken,
+                terminalOptions,
+              );
+            } else {
+              await this.dependencies.finishLifecycle(
+                agentTarget,
+                invocationToken,
+              );
+            }
           }
         }
       } catch (error) {
@@ -804,6 +826,7 @@ export class AgentThreadService {
       },
       modelId: options.modelId,
       spacePrompt: options.spacePrompt,
+      inkIntentOwnerNodeId: options.agentTarget?.nodeId,
       reasoningEffort: options.reasoningEffort,
       maxIterations: 20,
       signal: options.signal,

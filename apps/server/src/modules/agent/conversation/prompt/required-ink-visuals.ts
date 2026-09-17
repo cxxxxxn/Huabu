@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT license.
+
 export class InkVisualPreparationError extends Error {
   readonly code = 'ink_visual_unavailable';
   readonly cause?: unknown;
