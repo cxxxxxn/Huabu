@@ -135,6 +135,45 @@ it('rejects unsafe names and inactive scopes before contacting Azure', async () 
   );
   expect(h.container.getBlockBlobClient).not.toHaveBeenCalled();
 });
+it('escapes names and Workspace keys that Azure would trim or reject', async () => {
+  // Azurite stores these verbatim; Azure drops trailing dots and rejects
+  // control characters, so the mapping itself is the regression guard.
+  const h = harness();
+  await h.store.init();
+  const scope = h.store.space('space').artifacts;
+  for (const name of ['plain.', 'plain%2E', '100%', 'tab\tname', '...'])
+    await scope.put(name, Buffer.from(name));
+  expect(h.container.getBlockBlobClient.mock.calls).toEqual([
+    ['huabu/workspace/space/artifacts/plain%2E'],
+    ['huabu/workspace/space/artifacts/plain%252E'],
+    ['huabu/workspace/space/artifacts/100%25'],
+    ['huabu/workspace/space/artifacts/tab%09name'],
+    ['huabu/workspace/space/artifacts/%2E%2E%2E'],
+  ]);
+  h.workspace.id = '/workspaces/project.';
+  h.blob.getProperties.mockResolvedValue({});
+  await h.store.space('space').artifacts.head('file');
+  expect(h.container.getBlobClient).toHaveBeenLastCalledWith(
+    'huabu/%2Fworkspaces%2Fproject%2E/space/artifacts/file',
+  );
+  h.container.listBlobsFlat.mockImplementation(async function* () {
+    for (const name of [
+      'plain%2E',
+      'plain%252E',
+      'tab%09name',
+      // Not written by this adapter: a trimmed dot or a non-canonical escape.
+      'raw.',
+      '%41',
+    ])
+      yield {
+        name: `huabu/%2Fworkspaces%2Fproject%2E/space/artifacts/${name}`,
+        properties: {},
+      };
+  });
+  expect(
+    (await h.store.space('space').artifacts.list()).map((item) => item.name),
+  ).toEqual(['plain.', 'plain%2E', 'tab\tname']);
+});
 it('scopes listing and deletion, excluding nested or foreign guide members', async () => {
   const h = harness();
   await h.store.init();

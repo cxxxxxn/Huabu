@@ -85,6 +85,35 @@ it('isolates Workspace identities and rejects retained scopes after activation',
   );
 });
 
+it('keeps names Azure would trim or reject distinct and verbatim', async () => {
+  const h = await open();
+  const scope = h.store.space(h.canvasId).artifacts;
+  const names = ['plain', 'plain.', 'plain..', 'plain%2E', '100%', 'tab\tname'];
+  for (const name of names) await scope.put(name, Buffer.from(name));
+  for (const name of names)
+    expect((await scope.read(name))?.toString()).toBe(name);
+  expect((await scope.list()).map((blob) => blob.name).sort()).toEqual(
+    [...names].sort(),
+  );
+  await scope.deleteAll();
+  expect(await scope.list()).toEqual([]);
+});
+
+it('keeps Workspace identities that differ only by trailing dots apart', async () => {
+  const h = await open();
+  h.workspace.id = '/workspaces/project';
+  await h.store.space('space').artifacts.put('file', Buffer.from('plain'));
+  h.workspace.id = '/workspaces/project.';
+  const dotted = h.store.space('space').artifacts;
+  expect(await dotted.read('file')).toBeNull();
+  await dotted.put('file', Buffer.from('dotted'));
+  await dotted.deleteAll();
+  h.workspace.id = '/workspaces/project';
+  expect(
+    (await h.store.space('space').artifacts.read('file'))?.toString(),
+  ).toBe('plain');
+});
+
 it('materializes a read-only temporary file and removes it on release', async () => {
   const h = await open();
   const scope = h.store.space(h.canvasId).artifacts;

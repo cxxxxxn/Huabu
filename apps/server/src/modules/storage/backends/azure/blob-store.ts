@@ -37,6 +37,31 @@ import type { StorageHealth } from '../../ports/common.js';
 // A multi-Server deployment would need distributed writer ownership instead.
 const serializeUpload = createKeyedMutex<string>();
 const BLOCK_SIZE = 4 * 1024 * 1024;
+
+// Azure silently drops trailing dots from every path segment, so `a.` and `a`
+// would address one object, and it rejects control characters. Percent-escape
+// both, and `%` itself, so each accepted port name maps to one distinct key.
+function escapeTrailingDots(segment: string): string {
+  return segment.replace(/\.+$/, (dots) => '%2E'.repeat(dots.length));
+}
+function blobKey(name: string): string {
+  return escapeTrailingDots(
+    name.replace(
+      /[%\p{Cc}]/gu,
+      (char) =>
+        `%${char.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`,
+    ),
+  );
+}
+/** The port name for a key, or null for a key this adapter did not write. */
+function blobName(key: string): string | null {
+  if (key.includes('/')) return null;
+  const name = key.replace(/%([0-9A-F]{2})/g, (_, hex: string) =>
+    String.fromCharCode(Number.parseInt(hex, 16)),
+  );
+  return blobKey(name) === key ? name : null;
+}
+
 function missing(error: unknown): boolean {
   return (
     typeof error === 'object' &&
@@ -110,7 +135,9 @@ export class AzureBlobStore implements BlobStore {
           `Azure blob scope ${canvasId} belongs to an inactive Workspace`,
         );
     };
-    const root = `${this.prefix}/${encodeURIComponent(bound)}/${canvasId}/`;
+    // encodeURIComponent never escapes '.', so escaping trailing dots after it
+    // stays injective.
+    const root = `${this.prefix}/${escapeTrailingDots(encodeURIComponent(bound))}/${canvasId}/`;
     const area = (name: keyof SpaceBlobs) =>
       new AzureBlobScope(
         this.container,
@@ -141,21 +168,22 @@ class AzureBlobScope implements BlobScope {
       throw new BlobNameError(`Blob name ${name} is outside this area`);
     return name;
   }
+  private key(name: string): string {
+    return this.prefix + blobKey(name);
+  }
   async put(input: string, body: Buffer | Readable): Promise<BlobInfo> {
     try {
       const name = this.name(input);
-      const key = new URL(this.container.url);
-      key.search = '';
+      const containerUrl = new URL(this.container.url);
+      containerUrl.search = '';
       const ignoreError = () => {};
       if (!Buffer.isBuffer(body)) body.on('error', ignoreError);
       try {
         return await serializeUpload(
-          `${key.href}/${this.prefix}${name}`,
+          `${containerUrl.href}/${this.key(name)}`,
           async () => {
             this.guard();
-            const client = this.container.getBlockBlobClient(
-              this.prefix + name,
-            );
+            const client = this.container.getBlockBlobClient(this.key(name));
             const uploadId = randomUUID();
             const blocks: string[] = [];
             let size = 0;
@@ -221,7 +249,7 @@ class AzureBlobScope implements BlobScope {
     const name = this.name(input);
     try {
       const properties = await this.container
-        .getBlobClient(this.prefix + name)
+        .getBlobClient(this.key(name))
         .getProperties();
       return {
         name,
@@ -247,7 +275,7 @@ class AzureBlobScope implements BlobScope {
       // Metadata and bytes come from one response, so a concurrent replacement
       // cannot pair the old object's metadata with the new object's bytes.
       const response = await this.container
-        .getBlobClient(this.prefix + name)
+        .getBlobClient(this.key(name))
         .download(
           start,
           range?.end === undefined ? undefined : range.end - start + 1,
@@ -292,8 +320,8 @@ class AzureBlobScope implements BlobScope {
     for await (const blob of this.container.listBlobsFlat({
       prefix: this.prefix,
     })) {
-      const name = blob.name.slice(this.prefix.length);
-      if (name.includes('/') || (this.members && !this.members.includes(name)))
+      const name = blobName(blob.name.slice(this.prefix.length));
+      if (name === null || (this.members && !this.members.includes(name)))
         continue;
       result.push({
         name,
@@ -330,8 +358,8 @@ class AzureBlobScope implements BlobScope {
       prefix: this.prefix,
       includeUncommitedBlobs: true,
     })) {
-      const name = blob.name.slice(this.prefix.length);
-      if (name.includes('/') || (this.members && !this.members.includes(name)))
+      const name = blobName(blob.name.slice(this.prefix.length));
+      if (name === null || (this.members && !this.members.includes(name)))
         continue;
       await this.container
         .getBlobClient(blob.name)
