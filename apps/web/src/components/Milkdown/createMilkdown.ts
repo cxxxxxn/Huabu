@@ -1710,7 +1710,14 @@ function createLinkClickHandler(
     // canvas card. Leave propagation intact so that click can select its node.
     mouseEvent.preventDefault();
     if (selecting) return false;
-    if (!hasFollowModifier && !(allowPlainClick && isPlainClick)) return false;
+    // Native keyboard activation has no pointer click count or follow modifier.
+    const isKeyboardActivation = mouseEvent.detail === 0 && isPlainClick;
+    if (
+      !hasFollowModifier &&
+      !(allowPlainClick && isPlainClick) &&
+      !isKeyboardActivation
+    )
+      return false;
     if (onLinkClick && isPlainClick) {
       onLinkClick(href);
       return true;

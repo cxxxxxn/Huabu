@@ -670,6 +670,64 @@ describe('Milkdown block commands', () => {
     );
   });
 
+  it.each([
+    { editable: false, previewMode: false },
+    { editable: true, previewMode: true },
+    { editable: true, previewMode: false },
+  ])(
+    'allows keyboard link activation under modifier policy: %j',
+    async (options) => {
+      const open = vi.spyOn(window, 'open').mockReturnValue(null);
+      await mount('[docs](https://example.com)', {
+        ...options,
+        linkActivation: 'modifier',
+      });
+      expect(clickLink({ modifier: false }).defaultPrevented).toBe(true);
+      expect(open).not.toHaveBeenCalled();
+      expect(clickLink({ modifier: false, detail: 0 }).defaultPrevented).toBe(
+        true,
+      );
+      expect(open).toHaveBeenCalledExactlyOnceWith(
+        'https://example.com',
+        '_blank',
+        'noopener,noreferrer',
+      );
+    },
+  );
+
+  it('routes keyboard activation through the host without allowing plain pointer clicks', async () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    const onLinkClick = vi.fn();
+    await mount('[docs](https://example.com)', {
+      editable: false,
+      linkActivation: 'modifier',
+      onLinkClick,
+    });
+    clickLink({ modifier: false });
+    expect(onLinkClick).not.toHaveBeenCalled();
+    clickLink({ modifier: false, detail: 0 });
+    expect(onLinkClick).toHaveBeenCalledExactlyOnceWith('https://example.com');
+    expect(
+      clickLink({ modifier: false, detail: 0, href: 'javascript:alert(1)' })
+        .defaultPrevented,
+    ).toBe(true);
+    expect(onLinkClick).toHaveBeenCalledTimes(1);
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('blocks unsafe keyboard navigation without a host callback', async () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    await mount('[docs](https://example.com)', {
+      editable: false,
+      linkActivation: 'modifier',
+    });
+    expect(
+      clickLink({ modifier: false, detail: 0, href: 'javascript:alert(1)' })
+        .defaultPrevented,
+    ).toBe(true);
+    expect(open).not.toHaveBeenCalled();
+  });
+
   it('opens a link in a new tab on modifier-click', async () => {
     const open = vi.spyOn(window, 'open').mockReturnValue(null);
     await mount('see [docs](https://example.com) here');

@@ -94,14 +94,16 @@ Activation policy is independent of `onLinkClick`: a callback selects the destin
 
 Every factory link handler installs the same pointer tracking and multi-click suppression, whether or not a host callback exists. Pointer movement beyond the gesture threshold suppresses navigation, including an out-and-back drag; an older text selection does not block a fresh stationary click. Eligible first clicks open immediately, without a timer. Subsequent clicks with `detail > 1` do not reopen, but cannot cancel the first activation: double-clicking an eligible link is not a selection-only gesture. The same suppression applies to platform-modifier navigation. Secondary clicks do not invoke the host callback.
 
+Focused links also support native Enter activation: an unmodified primary click with `detail === 0` is eligible under either policy without a follow modifier. It uses the same HTTP(S) validation and host callback or external-open path as an eligible plain click. Ordinary pointer clicks on canvas cards remain selection-only, and drag/repeated-click suppression is unchanged.
+
 ```
 click / auxclick on <a href> → validate HTTP(S) href
   → unsafe → preventDefault, no navigation
   → safe primary click → preventDefault
     → drag / repeated click / policy-ineligible → unhandled, no navigation
-    → plain policy + plain click + callback → openDocumentLink
+    → (plain policy + plain click, or keyboard activation) + callback → openDocumentLink
       web → window.open; desktop → openPreviewUrl in source group
-    → platform modifier, or plain policy without callback → window.open
+    → platform modifier, or eligible activation without callback → window.open
       web → browser tab; desktop → shell.openExternal
 ```
 

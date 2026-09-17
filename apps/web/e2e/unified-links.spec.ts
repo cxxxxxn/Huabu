@@ -873,6 +873,26 @@ for (const selection of ['link', 'ordinary'] as const) {
   });
 }
 
+test('real canvas Note focused link opens once with Enter without a follow modifier', async ({
+  page,
+}) => {
+  const opened = await observeNavigation(page);
+  const note = await createCanvasNote(page);
+  const anchor = note.locator('.ProseMirror a');
+  await expect(anchor).toBeVisible();
+  await expect(note.locator('.ProseMirror')).toHaveAttribute(
+    'data-link-activation',
+    'modifier',
+  );
+  await anchor.focus();
+  await expect(anchor).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expectNavigations(opened, 1);
+  await settleBrowser(page);
+  expect(opened).toHaveLength(1);
+  await opened[0].close();
+});
+
 test('real canvas Note link selects its node, modifier opens, and dragging does not open', async ({
   page,
 }) => {
