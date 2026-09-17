@@ -1,9 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { getStructuredFrameGutterPlan } from '@huabu/shared/canvas-engine';
+import {
+  applyStructuredFrameRelayout,
+  executeCanvasCommands,
+  getStructuredFrameGutterPlan,
+} from '@huabu/shared/canvas-engine';
 
 import { getNodeFontFit, refitFont } from '@/utils/node/fontFit';
 import {
@@ -18,6 +22,7 @@ import {
 } from '../resizePreview';
 
 import type { CanvasUiIntent } from '@/handler/canvasCommand/uiIntent';
+import type { CanvasNodeId } from '@huabu/shared';
 import type { Edge, Node } from '@xyflow/react';
 
 /**
@@ -80,8 +85,91 @@ function createStoreDouble(initialNodes: Node[], edges: Edge[] = []) {
   };
 }
 
-describe('resize-preview controller — structured gutter freeze', () => {
-  it('scales the captured gutter plan without recomputing it per tick', () => {
+describe('resize-preview controller — structured target spacing', () => {
+  it.each(['column', 'row', 'grid'])(
+    'keeps %s preview and final commit on the requested box',
+    (layoutMode) => {
+      let nodes: Node[] = applyStructuredFrameRelayout(
+        [
+          {
+            id: 'frame',
+            type: 'frame',
+            position: { x: 0, y: 0 },
+            style: { width: 440, height: 376 },
+            data: { sizing: 'hug', layoutMode, gridCount: 1 },
+          },
+          {
+            id: 'image',
+            type: 'image',
+            parentId: 'frame',
+            position: { x: 20, y: 56 },
+            style: { width: 400, height: 300 },
+            data: { frameColumn: 0, frameRow: 0 },
+          },
+        ],
+        ['frame'],
+      ).nodes;
+      const controller = createResizePreviewController({
+        getState: () => ({
+          nodes,
+          edges: [],
+          patchNodeSilent: vi.fn(),
+          dispatchUiIntent: (intent) => {
+            if (intent.type !== 'RESIZE_NODE') return;
+            nodes = executeCanvasCommands(
+              {
+                source: 'ui',
+                commands: [
+                  {
+                    type: 'SET_NODE_GEOMETRY',
+                    items: intent.items.map((item) => ({
+                      ...item,
+                      nodeId: item.nodeId as CanvasNodeId,
+                    })),
+                  },
+                ],
+              },
+              { nodes, edges: [], canvasId: 'test' },
+              { frozenStructuredGutters: intent.frozenStructuredGutters },
+            ).writeResult.nodes;
+          },
+        }),
+      });
+      controller.captureFrameResizeSnapshot('frame');
+      for (const [width, height] of [
+        [880, 376],
+        [1400, 1200],
+        [2400, 2000],
+        [880, 376],
+      ]) {
+        controller.applyFrameResizeScale(width, height, -20, -30);
+        controller.flushFrameResizeScale();
+        expect(nodes[0].style?.width).toBeCloseTo(width, 7);
+        expect(nodes[0].style?.height).toBeCloseTo(height, 7);
+        expect(nodes[0].position).toEqual({ x: -20, y: -30 });
+      }
+      controller.clearFrameResizeSnapshot();
+      nodes = executeCanvasCommands(
+        {
+          source: 'ui',
+          commands: [
+            {
+              type: 'SET_NODE_GEOMETRY',
+              items: [
+                {
+                  nodeId: 'frame' as CanvasNodeId,
+                  size: { width: 880, height: 376 },
+                },
+              ],
+            },
+          ],
+        },
+        { nodes, edges: [], canvasId: 'test' },
+      ).writeResult.nodes;
+      expect(nodes[0].style).toEqual({ width: 880, height: 376 });
+    },
+  );
+  it('does not scale fixed edge-label gutters with the outer box', () => {
     const structuredFrame = {
       ...frameNode(),
       data: { layoutMode: 'column', gridCount: 2 },
@@ -118,7 +206,8 @@ describe('resize-preview controller — structured gutter freeze', () => {
     controller.flushFrameResizeScale();
 
     const frozen = store.getLastResizeIntent()?.frozenStructuredGutters;
-    expect(frozen?.get('frame')?.x?.[0]).toBe(initialGutter * 2);
+    expect(initialGutter).toBeGreaterThan(0);
+    expect(frozen).toBeUndefined();
     controller.clearFrameResizeSnapshot();
   });
 });

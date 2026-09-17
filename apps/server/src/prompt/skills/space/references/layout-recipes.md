@@ -37,7 +37,7 @@ Place the centre at `(cx, cy)`; place N children on a ring of radius `r`. For ev
 
 ## Grouping with frames
 
-- Create a frame for each logical group / layer, sized to enclose its children with **~40px padding** on every side.
+- Create a frame for each logical group / layer with about **28px side/bottom padding** and a larger **~80px top inset** for the internal title at the common Regular Frame size. Huabu derives Compact / Regular / Large title insets from a bounded geometric mean of the Frame's own width and height, not from its children.
 - Use `SET_NODE_PARENT` to parent child nodes into the frame.
 - **Position the frame first**, then position children. Child `position` is **frame-relative** (parent-local): a child at `(0, 0)` sits at the frame's top-left. So the coordinates in the patterns above are the child's offsets **inside** the frame, starting from `(0, 0)` + your padding.
 - Give the frame a clear `data.label` so the group is identifiable when zoomed out.

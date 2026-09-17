@@ -52,6 +52,7 @@ import {
   getFrameSizing,
   getNodeSize,
   getStructuredFrameGutterPlan,
+  structuredFrameResizeScale,
   type NestableNode,
   type StructuredGutterSizes,
 } from '@huabu/shared/canvas-engine';
@@ -183,6 +184,9 @@ type FrameResizeSnapshot = {
    */
   sizing: FrameSizing;
   gutters?: StructuredGutterSizes;
+  /** Immutable gesture-start topology for the canonical inverse layout. */
+  layoutNodes: Node[];
+  layoutEdges: readonly Edge[];
   children: FrameResizeChildSnapshot[];
 };
 
@@ -352,22 +356,19 @@ export function createResizePreviewController(opts: {
       );
       return;
     }
-    // ---- Hug branch: per-axis scaling ------------------------------
-    // Per-axis (sx, sy) for all hug layouts (free, column, row). For
-    // structured (`column` / `row`) frames the grid solver derives
-    // padding + gap per-axis (widths drive padX + interGapX, heights
-    // drive padY + intraGapY — see
-    // `packages/shared/src/canvas-engine/autoLayout/gridLayout.ts`),
-    // so scaling all child widths by `sx` makes the resulting frame
-    // width = `oldW × sx` exactly, and same for height with `sy`.
-    // Single-edge drags therefore track the pointer pixel-perfect on
-    // the dragged axis and leave the orthogonal axis untouched —
-    // children scale per-axis along with the frame. Diagonal drags
-    // stretch children per-axis (children may look non-square); users
-    // who want uniform scaling can hold Shift (TODO: wire up the
-    // modifier).
-    const sx = width / snap.frameWidth;
-    const sy = height / snap.frameHeight;
+    // Structured layouts keep their target-tier whitespace fixed. Invert the
+    // same solver used by the executor instead of scaling the entire box.
+    // Free layouts retain proportional authored positions and their explicit
+    // outer box (the geometry command excludes that Frame from auto-fitting).
+    const scale = structuredFrameResizeScale(
+      snap.layoutNodes,
+      snap.layoutEdges,
+      snap.frameId,
+      width,
+      height,
+    );
+    const sx = scale?.x ?? width / snap.frameWidth;
+    const sy = scale?.y ?? height / snap.frameHeight;
     for (const child of snap.children) {
       const childWidth = Math.max(1, child.width * sx);
       const childHeight = Math.max(1, child.height * sy);
@@ -393,16 +394,9 @@ export function createResizePreviewController(opts: {
     // snapshot flag stays re-armed. For structured (column/row)
     // frames the grid solver re-packs the scaled children at the
     // end of the batch; for free frames the scaled positions stick.
-    const scaledGutters = snap.gutters
-      ? {
-          x: snap.gutters.x?.map((size) => size * sx),
-          y: snap.gutters.y?.map((size) => size * sy),
-        }
-      : undefined;
-    previewResizeGeometry(
-      items,
-      scaledGutters ? new Map([[snap.frameId, scaledGutters]]) : undefined,
-    );
+    // Use the same target-tier edge gutters as the inverse layout and final
+    // commit, avoiding a different gap policy when the pointer is released.
+    previewResizeGeometry(items);
 
     // Re-derive text-bearing children's locked fontSize for their NEW
     // box using the same content-aware pretext fit the node uses for its
@@ -549,6 +543,10 @@ export function createResizePreviewController(opts: {
         frameHeight: frameSize.height,
         sizing,
         gutters,
+        layoutNodes: nodes.filter(
+          (node) => node.id === frameId || node.parentId === frameId,
+        ),
+        layoutEdges: edges,
         children,
       };
     },

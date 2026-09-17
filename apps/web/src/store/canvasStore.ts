@@ -42,6 +42,7 @@ import {
   wouldStickToStructuredFrame,
   wouldAutoFrame,
   readFrameGridConfig,
+  rerouteAllEdges,
   resolveFrameTrackCount,
   describeStructuredDropZone,
   getNodeSize,
@@ -100,6 +101,7 @@ import { agentApi } from '../api/agent';
 import { cloneArtifactToCanvas, resolveArtifactUrl } from '../api/artifact';
 import { CanvasConflictError } from '../api/canvas';
 import { measureMissingAutoHeights } from './canvasStore/height/measureMissingAutoHeights';
+import { normalizeFrameHeaderInsets } from './canvasStore/load/normalizeFrameHeaderInsets';
 import { normalizeNodeHeights } from './canvasStore/load/normalizeNodeHeights';
 import { reconcileQuestionStatus } from './canvasStore/load/reconcileQuestionStatus';
 import { shouldBackfillNodeLabel } from './canvasStore/load/shouldBackfillNodeLabel';
@@ -2213,30 +2215,54 @@ const useCanvasStore = create<RFState>()(
           edges: loadedEdges,
           centre: viewportCentreOf(loadedViewport),
         });
-        const warmedNodes = warmedCanvas.nodes;
+        const warmedNodes = normalizeFrameHeaderInsets(warmedCanvas.nodes);
+        const warmedEdges =
+          warmedNodes === warmedCanvas.nodes
+            ? warmedCanvas.edges
+            : rerouteAllEdges(warmedNodes, warmedCanvas.edges);
+        if (get().canvasId !== targetId) return;
+        let loadedVersion = response.version;
+        if (warmedNodes !== warmedCanvas.nodes) {
+          // Persist the coordinate change before exposing it to users or agents.
+          try {
+            const saved = await putCanvas(targetId, {
+              version: response.version,
+              title: response.title || 'Untitled',
+              state: {
+                nodes: stripNodeContentForStructurePut(warmedNodes),
+                edges: warmedEdges,
+              },
+            });
+            loadedVersion = saved.version;
+          } catch (error) {
+            if (get().canvasId !== targetId) return;
+            console.error('Failed to save Frame header geometry:', error);
+            toast('Could not finish loading this Space. Reload to try again.', {
+              tone: 'danger',
+              duration: 0,
+              action: {
+                label: 'Reload',
+                onClick: () => void get().loadCanvas(targetId),
+              },
+            });
+            return;
+          }
+        }
+        if (get().canvasId !== targetId) return;
         // An authoritative node replacement invalidates every transient that
         // points at the previous in-memory geometry. This applies both to a
         // different-canvas switch and to a same-canvas SSE gap/snapshot heal:
         // even when the canvas id is unchanged, selected stroke ids and
         // retained polygons may have been deleted or moved remotely.
         useGesturePreviewStore.getState().resetCanvasScopedTransients();
-        // Apply the authoritative server state via the no-autosave setter.
-        // A load must NEVER schedule a structure PUT: the nodes/edges we
-        // just fetched already ARE the server's state, so bumping the
-        // canvas `version` would be a spurious self-write. Relying on the
-        // `!prev.isLoading` autosave gate was not enough — two concurrent
-        // loads (e.g. the CanvasPage mount load racing the realtime-sync
-        // `snapshot` reload) can flip `isLoading` false before the losing
-        // load's commit runs, leaking a PUT that resets `updatedAt` to the
-        // open time. History is cleared above, so `canUndo`/`canRedo` are
-        // reset here too (the no-autosave setter skips the middleware's
-        // availability sync).
+        // Do not autosave the loaded baseline again. The no-autosave setter
+        // also skips history availability sync, so restore those flags here.
         get()._setStateNoAutosave({
           nodes: warmedNodes,
-          edges: warmedCanvas.edges,
+          edges: warmedEdges,
           viewport: loadedViewport,
           canvasTitle: response.title || 'Untitled',
-          version: response.version,
+          version: loadedVersion,
           isLoading: false,
           canUndo: canvasHistoryManager.canUndo,
           canRedo: canvasHistoryManager.canRedo,
@@ -2247,15 +2273,11 @@ const useCanvasStore = create<RFState>()(
           .getState()
           .validate(new Set(warmedNodes.map((node) => node.id)));
 
-        // Warmup hints were folded in before the commit, and a load
-        // deliberately never schedules a save — so without this they
-        // would live only in memory and every open would re-measure the
-        // same notes. Schedule one save so the canvas warms up exactly
-        // once. This rides the structure save because that is where
-        // every other derived height goes today; Step 6 of the height
-        // model moves them all onto a dedicated channel that touches
-        // neither `version` nor the broadcast.
-        if (warmedNodes !== loadedNodes) {
+        // Persist Note warmup hints unless the header write already included them.
+        if (
+          warmedCanvas.nodes !== loadedNodes &&
+          warmedNodes === warmedCanvas.nodes
+        ) {
           structureScheduler.schedule();
         }
 

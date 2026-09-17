@@ -127,6 +127,7 @@ export function executeCanvasCommands(
   // all other affected frames `'compact'` away tracks emptied by organic
   // child changes (deletions, drags).
   const fillFrameIds = new Set<string>();
+  const resizedFrameIds = new Set<string>();
 
   // Track which commands were actually applied.
   let anyApplied = false;
@@ -159,6 +160,17 @@ export function executeCanvasCommands(
 
     if (result.applied) {
       anyApplied = true;
+      if (cmd.type === 'SET_NODE_GEOMETRY') {
+        const frameIds = new Set(
+          result.nodes
+            .filter((node) => node.type === 'frame')
+            .map((node) => node.id),
+        );
+        for (const item of cmd.items) {
+          if (item.size && frameIds.has(item.nodeId))
+            resizedFrameIds.add(item.nodeId);
+        }
+      }
 
       // Advance the evolving state so the next command in the batch
       // sees this command's changes.
@@ -218,12 +230,9 @@ export function executeCanvasCommands(
   // then needs to be reflected in the bounding-box pass for any
   // ancestor wrappers.
   //
-  // Per-axis padding makes the structured solver self-consistent
-  // under per-axis resize: scaling all child widths by `sx` makes
-  // `padX` + `interGapX` scale by `sx` too, so the resulting frame
-  // width = `oldWidth × sx` exactly — `flushScale` therefore passes
-  // the raw (sx, sy) from the resize gesture through without
-  // collapsing to a uniform scalar.
+  // Explicit Frame resize targets select the responsive tier. The resize
+  // controller scales content after subtracting that tier's fixed whitespace;
+  // ordinary content mutations resolve a stable Hug tier instead.
   // ------------------------------------------------------------------
   if (anyApplied && allAffectedFrameIds.size > 0) {
     // fitFrames gate: hug-only (or all, when forced).
@@ -248,6 +257,7 @@ export function executeCanvasCommands(
       {
         edges: currentEdges,
         frozenGuttersByFrame: options.frozenStructuredGutters,
+        resizedFrameIds,
       },
     );
     currentNodes = structured.nodes;

@@ -5,10 +5,7 @@ import { MoveRight, Trash2 } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import {
-  ACCENT_NONE_TOKEN,
-  ACCENT_PICKER_OPTIONS_WITH_TRANSPARENT,
-} from '@huabu/shared';
+import { ACCENT_NONE_TOKEN } from '@huabu/shared';
 import {
   DEFAULT_EDGE_STROKE_TOKEN,
   getSelectionBounds,
@@ -27,6 +24,8 @@ import { translateColorOptions } from '@/i18n/colors';
 import useCanvasStore from '@/store/canvasStore';
 import { resolveGeometryEdit } from '@/utils/node/geometry';
 import { getEdgeIdsBetweenSelectedNodes } from '@/utils/selection';
+
+import { nodeAccentPickerOptions } from './nodeAccentPickerOptions';
 
 import type { CanvasNode } from '@/components/Nodes/types';
 import type { CanvasEdgeId, CanvasNodeId } from '@huabu/shared';
@@ -112,16 +111,13 @@ export const MultiSelectToolbar = () => {
   );
   const hasMixedTextAndBoxSelection = hasTextFlowSelection && hasBoxSelection;
 
-  // Always include the "Transparent" swatch so users can revert a node
-  // back to the default (no-accent / neutral surface) state. Hiding it
-  // for non-text selections used to be the design (the assumption being
-  // that other types "need a solid background"), but in practice every
-  // node defaults to a null accent and the picker had no way to express
-  // that state — once a coloured swatch was clicked it could not be
-  // undone.
   const accentPickerOptions = useMemo(
-    () => translateColorOptions(ACCENT_PICKER_OPTIONS_WITH_TRANSPARENT, t),
-    [t],
+    () =>
+      translateColorOptions(
+        nodeAccentPickerOptions(selectedNodes.map((node) => node.type)),
+        t,
+      ),
+    [selectedNodes, t],
   );
 
   // Common width / height across selected nodes. `null` when the

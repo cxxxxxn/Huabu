@@ -11,6 +11,7 @@
  * All functions are pure: input arrays are never mutated.
  */
 
+import { frameResponsiveMetricsForContentSize } from './design.js';
 import {
   checkShouldUnframe,
   createRectGetter,
@@ -33,7 +34,6 @@ import {
   subPos,
   type NestableNode,
 } from '../container/tree.js';
-import { medianOfChildExtents, paddingFromExtent } from '../utils/constants.js';
 import { getNodeSize } from '../utils/nodeSizes.js';
 
 import type { Edge, XYPosition } from '@xyflow/react';
@@ -225,12 +225,6 @@ export function frameNodes(
   let maxX = Number.NEGATIVE_INFINITY;
   let maxY = Number.NEGATIVE_INFINITY;
 
-  // Gather the to-be-children sizes once so we can both build the
-  // bounding box and feed them to `paddingFromExtent` for a
-  // content-aware initial padding (matching `applyColumnLayout` /
-  // `applyRowLayout` / `computeFrameFit`).
-  const childSizes: { width: number; height: number }[] = [];
-
   for (const id of topLevelIds) {
     const n = byId.get(id);
     if (!n) continue;
@@ -238,23 +232,29 @@ export function frameNodes(
     if (!abs) continue;
 
     const size = getNodeSize(n);
-    childSizes.push(size);
     minX = Math.min(minX, abs.x);
     minY = Math.min(minY, abs.y);
     maxX = Math.max(maxX, abs.x + size.width);
     maxY = Math.max(maxY, abs.y + size.height);
   }
 
-  const padding =
-    options.padding ?? paddingFromExtent(medianOfChildExtents(childSizes));
-
   if (!Number.isFinite(minX) || !Number.isFinite(minY)) {
     return { nodes, frameId: options.frameId };
   }
 
-  const groupAbs: XYPosition = { x: minX - padding, y: minY - padding };
+  const contentWidth = maxX - minX;
+  const contentHeight = maxY - minY;
+  const responsiveMetrics = frameResponsiveMetricsForContentSize(
+    contentWidth,
+    contentHeight,
+    minWidth,
+    minHeight,
+  );
+  const padding = options.padding ?? responsiveMetrics.contentSpacing;
   const width = Math.max(minWidth, maxX - minX + padding * 2);
-  const height = Math.max(minHeight, maxY - minY + padding * 2);
+  const topInset = responsiveMetrics.headerInset;
+  const groupAbs: XYPosition = { x: minX - padding, y: minY - topInset };
+  const height = Math.max(minHeight, maxY - minY + topInset + padding);
 
   const groupPos = groupParentAbs ? subPos(groupAbs, groupParentAbs) : groupAbs;
 

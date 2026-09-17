@@ -6,11 +6,7 @@ import { Link, MoveRight, Trash2 } from 'lucide-react';
 import { memo, useCallback, useMemo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import {
-  ACCENT_NONE_TOKEN,
-  ACCENT_PICKER_OPTIONS_WITH_TRANSPARENT,
-  type FrameNodeData,
-} from '@huabu/shared';
+import { ACCENT_NONE_TOKEN, type FrameNodeData } from '@huabu/shared';
 import { isAlwaysAutoHeightNodeType } from '@huabu/shared/canvas-engine';
 
 import { CanvasFloatingPopover } from '@/components/Common/CanvasFloatingPopover';
@@ -37,6 +33,8 @@ import {
 import { copyToClipboard } from '@/utils/io/clipboard';
 import { resolveGeometryEdit } from '@/utils/node/geometry';
 import { buildNodeDeepLink } from '@/utils/nodeDeepLink';
+
+import { nodeAccentPickerOptions } from './nodeAccentPickerOptions';
 
 import type { CanvasNodeType, NodeData } from '@/components/Nodes/types';
 
@@ -122,8 +120,8 @@ export const NodeFloatingToolbar = memo(
     const multiSelectModifierHeld = useMultiSelectModifierHeld();
     const isTextFlowNode = isAlwaysAutoHeightNodeType(type);
     const accentPickerOptions = useMemo(
-      () => translateColorOptions(ACCENT_PICKER_OPTIONS_WITH_TRANSPARENT, t),
-      [t],
+      () => translateColorOptions(nodeAccentPickerOptions([type]), t),
+      [t, type],
     );
 
     // Disable the text/note toggle while the large-view editor is open

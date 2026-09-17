@@ -68,6 +68,14 @@ const playgroundRoutes = import.meta.env.DEV
           ).default,
         }),
       },
+      {
+        path: '/playground/design',
+        lazy: async () => ({
+          Component: (
+            await import('./pages/playground/FrameDesignPlaygroundPage')
+          ).default,
+        }),
+      },
     ]
   : [];
 

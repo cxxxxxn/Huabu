@@ -41,7 +41,7 @@ Goal: replace a noisy cluster with a single distilled note.
 Goal: take a loose group of nodes and put them in a frame with a meaningful title.
 
 1. Use `inspect_nodes({ inSameClusterAs: "<anchorId>" })` (or `inRect` if you have a region) to enumerate members and pick a bounding box.
-2. Create call — `CREATE_NODES`: one `frame`, position = top-left of the bbox minus ~40px padding, size = bbox + ~80px padding. Set `data.label` to a meaningful theme name. Read the frame id back from `results[].nodes`.
+2. Create call — `CREATE_NODES`: one `frame`, position = `{ x: bbox.left - 28, y: bbox.top - 80 }`, width = `bbox.width + 56`, and height = `bbox.height + 108`; this keeps about 28px side/bottom padding and reserves the Regular title inset. Set `data.label` to a meaningful theme name. Read the frame id back from `results[].nodes`.
 3. Follow-up call — `SET_NODE_PARENT`: each member → the new frame (by its returned id).
 4. Optional: `MERGE_NODE_DATA` to give every member the same `style.accent` for visual cohesion with the frame (can ride along with step 3, since members already exist).
 

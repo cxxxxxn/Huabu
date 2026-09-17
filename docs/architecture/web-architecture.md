@@ -77,6 +77,8 @@ What stays in `apps/web/src/handler/canvasCommand/`:
 8. **Development playgrounds** belong in `pages/playground/`, use route-level lazy imports, are registered only when `import.meta.env.DEV` is true, and live outside `WorkspaceGuardLayout` so visual testing does not require an active workspace.
 9. **Keep the first-screen graph small** — everything statically reachable from `main.tsx` is evaluated before React's first paint, and on the desktop that is the dominant cold-start cost. The canvas route is lazy, the editor toolchain is reached only through dynamic imports, and shared vendor libraries have explicit `manualChunks` homes. See [desktop-startup.md § 3](./desktop-startup.md#3-the-first-screen-bundle-boundary) before adding a static import to anything the app shell reaches.
 
+The development-only `/playground/design` route is the visual reference for canvas component design. Its Frame section renders the same store-free `FrameSurface` and `FrameHeader` presentation components used by `NodeWrapper` / `FrameNode`, with production [`FRAME_DESIGN_CONFIG`](../../packages/shared/src/canvas-engine/frame/design.ts), responsive resolution, semantic tokens, and accent palette; only the simulated child content is playground-owned. It demonstrates Frame tiers, authored dimensions, surface accents, header kinds, and all four layout modes.
+
 Space Preview is the intentional exception to ordinary node rendering: it consumes a sanitized server scene through one target-keyed external-store cache and draws inert SVG instead of mounting target node components or a nested React Flow. See [space-preview.md](./space-preview.md).
 
 ### External Agent Settings
