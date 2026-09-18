@@ -7,10 +7,11 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 import { SqliteStoreContext, SQLITE_SCHEMA_VERSION } from './database.js';
-import { collisionKeyForTitle } from './identity.js';
-import { insertSpaceRow, parseJson } from './rows.js';
+import { insertSpaceRow } from './rows.js';
 import { SqliteStructuredStore } from './structured-store.js';
 import { SqliteWorkspaceRepository } from './workspace-repository.js';
+import { parseJson } from '../sql/codecs.js';
+import { collisionKeyForTitle } from '../sql/identity.js';
 
 import type {
   CanvasFile,

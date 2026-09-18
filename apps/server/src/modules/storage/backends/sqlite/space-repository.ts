@@ -4,15 +4,13 @@
 import { randomUUID } from 'node:crypto';
 
 import { withImmediateTransaction } from './database.js';
-import { allocateSpaceIdentity, collisionKeyForTitle } from './identity.js';
-import {
-  decodeSpaceRow,
-  insertSpaceRow,
-  occupiedCollisionKeys,
-  readSpaceRow,
-  SPACE_COLUMNS,
-} from './rows.js';
+import { insertSpaceRow, occupiedCollisionKeys, readSpaceRow } from './rows.js';
 import { sanitizeId } from '../../../../utils/fs.js';
+import { decodeSpaceRow, SPACE_COLUMNS } from '../sql/codecs.js';
+import {
+  allocateSpaceIdentity,
+  collisionKeyForTitle,
+} from '../sql/identity.js';
 
 import type { SqliteStoreContext } from './database.js';
 import type { CanvasFile } from '../../../canvas/persistence-types.js';
