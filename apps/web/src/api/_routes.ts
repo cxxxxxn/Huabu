@@ -140,7 +140,10 @@ export const routes = {
     const params = canvasId ? `?canvasId=${enc(canvasId)}` : '';
     return `/agent/history/${enc(threadId)}/fork${params}`;
   },
-  agentStop: (threadId: string) => `/agent/stop/${enc(threadId)}`,
+  agentStop: (threadId: string, canvasId?: string) => {
+    const params = canvasId ? `?canvasId=${enc(canvasId)}` : '';
+    return `/agent/stop/${enc(threadId)}${params}`;
+  },
   agentStream: (threadId: string, canvasId?: string) => {
     const params = canvasId ? `?canvasId=${enc(canvasId)}` : '';
     return `/agent/stream/${enc(threadId)}${params}`;

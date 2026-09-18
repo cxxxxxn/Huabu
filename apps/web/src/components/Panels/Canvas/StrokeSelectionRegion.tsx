@@ -46,6 +46,7 @@ export const StrokeSelectionRegion = memo(() => {
   return (
     <ViewportPortal>
       <svg
+        data-canvas-grounding-exclude
         className="pointer-events-none absolute overflow-visible"
         // Sit above the nodes so the loop is visible over an opaque frame
         // background and its `move` cursor / grab wins. The viewport portal

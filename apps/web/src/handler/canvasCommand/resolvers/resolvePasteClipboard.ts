@@ -130,6 +130,7 @@ export default function resolvePasteClipboard(
       delete clonedData.viewed;
       delete clonedData.status;
       delete clonedData.errorMessage;
+      delete clonedData.pendingInkIntentLabel;
       if (clonedData.__forkConversation) {
         delete clonedData.__forkConversation;
       } else {

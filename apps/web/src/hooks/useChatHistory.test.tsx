@@ -321,6 +321,47 @@ describe('useChatHistory paging', () => {
 });
 
 describe('useChatHistory reconnect', () => {
+  it('hydrates the durable Ink input kind and retry metadata', async () => {
+    useChatStore.getState().setMessages(THREAD_ID, []);
+    useChatStore.getState().setHistoryLoaded(THREAD_ID, false);
+    apiMocks.fetchHistoryPage.mockResolvedValue({
+      threadId: THREAD_ID,
+      turns: [
+        {
+          id: 'turn-ink',
+          messages: [
+            {
+              role: 'user',
+              content: '',
+              inputKind: 'ink-intent',
+              selectedNodeIds: ['sketch-1'],
+              selectedStrokeIds: [
+                { nodeId: 'sketch-1', strokeIds: ['stroke-1'] },
+              ],
+              invokedSkills: ['review'],
+            },
+          ],
+        },
+      ],
+      hasMore: false,
+    });
+
+    await renderHarness();
+
+    await vi.waitFor(() =>
+      expect(useChatStore.getState().threadsById[THREAD_ID].messages).toEqual([
+        expect.objectContaining({
+          role: 'user',
+          content: '',
+          inputKind: 'ink-intent',
+          selectedNodeIds: ['sketch-1'],
+          selectedStrokeIds: [{ nodeId: 'sketch-1', strokeIds: ['stroke-1'] }],
+          invokedSkills: ['review'],
+        }),
+      ]),
+    );
+  });
+
   it('skips reconnect while this client already owns a live consumer', async () => {
     seedStore(true);
     const claim = claimAgentStream(CANVAS_ID, THREAD_ID, 'post');

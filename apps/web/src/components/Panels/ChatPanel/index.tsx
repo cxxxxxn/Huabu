@@ -253,10 +253,8 @@ export const ChatPanel = ({
       : lastAction;
 
   // Agent stream hook — manages streaming and loading state
-  const { isLoading, setIsLoading, startStream, stopStream } = useAgentStream(
-    session,
-    previewTabId,
-  );
+  const { isLoading, setIsLoading, startStream, retryStream, stopStream } =
+    useAgentStream(session, previewTabId);
 
   // Chat history hook — loads history and handles reconnection
   const loadOlderHistory = useChatHistory(
@@ -797,9 +795,9 @@ export const ChatPanel = ({
       .reverse()
       .find((message) => message.role === 'user');
     if (lastUserMsg?.role === 'user') {
-      void startStream(lastUserMsg.content, mode);
+      void retryStream(lastUserMsg, mode);
     }
-  }, [messages, mode, startStream]);
+  }, [messages, mode, retryStream]);
 
   // Inline agent selector (left of the chat input toolbar). The binding
   // is mutable only while the thread has no user message yet — once a

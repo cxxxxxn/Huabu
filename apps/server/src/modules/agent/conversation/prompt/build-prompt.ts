@@ -26,9 +26,11 @@
  */
 
 import { buildAttachmentParts } from './attachments.js';
+import { INK_INTENT_DIRECTIVE } from './ink-intent.js';
 import { renderInvokedSkillsSection } from './invoked-skills.js';
 import { renderNeighbourhoodSection } from './neighbourhood.js';
 import { INTERNAL_PROFILE } from './profile.js';
+import { InkVisualPreparationError } from './required-ink-visuals.js';
 import { renderSelectedNodesSection } from './selected-nodes.js';
 import { renderSketchRasterHint } from './sketch-hint.js';
 import { chatEnvelopeFromSubmission } from '../../agenetes/handle.js';
@@ -98,8 +100,25 @@ export async function renderTurn(
 ): Promise<ContentPart[]> {
   const { canvasId, includeNeighbourhood = true } = opts;
   const { imageAttachments, snapshotAttachments } = env.focus.selection;
+  const groundingVisual = env.focus.groundingVisual;
   const uploads = env.user.attachments;
   const selection = [...imageAttachments, ...snapshotAttachments];
+  const isInkIntent = env.user.inputKind === 'ink-intent';
+  const requiredImageNodeIds = isInkIntent
+    ? [
+        ...new Set(
+          (env.focus.selection.strokeSubsets ?? [])
+            .filter((subset) => subset.strokeIds.length > 0)
+            .map((subset) => subset.nodeId),
+        ),
+      ]
+    : [];
+  if (
+    isInkIntent &&
+    (!profile.includeSelectionVisuals || requiredImageNodeIds.length === 0)
+  ) {
+    throw new InkVisualPreparationError(requiredImageNodeIds);
+  }
 
   const skillsSection = renderInvokedSkillsSection(env.skills.resolved);
   const selectedNodesSection = renderSelectedNodesSection(
@@ -117,16 +136,48 @@ export async function renderTurn(
     ? renderNeighbourhoodSection(env.focus.anchor, profile)
     : undefined;
   const hasContext = Boolean(
-    skillsSection || selectedNodesSection || neighbourhoodSection,
+    isInkIntent ||
+    skillsSection ||
+    selectedNodesSection ||
+    neighbourhoodSection,
   );
-  const selectionParts =
-    profile.includeSelectionVisuals && selection.length > 0
+  const selectionParts = isInkIntent
+    ? [
+        ...(await buildAttachmentParts(imageAttachments, canvasId)),
+        ...(await buildAttachmentParts(snapshotAttachments, canvasId, {
+          requiredImageNodeIds,
+        })),
+      ]
+    : profile.includeSelectionVisuals && selection.length > 0
       ? await buildAttachmentParts(selection, canvasId ?? null)
       : [];
   const uploadParts =
     uploads.length > 0
       ? await buildAttachmentParts(uploads, canvasId ?? null)
       : [];
+  const groundingOriginIds = groundingVisual
+    ? [
+        ...new Set([
+          ...groundingVisual.selectedNodeIds,
+          ...groundingVisual.strokeSubsets.map((subset) => subset.nodeId),
+        ]),
+      ]
+    : [];
+  const groundingParts = groundingVisual
+    ? await buildAttachmentParts(
+        [
+          {
+            type: 'image',
+            source: 'selection',
+            url: groundingVisual.dataUrl,
+            label: 'Visible Canvas relationship at submission zoom',
+            originNodeIds: groundingOriginIds,
+          },
+        ],
+        canvasId ?? null,
+        { requiredImageNodeIds: groundingOriginIds },
+      )
+    : [];
   // Both backends raster the selection, so both get the reuse hint when
   // pre-snapshotted artifacts are present; the wording (built-in tools vs
   // asking the canvas agent) is chosen per profile inside the renderer.
@@ -152,6 +203,7 @@ export async function renderTurn(
   }
 
   const parts: ContentPart[] = [];
+  if (isInkIntent) parts.push({ type: 'text', text: INK_INTENT_DIRECTIVE });
   if (skillsSection) parts.push({ type: 'text', text: skillsSection });
   if (selectedNodesSection) {
     parts.push({ type: 'text', text: selectedNodesSection });
@@ -167,6 +219,18 @@ export async function renderTurn(
     });
     parts.push(...selectionParts);
     parts.push({ type: 'text', text: '</selected_nodes_visuals>' });
+  }
+  if (groundingParts.length > 0) {
+    parts.push({
+      type: 'text',
+      text: [
+        '<visible_canvas_grounding>',
+        'This hidden image preserves the Canvas relationship visible to the user at submission time. Use it only to ground where the selected Ink points at the selected objects. Do not infer text or detail that is not visibly rendered at this zoom.',
+        `Viewport zoom: ${groundingVisual?.viewport.zoom}. Crop: ${groundingVisual?.crop.x},${groundingVisual?.crop.y} ${groundingVisual?.crop.width}x${groundingVisual?.crop.height}.`,
+      ].join('\n'),
+    });
+    parts.push(...groundingParts);
+    parts.push({ type: 'text', text: '</visible_canvas_grounding>' });
   }
   if (neighbourhoodSection) {
     parts.push({ type: 'text', text: neighbourhoodSection });

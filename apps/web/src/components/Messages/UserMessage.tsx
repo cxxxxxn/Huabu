@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+import { PenLine } from 'lucide-react';
 import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -8,10 +9,16 @@ import { useGesturePreviewStore } from '@/store/gesturePreviewStore';
 
 import { NodeRef } from '../Common/NodeRef';
 
-import type { ChatAttachment, SelectedStrokeSubset } from '@huabu/shared';
+import type {
+  AgentInputKind,
+  ChatAttachment,
+  SelectedStrokeSubset,
+} from '@huabu/shared';
 
 interface UserMessageProps {
   content: string;
+  inputKind?: AgentInputKind;
+  inferredIntent?: string;
   attachments?: ChatAttachment[];
   selectedNodeIds?: string[];
   /**
@@ -32,6 +39,8 @@ interface UserMessageProps {
 
 export const UserMessage = memo(function UserMessage({
   content,
+  inputKind,
+  inferredIntent,
   attachments,
   selectedNodeIds,
   selectedStrokeIds,
@@ -59,6 +68,21 @@ export const UserMessage = memo(function UserMessage({
       <div className="mt-2 flex max-w-[80%] flex-col items-end gap-1">
         <div className="bg-bg-default text-fg-default overflow-hidden rounded-md border border-none px-4 py-2 text-sm">
           <div className="leading-relaxed wrap-anywhere whitespace-pre-wrap">
+            {inputKind === 'ink-intent' && (
+              <span
+                className="inline-flex items-center gap-1.5 font-medium"
+                aria-label={
+                  inferredIntent
+                    ? t('messages.inferredInkRequest', {
+                        intent: inferredIntent,
+                      })
+                    : undefined
+                }
+              >
+                <PenLine className="size-3.5" aria-hidden="true" />
+                {inferredIntent ?? t('messages.inkRequest')}
+              </span>
+            )}
             {hasSkills &&
               invokedSkills.map((id) => (
                 <span
@@ -69,6 +93,7 @@ export const UserMessage = memo(function UserMessage({
                   /{id}
                 </span>
               ))}
+            {inputKind === 'ink-intent' && content ? ' ' : null}
             {content}
           </div>
         </div>

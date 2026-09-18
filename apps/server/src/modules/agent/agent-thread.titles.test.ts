@@ -90,6 +90,10 @@ describe('Question ownership at the real message adapters', () => {
         const create = vi.spyOn(agenetes, 'create').mockReturnValue(handle);
         vi.spyOn(agenetes, 'get').mockReturnValue(undefined);
         vi.spyOn(agenetes, 'record').mockReturnValue(undefined);
+        vi.spyOn(agenetes, 'logMetadata').mockReturnValue({
+          eventCount: 1,
+          turnCount: 1,
+        });
         const startLifecycle = vi.fn().mockResolvedValue(undefined);
         const finishLifecycle = vi.fn().mockResolvedValue(undefined);
         const service = new AgentThreadService({

@@ -12,7 +12,10 @@ vi.mock('../api', async (importOriginal) => ({
   putCanvas,
 }));
 
-import useCanvasStore from './canvasStore';
+import useCanvasStore, {
+  CanvasSubmissionSaveError,
+  saveCanvasForSubmission,
+} from './canvasStore';
 import { CanvasConflictError } from '../api/canvas';
 
 import type * as CanvasApi from '../api';
@@ -122,5 +125,34 @@ describe('canvasStore structure-save reconciliation', () => {
 
     expect(putCanvas.mock.calls[1]?.[1].version).toBe(11);
     expect(useCanvasStore.getState().version).toBe(12);
+  });
+
+  it('blocks submission after a failed structure save until a save succeeds', async () => {
+    putCanvas.mockRejectedValueOnce(new Error('disk unavailable'));
+
+    await useCanvasStore.getState().saveCanvas();
+
+    await expect(saveCanvasForSubmission('canvas-race')).rejects.toMatchObject({
+      name: 'CanvasSubmissionSaveError',
+      canvasId: 'canvas-race',
+    } satisfies Partial<CanvasSubmissionSaveError>);
+
+    putCanvas.mockResolvedValueOnce({ canvasId: 'canvas-race', version: 11 });
+    await useCanvasStore.getState().saveCanvas();
+
+    await expect(
+      saveCanvasForSubmission('canvas-race'),
+    ).resolves.toBeUndefined();
+  });
+
+  it('rejects submission for a conflicted or different active Canvas', async () => {
+    useCanvasStore.getState()._setStateNoAutosave({ versionConflict: true });
+
+    await expect(saveCanvasForSubmission('canvas-race')).rejects.toBeInstanceOf(
+      CanvasSubmissionSaveError,
+    );
+    await expect(
+      saveCanvasForSubmission('other-canvas'),
+    ).rejects.toBeInstanceOf(CanvasSubmissionSaveError);
   });
 });

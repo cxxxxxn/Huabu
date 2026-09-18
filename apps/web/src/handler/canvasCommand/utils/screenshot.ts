@@ -15,6 +15,171 @@ import type { RecentAction } from '@huabu/shared';
 
 /** Pixel ratio used for the capture — 3× keeps text legible on all displays. */
 const CAPTURE_RATIO = 3;
+const GROUNDING_CAPTURE_MAX_RATIO = 3;
+const GROUNDING_CAPTURE_PADDING = 24;
+export const MAX_GROUNDING_CAPTURE_BYTES = 512 * 1024;
+
+export interface VisibleCanvasCrop {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface VisibleCanvasGroundingCapture {
+  blob: Blob;
+  crop: VisibleCanvasCrop;
+  devicePixelRatio: number;
+  viewport: { width: number; height: number };
+}
+
+const GROUNDING_CHROME_SELECTORS = [
+  '.react-flow__panel',
+  '.react-flow__controls',
+  '.react-flow__minimap',
+  '.react-flow__selection',
+  '.react-flow__nodesselection-rect',
+  '.react-flow__resize-control',
+  '.react-flow__handle',
+  '[data-canvas-grounding-exclude]',
+];
+
+export function isVisibleCanvasGroundingChrome(node: unknown): boolean {
+  if (!(node instanceof Element)) return false;
+  return GROUNDING_CHROME_SELECTORS.some((selector) => node.matches(selector));
+}
+
+export function clampVisibleCanvasCrop(
+  bounds: VisibleCanvasCrop,
+  viewport: { width: number; height: number },
+  padding = GROUNDING_CAPTURE_PADDING,
+): VisibleCanvasCrop | null {
+  const left = Math.max(0, bounds.x - padding);
+  const top = Math.max(0, bounds.y - padding);
+  const right = Math.min(viewport.width, bounds.x + bounds.width + padding);
+  const bottom = Math.min(viewport.height, bounds.y + bounds.height + padding);
+  if (right <= left || bottom <= top) return null;
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error('Canvas grounding capture produced no PNG'));
+    }, 'image/png');
+  });
+}
+
+async function boundedCanvasBlob(
+  canvas: HTMLCanvasElement,
+): Promise<{ blob: Blob; width: number }> {
+  let current = canvas;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const blob = await canvasToBlob(current);
+    if (blob.size <= MAX_GROUNDING_CAPTURE_BYTES) {
+      return { blob, width: current.width };
+    }
+    const scale = Math.sqrt(MAX_GROUNDING_CAPTURE_BYTES / blob.size) * 0.92;
+    const next = document.createElement('canvas');
+    next.width = Math.max(1, Math.floor(current.width * scale));
+    next.height = Math.max(1, Math.floor(current.height * scale));
+    const context = next.getContext('2d');
+    if (!context)
+      throw new Error('Canvas grounding compression is unavailable');
+    context.drawImage(current, 0, 0, next.width, next.height);
+    current = next;
+  }
+  throw new Error('Visible Canvas grounding is too large to submit');
+}
+
+export function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () =>
+      typeof reader.result === 'string'
+        ? resolve(reader.result)
+        : reject(new Error('Canvas grounding could not be encoded'));
+    reader.onerror = () =>
+      reject(
+        reader.error ?? new Error('Canvas grounding could not be encoded'),
+      );
+    reader.readAsDataURL(blob);
+  });
+}
+
+/** Capture the visible Canvas at its current DOM LOD, then crop its pixels. */
+export async function captureVisibleCanvasGrounding(options: {
+  bounds: VisibleCanvasCrop;
+}): Promise<VisibleCanvasGroundingCapture> {
+  const root = document.querySelector<HTMLElement>('.react-flow');
+  if (!root) throw new Error('Canvas is not available for grounding capture');
+  const rootRect = root.getBoundingClientRect();
+  const crop = clampVisibleCanvasCrop(options.bounds, {
+    width: rootRect.width,
+    height: rootRect.height,
+  });
+  if (!crop)
+    throw new Error('Grounding selection is outside the visible Canvas');
+  const devicePixelRatio = Math.min(
+    GROUNDING_CAPTURE_MAX_RATIO,
+    Math.max(1, window.devicePixelRatio || 1),
+  );
+  const dataUrl = await toPng(root, {
+    width: rootRect.width,
+    height: rootRect.height,
+    pixelRatio: devicePixelRatio,
+    skipAutoScale: true,
+    cacheBust: true,
+    style: {
+      '--canvas-grounding-stroke-filter': 'none',
+      '--canvas-grounding-edge-filter': 'none',
+      '--canvas-grounding-edge-stroke':
+        'var(--xy-edge-stroke, var(--xy-edge-stroke-default))',
+    } as Partial<CSSStyleDeclaration>,
+    filter: (node: HTMLElement) => {
+      if (isVisibleCanvasGroundingChrome(node)) return false;
+      if (node instanceof HTMLImageElement) {
+        const src = node.src ?? '';
+        if (
+          src &&
+          !src.startsWith('data:') &&
+          !src.startsWith('blob:') &&
+          new URL(src, window.location.href).origin !== window.location.origin
+        ) {
+          return false;
+        }
+      }
+      return true;
+    },
+  });
+  const image = await loadImage(dataUrl);
+  const scaleX = image.naturalWidth / rootRect.width;
+  const scaleY = image.naturalHeight / rootRect.height;
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(crop.width * scaleX));
+  canvas.height = Math.max(1, Math.round(crop.height * scaleY));
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Canvas grounding capture is unavailable');
+  context.drawImage(
+    image,
+    crop.x * scaleX,
+    crop.y * scaleY,
+    crop.width * scaleX,
+    crop.height * scaleY,
+    0,
+    0,
+    canvas.width,
+    canvas.height,
+  );
+  const bounded = await boundedCanvasBlob(canvas);
+  return {
+    blob: bounded.blob,
+    crop,
+    devicePixelRatio: bounded.width / crop.width,
+    viewport: { width: rootRect.width, height: rootRect.height },
+  };
+}
 
 /**
  * Ensure a screenshot string is a full `data:image/png;base64,…` URL.
@@ -259,7 +424,8 @@ function drawAnnotatedImage(
   const canvas = document.createElement('canvas');
   canvas.width = img.width;
   canvas.height = img.height;
-  const ctx = canvas.getContext('2d')!;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas screenshot annotation is unavailable');
 
   ctx.drawImage(img, 0, 0);
 

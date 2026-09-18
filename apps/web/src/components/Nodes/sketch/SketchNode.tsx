@@ -189,7 +189,10 @@ export const SketchNode = memo(
                   }
                   style={
                     isSelected || isHighlighted
-                      ? { filter: 'drop-shadow(0 0 3px var(--color-info))' }
+                      ? {
+                          filter:
+                            'var(--canvas-grounding-stroke-filter, drop-shadow(0 0 3px var(--color-info)))',
+                        }
                       : undefined
                   }
                 >

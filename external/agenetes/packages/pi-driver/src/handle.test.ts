@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { piDriverFactory } from './driver.js';
 import {
   lowerPiInputs,
+  mergeTurnTools,
   resolvePiInitialMessages,
   resolvePiSystemPrompt,
 } from './handle.js';
@@ -62,6 +63,23 @@ function context(
 }
 
 describe('pi durable history seed', () => {
+  it('overlays turn-scoped tools without mutating the durable tool set', () => {
+    const base = [{ name: 'read' }, { name: 'inspect' }];
+    const report = { name: 'report_ink_intent' };
+    const replacement = { name: 'read', label: 'Turn read' };
+
+    expect(
+      mergeTurnTools(base as never, [report, replacement] as never).map(
+        (tool) => ({ name: tool.name, label: tool.label }),
+      ),
+    ).toEqual([
+      { name: 'read', label: 'Turn read' },
+      { name: 'inspect', label: undefined },
+      { name: 'report_ink_intent', label: undefined },
+    ]);
+    expect(base).toEqual([{ name: 'read' }, { name: 'inspect' }]);
+  });
+
   it('mounts runtime spec and state validation', () => {
     const driver: MountedAgentDriver = piDriverFactory({
       ports: {

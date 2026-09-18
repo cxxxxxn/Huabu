@@ -54,6 +54,7 @@ Like sketch nodes, a question node has two independent relationships with AI:
 | `bindingState`            | ✅        | Server-owned `editing` / `bound`; Bound acknowledges a validated canonical Agenetes record and never demotes                         |
 | `invocationToken`         | ✅        | Server-owned current or last admitted prompt identity; fences terminal writes and viewed acknowledgements                            |
 | `responseSummary`         | reserved  | Teaser field; not yet written by the runner                                                                                          |
+| `pendingInkIntentLabel`   | ✅        | Marks only a newly created Ink Question whose placeholder may be replaced by the first structured inferred intent                    |
 
 Not persisted: the server invocation phase and cancellation controller, plus the browser's stream controller and request feedback. The complete Node is a read model, not a writable snapshot: ordinary Canvas PUT, commands, and undo omit or preserve the server-owned fields and cannot replace the thread association.
 Question nodes are content nodes: preprocessing delegates their `content` to `ConversationTitleService.initializeQuestion()` rather than running a separate `generate_label` stage. The profile has no `persist_source`, so Questions do **not** enter the knowledge base. They remain visible to agents (`type: 'question'` in `get_space_outline`). See [node-preprocessing.md](./node-preprocessing.md) for the profile and option gates.
@@ -142,6 +143,10 @@ As the canvas zooms out, a question node's agent mark **takes over** as the node
 ### 5.2 Dispatch
 
 All questions run through `/api/agent` ([agent.ts](../../apps/web/src/api/agent.ts) → [AgentThreadService](../../apps/server/src/modules/agent/agent-thread.service.ts)). `useAgentStream` awaits acknowledged node creation and the latest draft save before resolving the owner-first binding and dispatching:
+
+The server resolves the request's `(canvasId, threadId)` against current Canvas state before using an `anchorNodeId`. That resolved Question is authoritative for the neighbourhood anchor and persisted mode; a mismatched anchor or a thread with no Question owner is rejected rather than combining one conversation's Agent with another node's spatial context.
+
+A new Ink Question starts with `New ink request` and `pendingInkIntentLabel: true`. During that same built-in Ink turn, a validated `report_ink_intent` result may replace the placeholder through the server Canvas executor only when the active turn still owns that exact node, its marker remains pending, and its sidecar label is still the untouched non-user placeholder. Any user rename clears the marker and wins the race; clarify/unsupported reports, terminal settlement without a report, follow-up turns, and paste/duplicate consume or strip the marker without renaming. Existing Question targets are never renamed by per-turn Ink intent.
 
 - **internal**: built-in Huabu Agent, `agentMode` = `operate` (default) / `ask`
 - **external**: ACP agent resolved server-side from `profileId`

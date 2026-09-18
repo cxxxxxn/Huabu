@@ -42,8 +42,9 @@ import {
   type SearchField,
 } from '@huabu/shared';
 
-import { agenetes } from '../agent/agenetes/drivers.js';
+import { agenetes, INTERNAL_DRIVER_KIND } from '../agent/agenetes/drivers.js';
 import { chatEnvelopeFromSubmission } from '../agent/agenetes/handle.js';
+import { inferredIntentFromFoldedToolCall } from '../agent/conversation/transcript/history.js';
 import { canvasAcpNamespace } from '../workspace/paths.js';
 
 import type { NodeContent, Space } from '../storage/index.js';
@@ -219,7 +220,10 @@ function scanNodeContent(
  * user message and an unrelated reply, while `buildSnippet`'s
  * whitespace collapse still renders them on one row.
  */
-function buildThreadHaystack(turns: readonly AgentTurn[]): string {
+function buildThreadHaystack(
+  turns: readonly AgentTurn[],
+  recoverInternalToolNames: boolean,
+): string {
   const segments: string[] = [];
   for (const turn of turns) {
     const userText = chatEnvelopeFromSubmission(turn.request)?.user?.text;
@@ -227,6 +231,11 @@ function buildThreadHaystack(turns: readonly AgentTurn[]): string {
       segments.push(userText);
     }
     for (const msg of turn.transcript) {
+      const inferredIntent = inferredIntentFromFoldedToolCall(
+        msg,
+        recoverInternalToolNames,
+      );
+      if (inferredIntent) segments.push(inferredIntent);
       // Only assistant prose contributes model speech; `tool_call`,
       // `thinking`, `plan`, and `error` fragments are excluded.
       if (msg.type !== 'text') continue;
@@ -253,12 +262,13 @@ function scanNodeConversation(
   tryEmit: (match: CanvasSearchMatch) => boolean,
 ): void {
   if (!node.threadId) return;
-  const { turns } = agenetes.history(
-    canvasAcpNamespace(canvasId),
-    node.threadId,
-  );
+  const namespace = canvasAcpNamespace(canvasId);
+  const { turns } = agenetes.history(namespace, node.threadId);
   if (turns.length === 0) return;
-  const haystack = buildThreadHaystack(turns);
+  const recoverInternalToolNames =
+    agenetes.record(namespace, node.threadId)?.spec.kind ===
+    INTERNAL_DRIVER_KIND;
+  const haystack = buildThreadHaystack(turns, recoverInternalToolNames);
   if (haystack.length === 0) return;
   emitFieldHits('conversation', haystack, needleLower, needleLen, {
     nodeId: node.id,

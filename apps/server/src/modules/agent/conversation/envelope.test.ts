@@ -3,10 +3,15 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { chatEnvelopeSchema } from '@huabu/shared';
+
 const readMany = vi.hoisted(() => vi.fn());
+const readCanvas = vi.hoisted(() => vi.fn());
+const rasterize = vi.hoisted(() => vi.fn());
 
 vi.mock('../../storage/index.js', () => ({
   space: () => ({
+    read: readCanvas,
     nodes: {
       readMany,
       read: vi.fn(),
@@ -14,8 +19,14 @@ vi.mock('../../storage/index.js', () => ({
   }),
 }));
 
-import { buildChatEnvelope } from './envelope.js';
+vi.mock('../../canvas/snapshot-nodes.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof SnapshotNodesModule>()),
+  snapshotNodesToArtifacts: rasterize,
+}));
 
+import { buildChatEnvelope, InkVisualPreparationError } from './envelope.js';
+
+import type * as SnapshotNodesModule from '../../canvas/snapshot-nodes.js';
 import type { NodeContent, NodeSnapshot } from '../../storage/index.js';
 import type { FastifyBaseLogger } from 'fastify';
 
@@ -40,6 +51,32 @@ function snapshot(nodeId: string, content: string): NodeSnapshot {
 
 describe('buildChatEnvelope selection records', () => {
   beforeEach(() => {
+    rasterize.mockReset();
+    rasterize.mockResolvedValue([
+      { src: 'ink.png', originNodeIds: ['ink-1', 'ink-2'] },
+    ]);
+    readCanvas.mockReset();
+    readCanvas.mockResolvedValue({
+      state: {
+        nodes: ['ink-1', 'ink-2'].map((id) => ({
+          id,
+          type: 'sketch',
+          position: { x: 0, y: 0 },
+          data: {
+            initialSize: { width: 100, height: 100 },
+            strokes: [
+              {
+                id: 'stroke-1',
+                points: [
+                  [1, 2],
+                  [3, 4],
+                ],
+              },
+            ],
+          },
+        })),
+      },
+    });
     readMany.mockReset();
     readMany.mockImplementation(async (nodeIds: readonly string[]) => {
       const available = new Map<string, NodeSnapshot>([
@@ -77,4 +114,189 @@ describe('buildChatEnvelope selection records', () => {
     ]);
     expect(envelope.focus.selection.selectedIds).toEqual(['frame-1']);
   });
+
+  it.each([undefined, 'text', 'ink-intent'] as const)(
+    'preserves the optional input kind %s without changing legacy user fields',
+    async (inputKind) => {
+      const envelope = await buildChatEnvelope({
+        content: 'Review this frame',
+        inputKind,
+        canvasId: 'canvas-1',
+        selectedNodes: [
+          { id: 'ink-1', type: 'sketch', strokeIds: ['stroke-1'] },
+        ],
+        logger,
+      });
+
+      expect(envelope.user).toStrictEqual({
+        text: 'Review this frame',
+        attachments: [],
+        ...(inputKind ? { inputKind } : {}),
+      });
+      expect(chatEnvelopeSchema.parse(envelope)).toStrictEqual(envelope);
+      expect(
+        chatEnvelopeSchema.safeParse({
+          ...envelope,
+          user: { ...envelope.user, inputKind: 'ocr' },
+        }).success,
+      ).toBe(false);
+    },
+  );
+
+  it('keeps every recursively selected partial Sketch in the snapshot KEEP-list', async () => {
+    const envelope = await buildChatEnvelope({
+      content: '',
+      inputKind: 'ink-intent',
+      canvasId: 'canvas-1',
+      selectedNodes: [
+        {
+          id: 'frame-1',
+          type: 'frame',
+          children: [
+            { id: 'ink-1', type: 'sketch', strokeIds: ['stroke-1'] },
+            { id: 'ink-2', type: 'sketch', strokeIds: ['stroke-1'] },
+          ],
+        },
+      ],
+      logger,
+    });
+
+    expect(rasterize).toHaveBeenCalledExactlyOnceWith({
+      canvasId: 'canvas-1',
+      nodeIds: ['ink-1', 'ink-2'],
+      strokeSubsets: [
+        { nodeId: 'ink-1', strokeIds: ['stroke-1'] },
+        { nodeId: 'ink-2', strokeIds: ['stroke-1'] },
+      ],
+    });
+    expect(envelope.focus.selection.snapshotAttachments).toEqual([
+      expect.objectContaining({ originNodeIds: ['ink-1', 'ink-2'] }),
+    ]);
+  });
+
+  it.each([
+    { result: [], missingIds: ['ink-1', 'ink-2'] },
+    {
+      result: [{ src: 'other.png', originNodeIds: ['other-image'] }],
+      missingIds: ['ink-1', 'ink-2'],
+    },
+    {
+      result: [{ src: 'ink.png', originNodeIds: ['ink-1'] }],
+      missingIds: ['ink-2'],
+    },
+    {
+      result: [{ src: '', originNodeIds: ['ink-1', 'ink-2'] }],
+      missingIds: ['ink-1', 'ink-2'],
+    },
+  ])(
+    'rejects a snapshot result that omits a required source: %j',
+    async ({ result, missingIds }) => {
+      rasterize.mockResolvedValue(result);
+      await expect(
+        buildChatEnvelope({
+          content: '',
+          inputKind: 'ink-intent',
+          canvasId: 'canvas-1',
+          selectedNodes: [
+            { id: 'ink-1', type: 'sketch', strokeIds: ['stroke-1'] },
+            { id: 'ink-2', type: 'sketch', strokeIds: ['stroke-1'] },
+          ],
+          attachments: [
+            { type: 'image', source: 'upload', url: 'unrelated.png' },
+          ],
+          logger,
+        }),
+      ).rejects.toMatchObject({
+        name: 'InkVisualPreparationError',
+        nodeIds: missingIds,
+        cause: undefined,
+      });
+      expect(rasterize).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([undefined, 'text', 'ink-intent'] as const)(
+    'only requires snapshots for Ink, input kind %s',
+    async (inputKind) => {
+      const cause = new Error('snapshot failed');
+      rasterize.mockRejectedValue(cause);
+      const pending = buildChatEnvelope({
+        content: 'look',
+        inputKind,
+        canvasId: 'canvas-1',
+        selectedNodes: [
+          { id: 'ink-1', type: 'sketch', strokeIds: ['stroke-1'] },
+        ],
+        logger,
+      });
+      if (inputKind === 'ink-intent') {
+        await expect(pending).rejects.toMatchObject({
+          name: 'InkVisualPreparationError',
+          code: 'ink_visual_unavailable',
+          nodeIds: ['ink-1'],
+          cause,
+        });
+      } else {
+        expect((await pending).focus.selection.snapshotAttachments).toEqual([]);
+        expect(readCanvas).not.toHaveBeenCalled();
+      }
+      expect(rasterize).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    { nodes: [] },
+    { nodes: [{ id: 'ink-1', type: 'image' }] },
+    { nodes: [{ id: 'ink-1', type: 'sketch', data: { strokes: [] } }] },
+    {
+      nodes: [
+        {
+          id: 'ink-1',
+          type: 'sketch',
+          data: { strokes: [{ id: 'other', points: [[1, 2]] }] },
+        },
+      ],
+    },
+    {
+      nodes: [
+        {
+          id: 'ink-1',
+          type: 'sketch',
+          data: {
+            initialSize: { width: 100, height: 100 },
+            strokes: [{ id: 'stroke-1', points: [] }],
+          },
+        },
+      ],
+    },
+  ])('never widens a stale or unpaintable subset: %j', async (state) => {
+    readCanvas.mockResolvedValue({ state });
+    await expect(
+      buildChatEnvelope({
+        content: '',
+        inputKind: 'ink-intent',
+        canvasId: 'canvas-1',
+        selectedNodes: [
+          { id: 'ink-1', type: 'sketch', strokeIds: ['stroke-1'] },
+        ],
+        logger,
+      }),
+    ).rejects.toBeInstanceOf(InkVisualPreparationError);
+    expect(rasterize).not.toHaveBeenCalled();
+  });
+
+  it.each([null, 'canvas-1'])(
+    'rejects Ink without a bounded source on %s',
+    async (canvasId) => {
+      await expect(
+        buildChatEnvelope({
+          content: '',
+          inputKind: 'ink-intent',
+          canvasId,
+          logger,
+        }),
+      ).rejects.toBeInstanceOf(InkVisualPreparationError);
+      expect(rasterize).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -1,15 +1,26 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { Trash2 } from 'lucide-react';
-import { useCallback, useEffect, useMemo } from 'react';
+import { useReactFlow } from '@xyflow/react';
+import { ArrowUp, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import {
+  getSelectionBounds,
+  type NestableNode,
+} from '@huabu/shared/canvas-engine';
+
+import { Button } from '@/components/Common/Button';
 import { CanvasFloatingPopover } from '@/components/Common/CanvasFloatingPopover';
 import {
   FloatingToolbar,
   FLOATING_TOOLBAR_CLASS,
 } from '@/components/Common/FloatingToolbar';
+import { toast } from '@/components/Common/Toast';
+import { Tooltip } from '@/components/Common/Tooltip';
+import { computeAdjacentNodePlacement } from '@/components/Nodes/nodePlacement';
+import { createQuestionNode } from '@/components/Nodes/question/questionCompose';
 import { SketchControls } from '@/components/Nodes/sketch/SketchControls';
 import { getSketchStrokeSelectionBounds } from '@/components/Nodes/sketch/sketchHitTest';
 import {
@@ -20,27 +31,65 @@ import {
   DEFAULT_STROKE_COLOR,
   DEFAULT_STROKE_SIZE,
 } from '@/components/Nodes/sketch/sketchPath';
+import {
+  blobToDataUrl,
+  captureVisibleCanvasGrounding,
+} from '@/handler/canvasCommand/utils/screenshot';
+import {
+  captureAgentTurnSources,
+  dispatchAgentTurn,
+  prepareAgentTurn,
+} from '@/hooks/agentTurnController';
 import { useIsNotMouse } from '@/hooks/useInputMode';
+import { useAcpProfilesStore } from '@/store/acpProfilesStore';
 import useCanvasStore from '@/store/canvasStore';
+import {
+  selectThreadBinding,
+  selectThreadLastAction,
+  useChatStore,
+} from '@/store/chatStore';
 import { useGesturePreviewStore } from '@/store/gesturePreviewStore';
+import { resolveQuestionAgentPresentation } from '@/utils/questionAgentPresentation';
+
+import {
+  deriveInkSubmissionCandidate,
+  inkSelectionIdentity,
+  unionSelectionBounds,
+} from './inkQuestionSubmission';
 
 import type { CanvasSketchNodeData } from '@/components/Nodes/types';
-import type { CanvasCommand, CanvasNodeId, SketchStroke } from '@huabu/shared';
+import type { ChatSession } from '@/hooks/useChatSession';
+import type {
+  AgentMode,
+  CanvasCommand,
+  CanvasNodeId,
+  SketchStroke,
+  VisibleCanvasGrounding,
+} from '@huabu/shared';
+
+interface InkSubmissionAttempt {
+  identity: string;
+  session: ChatSession;
+  mode: AgentMode;
+  groundingVisual?: VisibleCanvasGrounding;
+}
 
 /**
  * Floating toolbar for a Stage 2 stroke-level lasso selection. Aligns with
  * the sketch node's own controls: color + thickness edit the selected
  * strokes. Delete is **touch-only** (desktop uses the keyboard). Toolbar
  * arbitration guarantees at most one floating toolbar:
- *   - pure stroke selection → color + size (+ delete on touch);
- *   - mixed (strokes + nodes) → touch: delete only; desktop: nothing
- *     (node toolbars are suppressed while a stroke selection exists);
+ *   - pure stroke selection → color + size (+ delete on touch) + submit;
+ *   - mixed (strokes + nodes) → submit metadata (+ delete on touch), while
+ *     style controls and node toolbars stay suppressed;
  *   - pure node selection → the node toolbars own the surface.
  */
 export const StrokeSelectionToolbar = () => {
   const { t } = useTranslation();
+  const { getViewport } = useReactFlow();
   // Subscribe to `nodes` so the anchor + representative style track edits.
   const nodes = useCanvasStore((s) => s.nodes);
+  const addNode = useCanvasStore((s) => s.addNode);
   const executeCommands = useCanvasStore((s) => s.executeCommands);
   const deleteNodes = useCanvasStore((s) => s.deleteNodes);
   const beginNodeDataGesture = useCanvasStore((s) => s.beginNodeDataGesture);
@@ -50,16 +99,241 @@ export const StrokeSelectionToolbar = () => {
     (s) => s.clearSketchStrokeSelection,
   );
   const isNotMouse = useIsNotMouse();
+  const attemptRef = useRef<InkSubmissionAttempt | null>(null);
+  const preparingRef = useRef(false);
+  const [isPreparing, setIsPreparing] = useState(false);
 
   const hasSelection = Object.keys(selection).length > 0;
   const hasNodeSelection = nodes.some((n) => n.selected);
   const isMixed = hasSelection && hasNodeSelection;
 
-  const anchor = useMemo(() => {
+  const strokeBounds = useMemo(() => {
     if (!hasSelection) return null;
     void nodes; // recompute as sketches move / resize
     return getSketchStrokeSelectionBounds(selection);
   }, [selection, hasSelection, nodes]);
+  const anchor = useMemo(() => {
+    const selectedNodes = nodes.filter((node) => node.selected);
+    const bounds = getSelectionBounds(selectedNodes, nodes);
+    const nodeBounds = bounds
+      ? {
+          x: bounds.minX,
+          y: bounds.minY,
+          width: bounds.width,
+          height: bounds.height,
+        }
+      : null;
+    return unionSelectionBounds(strokeBounds, nodeBounds);
+  }, [nodes, strokeBounds]);
+  const candidate = useMemo(
+    () => deriveInkSubmissionCandidate(nodes, selection),
+    [nodes, selection],
+  );
+  const targetThreadId =
+    candidate.kind === 'ready' ? candidate.target?.threadId : undefined;
+  const cachedTargetBinding = useChatStore((state) =>
+    targetThreadId ? selectThreadBinding(state, targetThreadId) : null,
+  );
+  const cachedTargetMode = useChatStore((state) =>
+    targetThreadId ? selectThreadLastAction(state, targetThreadId) : null,
+  );
+  const agentProfiles = useAcpProfilesStore((state) => state.profiles);
+
+  const currentSelectionIdentity = useCallback(
+    () =>
+      inkSelectionIdentity(
+        useCanvasStore.getState().canvasId,
+        useCanvasStore.getState().nodes,
+        useGesturePreviewStore.getState().sketchStrokeSelection,
+      ),
+    [],
+  );
+  const handleSubmit = useCallback(async () => {
+    if (preparingRef.current) return;
+    const canvas = useCanvasStore.getState();
+    const strokeSelection =
+      useGesturePreviewStore.getState().sketchStrokeSelection;
+    const freshCandidate = deriveInkSubmissionCandidate(
+      canvas.nodes,
+      strokeSelection,
+    );
+    if (freshCandidate.kind !== 'ready') return;
+    const identity = inkSelectionIdentity(
+      canvas.canvasId,
+      canvas.nodes,
+      strokeSelection,
+    );
+    preparingRef.current = true;
+    setIsPreparing(true);
+    try {
+      let attempt =
+        attemptRef.current?.identity === identity ? attemptRef.current : null;
+      if (!attempt) {
+        let groundingVisual: VisibleCanvasGrounding | undefined;
+        const strokeNodeIds = new Set(
+          Object.keys(freshCandidate.strokeSelection),
+        );
+        const groundingNodeIds = freshCandidate.selectedNodeIds.filter(
+          (nodeId) => !strokeNodeIds.has(nodeId),
+        );
+        if (groundingNodeIds.length > 0) {
+          const ordinaryNodeIds = new Set(groundingNodeIds);
+          const selectedNodes = canvas.nodes.filter((node) =>
+            ordinaryNodeIds.has(node.id),
+          );
+          const nodeBounds = getSelectionBounds(selectedNodes, canvas.nodes);
+          const currentStrokeBounds =
+            getSketchStrokeSelectionBounds(strokeSelection);
+          const sourceBounds = unionSelectionBounds(
+            currentStrokeBounds,
+            nodeBounds
+              ? {
+                  x: nodeBounds.minX,
+                  y: nodeBounds.minY,
+                  width: nodeBounds.width,
+                  height: nodeBounds.height,
+                }
+              : null,
+          );
+          if (!sourceBounds) return;
+          const viewport = getViewport();
+          const captured = await captureVisibleCanvasGrounding({
+            bounds: {
+              x: sourceBounds.x * viewport.zoom + viewport.x,
+              y: sourceBounds.y * viewport.zoom + viewport.y,
+              width: sourceBounds.width * viewport.zoom,
+              height: sourceBounds.height * viewport.zoom,
+            },
+          });
+          const currentViewport = getViewport();
+          if (
+            currentSelectionIdentity() !== identity ||
+            currentViewport.x !== viewport.x ||
+            currentViewport.y !== viewport.y ||
+            currentViewport.zoom !== viewport.zoom
+          ) {
+            throw new Error(
+              'Canvas view changed during Ink grounding capture. Submit again.',
+            );
+          }
+          const dataUrl = await blobToDataUrl(captured.blob);
+          groundingVisual = {
+            kind: 'visible-canvas',
+            dataUrl,
+            viewport: {
+              x: viewport.x,
+              y: viewport.y,
+              zoom: viewport.zoom,
+              width: captured.viewport.width,
+              height: captured.viewport.height,
+              devicePixelRatio: captured.devicePixelRatio,
+            },
+            crop: captured.crop,
+            selectedNodeIds: groundingNodeIds,
+            strokeSubsets: Object.entries(freshCandidate.strokeSelection).map(
+              ([nodeId, strokeIds]) => ({ nodeId, strokeIds }),
+            ),
+          };
+        }
+        if (freshCandidate.target) {
+          const { nodeId, threadId, mode } = freshCandidate.target;
+          attempt = {
+            identity,
+            mode:
+              mode ?? selectThreadLastAction(useChatStore.getState(), threadId),
+            groundingVisual,
+            session: {
+              canvasId: canvas.canvasId,
+              ownerCanvasId: canvas.canvasId,
+              threadId,
+              conversationView: {
+                presentationAnchor: { canvasId: canvas.canvasId, nodeId },
+                conversationOwner: {
+                  canvasId: canvas.canvasId,
+                  nodeId,
+                  threadId,
+                },
+              },
+            },
+          };
+        } else {
+          const selectedNodes = canvas.nodes.filter((node) => node.selected);
+          const nodeBounds = getSelectionBounds(selectedNodes, canvas.nodes);
+          const currentStrokeBounds =
+            getSketchStrokeSelectionBounds(strokeSelection);
+          const sourceBounds = unionSelectionBounds(
+            currentStrokeBounds,
+            nodeBounds
+              ? {
+                  x: nodeBounds.minX,
+                  y: nodeBounds.minY,
+                  width: nodeBounds.width,
+                  height: nodeBounds.height,
+                }
+              : null,
+          );
+          if (!sourceBounds) return;
+          const placementPoint = computeAdjacentNodePlacement({
+            nodes: canvas.nodes as NestableNode[],
+            source: sourceBounds,
+            nodeType: 'question',
+            side: 'bottom',
+          });
+          const created = createQuestionNode({
+            addNode,
+            placementPoint,
+            canvasId: canvas.canvasId,
+            binding: { kind: 'internal' },
+            mode: 'operate',
+            label: 'New ink request',
+            pendingInkIntentLabel: true,
+          });
+          attempt = {
+            identity,
+            mode: 'operate',
+            groundingVisual,
+            session: {
+              canvasId: canvas.canvasId,
+              ownerCanvasId: canvas.canvasId,
+              threadId: created.threadId,
+              conversationView: created.conversationView,
+            },
+          };
+        }
+        attemptRef.current = attempt;
+      }
+
+      const prepared = prepareAgentTurn({
+        session: attempt.session,
+        inputKind: 'ink-intent',
+        content: '',
+        mode: attempt.mode,
+        groundingVisual: attempt.groundingVisual,
+        sources: captureAgentTurnSources(attempt.session, {
+          nodeIds: freshCandidate.selectedNodeIds,
+          strokeSelection: freshCandidate.strokeSelection,
+        }),
+      });
+      const result = await dispatchAgentTurn(prepared, {
+        canDispatch: () => currentSelectionIdentity() === identity,
+        onAccepted: () => {
+          if (currentSelectionIdentity() !== identity) return;
+          attemptRef.current = null;
+          clearSelection();
+        },
+      });
+      if (!result.accepted && result.error) {
+        toast(result.error.message, { tone: 'danger' });
+      }
+    } catch (error) {
+      toast(error instanceof Error ? error.message : String(error), {
+        tone: 'danger',
+      });
+    } finally {
+      preparingRef.current = false;
+      setIsPreparing(false);
+    }
+  }, [addNode, clearSelection, currentSelectionIdentity, getViewport]);
 
   // Representative color / size for the swatches: the first selected stroke.
   const { color, size } = useMemo(() => {
@@ -159,7 +433,52 @@ export const StrokeSelectionToolbar = () => {
 
   const showStyle = !isMixed; // style controls only for a pure stroke selection
   const showDelete = isNotMouse; // delete button is touch-only
-  const open = hasSelection && anchor !== null && (showStyle || showDelete);
+  const showSubmit =
+    candidate.kind === 'ready' || candidate.reason !== 'no-ink';
+  const open =
+    hasSelection && anchor !== null && (showStyle || showDelete || showSubmit);
+  const submitDisabled = candidate.kind !== 'ready' || isPreparing;
+  const submitTitle = isPreparing
+    ? t('toolbar.sendingInkRequest')
+    : candidate.kind === 'ready'
+      ? t('toolbar.sendInkRequest')
+      : candidate.reason === 'multiple-question-targets'
+        ? t('toolbar.multipleQuestionTargets')
+        : t('toolbar.invalidQuestionTarget');
+  const agentTargetHint = useMemo(() => {
+    if (candidate.kind === 'blocked') {
+      if (candidate.reason === 'no-ink') return null;
+      return candidate.reason === 'multiple-question-targets'
+        ? {
+            label: t('toolbar.multipleInkAgentTargets'),
+            description: t('toolbar.multipleQuestionTargets'),
+          }
+        : {
+            label: t('toolbar.invalidInkAgentTarget'),
+            description: t('toolbar.invalidQuestionTarget'),
+          };
+    }
+    if (!candidate.target) {
+      return {
+        label: t('toolbar.newInkAgentTarget'),
+        description: t('toolbar.newInkAgentTargetDescription'),
+      };
+    }
+    const presentation = resolveQuestionAgentPresentation({
+      binding:
+        candidate.target.binding ??
+        cachedTargetBinding ??
+        ({ kind: 'internal' } as const),
+      profiles: agentProfiles,
+      agentMode: candidate.target.mode ?? cachedTargetMode ?? 'ask',
+    });
+    return {
+      label: presentation.alias,
+      description: t('toolbar.inkAgentTarget', {
+        name: presentation.alias,
+      }),
+    };
+  }, [agentProfiles, cachedTargetBinding, cachedTargetMode, candidate, t]);
 
   return (
     <CanvasFloatingPopover
@@ -191,6 +510,47 @@ export const StrokeSelectionToolbar = () => {
         >
           <Trash2 />
         </FloatingToolbar.ActionButton>
+      )}
+      {(showStyle || showDelete) && showSubmit && <FloatingToolbar.Divider />}
+      {showSubmit && (
+        <>
+          <span
+            className="text-fg-subtle px-1 text-xs tabular-nums"
+            aria-label={t('toolbar.inkSourceCount', {
+              count: candidate.sourceCount,
+            })}
+          >
+            {candidate.sourceCount}{' '}
+            {t('chat.sourceLabel', { count: candidate.sourceCount })}
+          </span>
+          {agentTargetHint && (
+            <Tooltip content={agentTargetHint.description}>
+              <span
+                className="text-fg-muted inline-block max-w-28 min-w-0 truncate px-1 text-xs"
+                aria-label={agentTargetHint.description}
+                role="status"
+              >
+                {agentTargetHint.label}
+              </span>
+            </Tooltip>
+          )}
+          <Button
+            variant="solid"
+            shape="pill"
+            iconOnly
+            size="sm"
+            type="button"
+            title={submitTitle}
+            aria-label={submitTitle}
+            disabled={submitDisabled}
+            onClick={(event) => {
+              event.stopPropagation();
+              void handleSubmit();
+            }}
+          >
+            <ArrowUp />
+          </Button>
+        </>
       )}
     </CanvasFloatingPopover>
   );

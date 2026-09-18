@@ -61,6 +61,21 @@ async function placeTextNode(
   await page.keyboard.press('Escape');
 }
 
+async function pasteNote(page: Page, markdown: string): Promise<void> {
+  await page.evaluate((text) => {
+    const data = new DataTransfer();
+    data.setData('text/plain', text);
+    document.body.dispatchEvent(
+      new ClipboardEvent('paste', {
+        clipboardData: data,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  }, markdown);
+  await expect(page.locator('.react-flow__node-note')).toHaveCount(1);
+}
+
 test.describe('canvas mouse mode', () => {
   test.beforeEach(async ({ page }) => {
     await openNewCanvas(page);
@@ -263,5 +278,181 @@ test.describe('canvas mouse mode', () => {
     await page.mouse.up();
 
     await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);
+  });
+
+  test('lassoed Ink creates one Question and clears after acceptance', async ({
+    page,
+  }) => {
+    const center = await paneCenter(page);
+    const toolbar = page.locator('.react-flow__panel.bottom.center');
+    await toolbar.getByRole('button', { name: /^Sketch/ }).click();
+
+    await page.mouse.move(center.x - 45, center.y);
+    await page.mouse.down();
+    await page.mouse.move(center.x + 45, center.y, { steps: 12 });
+    await page.mouse.up();
+    await expect(page.locator('.react-flow__node-sketch')).toHaveCount(1);
+
+    await page.keyboard.press('l');
+    const sketch = await page.locator('.react-flow__node-sketch').boundingBox();
+    if (!sketch) throw new Error('sketch has no bounding box');
+    const padding = 45;
+    const path = [
+      { x: sketch.x - padding, y: sketch.y - padding },
+      { x: sketch.x + sketch.width + padding, y: sketch.y - padding },
+      {
+        x: sketch.x + sketch.width + padding,
+        y: sketch.y + sketch.height + padding,
+      },
+      { x: sketch.x - padding, y: sketch.y + sketch.height + padding },
+      { x: sketch.x - padding, y: sketch.y - padding },
+    ];
+    await page.mouse.move(path[0].x, path[0].y);
+    await page.mouse.down();
+    for (let index = 1; index < path.length; index += 1) {
+      await page.mouse.move(path[index].x, path[index].y, { steps: 6 });
+    }
+    await page.mouse.up();
+
+    const send = page.getByRole('button', { name: 'Send ink request' });
+    await expect(send).toBeVisible();
+    await page.route('**/api/agent', async (route) => {
+      if (route.request().method() !== 'POST') {
+        await route.continue();
+        return;
+      }
+      const request = route.request().postDataJSON() as {
+        threadId: string;
+        inputKind?: string;
+      };
+      expect(request.inputKind).toBe('ink-intent');
+      const frame = (type: string, data: unknown) =>
+        `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body:
+          frame('accepted', {
+            threadId: request.threadId,
+            turnStartSeq: 1,
+          }) + frame('end', {}),
+      });
+    });
+
+    await send.click();
+
+    await expect(page.locator('.react-flow__node-question')).toHaveCount(1);
+    await expect(send).toHaveCount(0);
+  });
+
+  test('mixed Ink submits hidden current-LOD Canvas grounding', async ({
+    page,
+  }) => {
+    await pasteNote(page, 'First point\nSecond point\nThird comparison step');
+    const noteNode = page.locator('.react-flow__node-note').first();
+    const noteBox = await noteNode.boundingBox();
+    if (!noteBox) throw new Error('note node has no bounding box');
+    const noteNodeId = await noteNode.getAttribute('data-id');
+    if (!noteNodeId) throw new Error('note node has no id');
+
+    const toolbar = page.locator('.react-flow__panel.bottom.center');
+    await toolbar.getByRole('button', { name: /^Sketch/ }).click();
+    const underlineY = noteBox.y + noteBox.height + 24;
+    await page.mouse.move(noteBox.x + 18, underlineY);
+    await page.mouse.down();
+    await page.mouse.move(noteBox.x + noteBox.width - 18, underlineY, {
+      steps: 12,
+    });
+    await page.mouse.up();
+    const sketchNode = page.locator('.react-flow__node-sketch').first();
+
+    const canvasCenter = await paneCenter(page);
+    await page.mouse.move(canvasCenter.x, canvasCenter.y);
+    const zoomOut = page.getByRole('button', { name: 'Zoom Out' });
+    for (let index = 0; index < 6; index += 1) await zoomOut.click();
+    await expect(noteNode.locator('.semantic-lod-node')).toHaveAttribute(
+      'data-lod',
+      'minimal',
+    );
+    const submissionZoom = scaleOf(await readViewportTransform(page));
+    expect(submissionZoom).toBeLessThan(1);
+
+    const zoomedNoteBox = await noteNode.boundingBox();
+    const sketchBox = await sketchNode.boundingBox();
+    if (!zoomedNoteBox || !sketchBox)
+      throw new Error('grounding sources have no bounding box');
+
+    await page.keyboard.press('l');
+    const left = Math.min(zoomedNoteBox.x, sketchBox.x) - 45;
+    const top = Math.min(zoomedNoteBox.y, sketchBox.y) - 45;
+    const right =
+      Math.max(
+        zoomedNoteBox.x + zoomedNoteBox.width,
+        sketchBox.x + sketchBox.width,
+      ) + 45;
+    const bottom =
+      Math.max(
+        zoomedNoteBox.y + zoomedNoteBox.height,
+        sketchBox.y + sketchBox.height,
+      ) + 45;
+    const path = [
+      { x: left, y: top },
+      { x: right, y: top },
+      { x: right, y: bottom },
+      { x: left, y: bottom },
+      { x: left, y: top },
+    ];
+    await page.mouse.move(path[0].x, path[0].y);
+    await page.mouse.down();
+    for (let index = 1; index < path.length; index += 1) {
+      await page.mouse.move(path[index].x, path[index].y, { steps: 6 });
+    }
+    await page.mouse.up();
+
+    await page.route('**/api/agent', async (route) => {
+      if (route.request().method() !== 'POST') {
+        await route.continue();
+        return;
+      }
+      const request = route.request().postDataJSON() as {
+        threadId: string;
+        canvasId: string;
+        groundingVisual?: {
+          kind: string;
+          dataUrl: string;
+          viewport: { zoom: number };
+          selectedNodeIds: string[];
+        };
+      };
+      expect(request.groundingVisual).toMatchObject({
+        kind: 'visible-canvas',
+        selectedNodeIds: [noteNodeId],
+      });
+      expect(request.groundingVisual?.viewport.zoom).toBeCloseTo(
+        submissionZoom,
+        5,
+      );
+      expect(request.groundingVisual?.dataUrl).toMatch(
+        /^data:image\/png;base64,/,
+      );
+      expect(request.groundingVisual?.dataUrl.length).toBeLessThan(750_000);
+      const frame = (type: string, data: unknown) =>
+        `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body:
+          frame('accepted', {
+            threadId: request.threadId,
+            turnStartSeq: 1,
+          }) + frame('end', {}),
+      });
+    });
+
+    const send = page.getByRole('button', { name: 'Send ink request' });
+    await expect(send).toBeVisible();
+    await send.click();
+    await expect(page.locator('.react-flow__node-question')).toHaveCount(1);
+    await expect(send).toHaveCount(0);
   });
 });

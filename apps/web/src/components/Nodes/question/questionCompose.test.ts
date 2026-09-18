@@ -28,6 +28,8 @@ import {
 } from '@/store/previewWorkspace/store';
 
 import {
+  createQuestionNode,
+  createQuestionNodeAndCompose,
   enterQuestionCompose,
   enterQuestionConversation,
   ensureQuestionThread,
@@ -120,6 +122,61 @@ describe('Question conversation presentation', () => {
       ensureQuestionThread('canvas-1', 'question-1'),
     ).rejects.toThrow('Identity is missing');
     expect(useCanvasStore.getState().nodes[0].data.threadId).toBeUndefined();
+  });
+
+  it('creates an explicitly bound empty Ink question without opening Chat', () => {
+    const addNode = vi.fn();
+    const created = createQuestionNode({
+      addNode,
+      canvasId: 'canvas-1',
+      placementPoint: { x: 10, y: 20 },
+      binding: { kind: 'internal' },
+      mode: 'operate',
+      label: 'New ink request',
+      pendingInkIntentLabel: true,
+    });
+    expect(addNode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: created.nodeId,
+        data: expect.objectContaining({
+          content: '',
+          threadId: created.threadId,
+          agentBinding: { kind: 'internal' },
+          agentMode: 'operate',
+          label: 'New ink request',
+          pendingInkIntentLabel: true,
+        }),
+      }),
+    );
+    expect(usePanelStore.getState().isRightCollapsed).toBe(true);
+    expect(usePanelStore.getState().focusChatInputRequest).toBeNull();
+    expect(
+      Object.keys(usePreviewWorkspaceStore.getState().workspace.tabs),
+    ).toHaveLength(0);
+    expect(
+      selectThreadBinding(useChatStore.getState(), created.threadId),
+    ).toEqual({ kind: 'internal' });
+  });
+
+  it('retains create-and-compose focus and Canvas binding inheritance', () => {
+    const binding = {
+      kind: 'external' as const,
+      profileId: 'profile-1',
+      alias: 'Agent',
+    };
+    useChatStore.setState({ bindingMap: { 'canvas-1': binding } });
+    const created = createQuestionNodeAndCompose({
+      addNode: vi.fn(),
+      canvasId: 'canvas-1',
+      placementPoint: { x: 0, y: 0 },
+    });
+    expect(usePanelStore.getState().isRightCollapsed).toBe(false);
+    expect(usePanelStore.getState().focusChatInputRequest?.threadId).toBe(
+      created.threadId,
+    );
+    expect(
+      selectThreadBinding(useChatStore.getState(), created.threadId),
+    ).toEqual(binding);
   });
 
   it('opens an authored Question as a workspace node tab', () => {

@@ -78,6 +78,7 @@ function createHarness(options?: {
     },
     fixedTarget: null,
     signal: new AbortController().signal,
+    acceptance: Promise.resolve(null),
     events: noEvents(),
     dispose,
   };

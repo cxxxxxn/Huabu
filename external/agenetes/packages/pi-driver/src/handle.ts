@@ -35,6 +35,7 @@ import type {
 } from '@agenetes/runtime';
 import type {
   AgentEvent,
+  AgentTool,
   AgentToolResult,
 } from '@earendil-works/pi-agent-core';
 import type {
@@ -110,6 +111,17 @@ export interface PiTurnCtx {
   readonly signal?: AbortSignal;
   readonly logger?: HandleLogger;
   readonly onRendered?: (renderedMessages: Message[]) => void;
+  /** Host-owned tools available only for this turn; never persisted in spec. */
+  readonly tools?: readonly AgentTool[];
+}
+
+export function mergeTurnTools(
+  baseTools: readonly AgentTool[],
+  turnTools: readonly AgentTool[] = [],
+): AgentTool[] {
+  const byName = new Map(baseTools.map((tool) => [tool.name, tool]));
+  for (const tool of turnTools) byName.set(tool.name, tool);
+  return [...byName.values()];
 }
 
 function joinText(content: ReadonlyArray<{ type: string }>): string {
@@ -398,20 +410,24 @@ export class PiAgentHandle<
       signal?.addEventListener('abort', onAbort, { once: true });
     }
 
-    const runPromise = (
-      turnMessages.length > 0 ? agent.prompt(turnMessages) : agent.continue()
-    ).catch((err: unknown) => {
-      logger?.info(
-        `[pi-driver] kickoff rejected: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-      agentEnded = true;
-      const waiter = waiters.shift();
-      if (waiter) waiter(null);
-    });
-
+    const baseTools = agent.state.tools;
+    let runPromise: Promise<void> | undefined;
     try {
+      if (ctx.tools?.length) {
+        agent.state.tools = mergeTurnTools(baseTools, ctx.tools);
+      }
+      runPromise = (
+        turnMessages.length > 0 ? agent.prompt(turnMessages) : agent.continue()
+      ).catch((err: unknown) => {
+        logger?.info(
+          `[pi-driver] kickoff rejected: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        agentEnded = true;
+        const waiter = waiters.shift();
+        if (waiter) waiter(null);
+      });
       while (true) {
         const event = await nextEvent();
         if (event === null) break;
@@ -534,12 +550,16 @@ export class PiAgentHandle<
         }
       }
     } finally {
-      unsubscribe();
-      signal?.removeEventListener('abort', onAbort);
-      await runPromise;
-      await agent.waitForIdle();
-      const converted = convertToLlm(agent.state.messages);
-      outputDelta = converted.slice(priorLen + turnMessages.length);
+      try {
+        unsubscribe();
+        signal?.removeEventListener('abort', onAbort);
+        await runPromise;
+        await agent.waitForIdle();
+        const converted = convertToLlm(agent.state.messages);
+        outputDelta = converted.slice(priorLen + turnMessages.length);
+      } finally {
+        agent.state.tools = baseTools;
+      }
     }
 
     return outputDelta;

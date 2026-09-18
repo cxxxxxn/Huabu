@@ -24,20 +24,33 @@ import {
   type BuiltinHandle,
   type BuiltinWorkloadSpec,
 } from './agenetes/drivers.js';
-import { createChatSubmission } from './agenetes/handle.js';
-import { buildHuabuPiWorkloadSpec } from './agenetes/pi-driver.js';
+import {
+  createChatSubmission,
+  HUABU_CHAT_SUBMISSION_TYPE,
+} from './agenetes/handle.js';
+import {
+  buildHuabuPiWorkloadSpec,
+  huabuPiDriverPorts,
+} from './agenetes/pi-driver.js';
 import { loadAgent, type AgentId } from '../../prompt/index.js';
 import { canvasAcpNamespace } from '../workspace/paths.js';
 import { renderInternalAgentInputs } from './conversation/prompt/build-prompt.js';
 import { dumpAssembledPrompt } from './conversation/prompt/debug-prompt.js';
 import { conversationTitleService } from './conversation-title.service.js';
-import { type ToolScope } from './tools/index.js';
+import { beginActiveInkIntentTurn } from './ink-intent-runtime.js';
+import { getSessionReadSet } from './session-read-set.js';
+import { buildAgentToolsByNames, type ToolScope } from './tools/index.js';
 
 import type { HuabuSubmission } from './agenetes/handle.js';
 import type { ChatEnvelope } from './conversation/envelope.js';
 import type { WorkloadType } from '@agenetes/protocol';
 import type { Context, Message } from '@earendil-works/pi-ai';
-import type { AgentStreamEvent, ModelRole, NodeOrigin } from '@huabu/shared';
+import type {
+  AgentStreamEvent,
+  AgentTurnAccepted,
+  ModelRole,
+  NodeOrigin,
+} from '@huabu/shared';
 import type { FastifyBaseLogger } from 'fastify';
 
 /**
@@ -49,6 +62,76 @@ import type { FastifyBaseLogger } from 'fastify';
 export type StreamEvent = Exclude<AgentStreamEvent, { type: 'meta' | 'end' }>;
 
 const appliedDeploymentSystemPrompts = new WeakMap<BuiltinHandle, string>();
+
+export class InkModelCapabilityError extends Error {
+  readonly code = 'ink_model_unsupported';
+
+  constructor(readonly modelId: string) {
+    super(
+      `The selected model (${modelId}) does not support image input required for Ink requests.`,
+    );
+    this.name = 'InkModelCapabilityError';
+  }
+}
+
+export async function assertInkModelCapability(options: {
+  envelope: ChatEnvelope;
+  workloadType?: WorkloadType;
+  threadId?: string;
+  canvasId?: string;
+  modelRole?: ModelRole;
+  hasImage?: boolean;
+  modelId?: string;
+}): Promise<void> {
+  if (options.envelope.user?.inputKind !== 'ink-intent') return;
+
+  const workloadType = options.workloadType ?? 'Job';
+  const threadId = options.threadId ?? '';
+  const namespace = canvasAcpNamespace(options.canvasId ?? '');
+  const durableRecord =
+    workloadType === 'Deployment'
+      ? agenetes.record(namespace, threadId)
+      : undefined;
+  const priorSelection = (durableRecord?.state?.driverState ?? {}) as {
+    modelId?: unknown;
+  };
+  const probeSpec = buildHuabuPiWorkloadSpec({
+    kind: INTERNAL_DRIVER_KIND,
+    workloadType,
+    threadId,
+    namespace,
+    toolNames: [],
+    canvasId: options.canvasId,
+    modelRole: options.modelRole,
+    hasImage: options.hasImage,
+  });
+  const effectiveSpec =
+    durableRecord?.spec.workloadType === 'Deployment'
+      ? (durableRecord.spec as BuiltinWorkloadSpec)
+      : probeSpec;
+  const selectedModelId =
+    workloadType === 'Deployment' && threadId
+      ? options.modelId ||
+        (typeof priorSelection.modelId === 'string'
+          ? priorSelection.modelId
+          : undefined)
+      : undefined;
+  const modelRef = effectiveSpec.spec.recipe.model;
+  const model = await huabuPiDriverPorts.resolveModel(
+    selectedModelId !== undefined
+      ? { ...modelRef, id: selectedModelId }
+      : modelRef,
+    {
+      workloadType: effectiveSpec.workloadType,
+      namespace: effectiveSpec.namespace,
+      threadId: effectiveSpec.threadId,
+      hostContext: effectiveSpec.spec.hostContext,
+    },
+  );
+  if (!model.input?.includes('image')) {
+    throw new InkModelCapabilityError(model.id);
+  }
+}
 
 /**
  * Keep a live Deployment's system prompt aligned with host-rendered context
@@ -128,6 +211,8 @@ export interface AgentRunOptions {
   hasImage?: boolean;
   /** Frozen Space Prompt captured when a fixed Agent Node is first realised. */
   spacePrompt?: string;
+  /** Server-resolved Question owner eligible for pending Ink auto-naming. */
+  inkIntentOwnerNodeId?: string;
   /**
    * Per-thread model override id carried with this turn (built-in chat).
    * Applied to the thread before the run, so a model picked before the
@@ -170,7 +255,7 @@ export interface AgentRunOptions {
     logger: FastifyBaseLogger;
   };
   /** Called after Agenetes has synchronously persisted this turn's start. */
-  onTurnStarted?: () => void;
+  onTurnStarted?: (acceptance?: AgentTurnAccepted) => void;
   /** Awaited after canonical create, before any controls or prompt dispatch. */
   onExecutionCreated?: () => Promise<void>;
 }
@@ -207,6 +292,7 @@ export async function* runAgent(
     modelRole,
     hasImage,
     spacePrompt,
+    inkIntentOwnerNodeId,
     modelId,
     reasoningEffort,
     maxIterations,
@@ -218,11 +304,15 @@ export async function* runAgent(
   } = options;
 
   if (signal?.aborted) return [];
-  const rendered = envelope
-    ? await renderInternalAgentInputs(envelope, {
-        canvasId: canvasId ?? null,
-      })
-    : undefined;
+  const preparedChatSubmission =
+    suppliedSubmission?.type === HUABU_CHAT_SUBMISSION_TYPE &&
+    suppliedSubmission.rendered !== undefined;
+  const rendered =
+    envelope && !preparedChatSubmission
+      ? await renderInternalAgentInputs(envelope, {
+          canvasId: canvasId ?? null,
+        })
+      : undefined;
   if (signal?.aborted) return [];
   const submission =
     suppliedSubmission ??
@@ -269,6 +359,10 @@ export async function* runAgent(
     workloadType === 'Deployment'
       ? agenetes.record(namespace, deploymentThreadId)
       : undefined;
+  const priorSelection = (durableRecord?.state?.driverState ?? {}) as {
+    modelId?: unknown;
+    reasoningEffort?: unknown;
+  };
   const spec: BuiltinWorkloadSpec = buildHuabuPiWorkloadSpec({
     kind: INTERNAL_DRIVER_KIND,
     workloadType,
@@ -285,6 +379,18 @@ export async function* runAgent(
     hasImage,
     spacePrompt,
   });
+
+  if (envelope && !preparedChatSubmission) {
+    await assertInkModelCapability({
+      envelope,
+      workloadType,
+      threadId: deploymentThreadId,
+      canvasId,
+      modelRole,
+      hasImage,
+      modelId,
+    });
+  }
 
   // Static DriverMap construction guarantees that `internal` is the
   // pi-backed handle. Deployments get-or-create by `threadId`; Jobs mint a
@@ -311,12 +417,16 @@ export async function* runAgent(
   // Deployment-only, and only when it differs from the persisted selection
   // so we don't rewrite the durable record every turn.
   if (workloadType === 'Deployment' && deploymentThreadId) {
-    const priorSelection = (durableRecord?.state?.driverState ?? {}) as {
-      modelId?: unknown;
-      reasoningEffort?: unknown;
-    };
     if (modelId && modelId !== priorSelection.modelId) {
-      await handle.control({ type: 'set_model', data: { modelId } });
+      const ack = await handle.control({
+        type: 'set_model',
+        data: { modelId },
+      });
+      if (!ack.ok) {
+        throw new Error(
+          `[runAgent] Failed to apply thread model: ${ack.error}`,
+        );
+      }
     }
     if (reasoningEffort && reasoningEffort !== priorSelection.reasoningEffort) {
       await handle.control({
@@ -333,31 +443,61 @@ export async function* runAgent(
     );
   }
   if (signal?.aborted) return [];
+  const finishInkIntentTurn =
+    envelope?.user?.inputKind === 'ink-intent' && canvasId && deploymentThreadId
+      ? beginActiveInkIntentTurn(
+          canvasId,
+          deploymentThreadId,
+          inkIntentOwnerNodeId,
+        )
+      : () => undefined;
+  const turnTools =
+    envelope?.user?.inputKind === 'ink-intent'
+      ? buildAgentToolsByNames(['report_ink_intent'], {
+          canvasId,
+          origin,
+          threadId: deploymentThreadId,
+          readSet: getSessionReadSet(deploymentThreadId),
+        })
+      : undefined;
   const iterator = handle.run(submission, {
     maxIterations: maxIterations ?? agentCfg.runtime.maxIterations,
     signal,
     logger,
     onRendered,
+    tools: turnTools,
   });
-  onTurnStarted?.();
+  onTurnStarted?.(
+    deploymentThreadId
+      ? {
+          threadId: deploymentThreadId,
+          turnStartSeq: agenetes.logMetadata(namespace, deploymentThreadId)
+            .eventCount,
+        }
+      : undefined,
+  );
 
-  while (true) {
-    const next = await iterator.next();
-    if (next.done) return next.value;
-    const event = next.value;
-    if (event.type === 'tool_call') {
-      yield {
-        ...event,
-        data: {
-          ...event.data,
-          internalToolName:
-            event.data.title && event.data.title.length > 0
-              ? event.data.title
-              : undefined,
-        },
-      };
-      continue;
+  try {
+    while (true) {
+      const next = await iterator.next();
+      if (next.done) return next.value;
+      const event = next.value;
+      if (event.type === 'tool_call') {
+        yield {
+          ...event,
+          data: {
+            ...event.data,
+            internalToolName:
+              event.data.title && event.data.title.length > 0
+                ? event.data.title
+                : undefined,
+          },
+        };
+        continue;
+      }
+      yield event;
     }
-    yield event;
+  } finally {
+    finishInkIntentTurn();
   }
 }

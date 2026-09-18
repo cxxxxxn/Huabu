@@ -52,6 +52,10 @@ import {
   type GenerateImageArgs,
 } from './handlers/image-generation.js';
 import {
+  handleReportInkIntent,
+  type ReportInkIntentArgs,
+} from './handlers/report-ink-intent.js';
+import {
   handleSnapshotNodes,
   type SnapshotNodesArgs,
 } from './handlers/snapshot-node.js';
@@ -150,6 +154,9 @@ export async function executeTool(
   };
 
   switch (name) {
+    case 'report_ink_intent':
+      return handleReportInkIntent(args as ReportInkIntentArgs, context);
+
     case 'web_search':
       return handleWebSearch(args as WebSearchArgs);
 

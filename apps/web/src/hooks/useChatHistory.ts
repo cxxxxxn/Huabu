@@ -114,6 +114,13 @@ function historyItemsToMessages(
         historyTurnActive,
         role: 'user',
         content: message.content || '',
+        ...(message.inputKind ? { inputKind: message.inputKind } : {}),
+        ...(message.inferredIntent
+          ? { inferredIntent: message.inferredIntent }
+          : {}),
+        ...(message.groundingVisual
+          ? { groundingVisual: message.groundingVisual }
+          : {}),
         ...attachments,
         ...selectedNodeIds,
         ...(message.selectedStrokeIds && message.selectedStrokeIds.length > 0

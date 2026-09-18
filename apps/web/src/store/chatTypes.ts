@@ -14,7 +14,9 @@
 import type {
   AssistantPart,
   ChatAttachment,
+  AgentRequest,
   SelectedStrokeSubset,
+  VisibleCanvasGrounding,
 } from '@huabu/shared';
 
 /**
@@ -53,6 +55,11 @@ export type ChatMessage =
       historyTurnActive?: boolean;
       role: 'user';
       content: string;
+      inputKind?: AgentRequest['inputKind'];
+      /** Validated Agent interpretation; never treated as user-authored text. */
+      inferredIntent?: string;
+      /** Hidden relationship evidence retained only for exact Ink retry. */
+      groundingVisual?: VisibleCanvasGrounding;
       /** Image/file attachments included with this message. */
       attachments?: ChatAttachment[];
       /** IDs of canvas nodes selected when this message was sent. */

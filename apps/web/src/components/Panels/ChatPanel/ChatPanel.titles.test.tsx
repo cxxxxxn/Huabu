@@ -48,6 +48,7 @@ import {
 import { ChatPanel } from './index';
 
 import type { ChatSession } from '@/hooks/useChatSession';
+import type * as CanvasStore from '@/store/canvasStore';
 import type {
   CanvasPreviewWorkspace,
   PreviewTab as TabModel,
@@ -57,6 +58,10 @@ import type { ConversationTitle, AgentStreamEvent } from '@huabu/shared';
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
+
+const saveCanvasForSubmission = vi.hoisted(() =>
+  vi.fn().mockResolvedValue(undefined),
+);
 
 // Keep real panel, editor, tab, stores, and stream hook; replace unrelated UI
 // and network boundaries with complete, stable fixtures.
@@ -133,6 +138,10 @@ vi.mock('@/api/conversationTitles', () => ({
 vi.mock('@/api/agent', () => ({
   agentApi: { streamMessage: vi.fn(), stopThread: vi.fn() },
 }));
+vi.mock('@/store/canvasStore', async (importOriginal) => ({
+  ...(await importOriginal<typeof CanvasStore>()),
+  saveCanvasForSubmission,
+}));
 
 const query = vi.mocked(queryConversationTitles);
 const save = vi.mocked(setConversationTitle);
@@ -193,6 +202,13 @@ async function renderPanel(
   tab = baseTab,
   onCommit = vi.fn(),
 ) {
+  usePreviewWorkspaceStore.setState({
+    canvasId: session.canvasId,
+    workspace: {
+      ...createEmptyWorkspace(),
+      tabs: { [tab.id]: tab },
+    },
+  });
   await act(async () =>
     root.render(
       <DndContext>

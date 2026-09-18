@@ -8,20 +8,25 @@
  * modes (chat, agent) with pi-ai streaming.
  */
 
-import { AGENT_SSE_EVENTS } from '@huabu/shared';
+import { AGENT_HOST_SSE_EVENTS, AGENT_SSE_EVENTS } from '@huabu/shared';
 
 import { ApiError, apiFetch, apiUrl } from './_client';
 import { routes } from './_routes';
 import { readTypedSSEStream } from './_sse';
 
 import type {
+  ApiErrorBody,
   AgentBinding,
+  AgentHostStreamEvent,
+  AgentInputKind,
   AgentMode,
   AgentRequest,
   AgentStreamEvent,
+  AgentTurnAccepted,
   AgentChatContext,
   AgentHistoryPageResponse,
   ChatAttachment,
+  VisibleCanvasGrounding,
   ChatHistoryResponse,
   ContextTokensResponse,
   ForkThreadResponse,
@@ -31,6 +36,7 @@ import type {
 // ==================== Stream Callbacks ====================
 
 export interface AgentStreamCallbacks {
+  onAccepted?: (acceptance: AgentTurnAccepted) => void;
   /** Called for each streaming event */
   onEvent: (event: AgentStreamEvent) => void;
   /** Called on error */
@@ -60,10 +66,24 @@ async function pumpAgentStream(
 ): Promise<'done' | 'end' | 'error' | null> {
   let terminal: 'done' | 'end' | 'error' | null = null;
 
-  await readTypedSSEStream<AgentStreamEvent>(
+  await readTypedSSEStream<AgentHostStreamEvent>(
     response,
     (event) => {
       if (terminal === 'end' || terminal === 'error') return;
+
+      if (event.type === AGENT_HOST_SSE_EVENTS.Accepted) {
+        if (
+          !event.data ||
+          typeof event.data.threadId !== 'string' ||
+          event.data.threadId.length === 0 ||
+          !Number.isSafeInteger(event.data.turnStartSeq) ||
+          event.data.turnStartSeq <= 0
+        ) {
+          throw new Error('Invalid agent acceptance');
+        }
+        callbacks.onAccepted?.(event.data);
+        return;
+      }
 
       if (event.type === AGENT_SSE_EVENTS.End) {
         terminal = 'end';
@@ -153,16 +173,18 @@ export const agentApi = {
 
   /**
    * Explicitly stop an active agent run on the server.
-   * Best-effort — swallow transport errors so the UI never blocks on stop.
+   * Transport failures reject because the server may already have accepted
+   * the stop; callers must keep observing the original stream until its
+   * acceptance/terminal state resolves.
    */
-  stopThread: async (threadId: string): Promise<void> => {
-    try {
-      await apiFetch<StopThreadResponse>(routes.agentStop(threadId), {
-        method: 'POST',
-      });
-    } catch {
-      /* best-effort */
-    }
+  stopThread: async (
+    threadId: string,
+    canvasId?: string,
+  ): Promise<StopThreadResponse> => {
+    return await apiFetch<StopThreadResponse>(
+      routes.agentStop(threadId, canvasId),
+      { method: 'POST' },
+    );
   },
 
   /**
@@ -213,9 +235,11 @@ export const agentApi = {
     mode: AgentMode,
     callbacks: AgentStreamCallbacks,
     options?: {
+      inputKind?: AgentInputKind;
       canvasContext?: AgentChatContext;
       canvasId?: string;
       attachments?: ChatAttachment[];
+      groundingVisual?: VisibleCanvasGrounding;
       /**
        * Anchor a node-neighbourhood preamble to this node id. When
        * set, the server resolves the surrounding-canvas context from
@@ -253,6 +277,7 @@ export const agentApi = {
   ): Promise<void> => {
     const body: AgentRequest = {
       content,
+      inputKind: options?.inputKind,
       threadId,
       mode,
       canvasContext: options?.canvasContext,
@@ -260,6 +285,7 @@ export const agentApi = {
       attachments: options?.attachments?.length
         ? options.attachments
         : undefined,
+      groundingVisual: options?.groundingVisual,
       anchorNodeId: options?.anchorNodeId,
       agentBinding: options?.agentBinding,
       invokedSkills: options?.invokedSkills?.length
@@ -284,7 +310,17 @@ export const agentApi = {
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        let body: Partial<ApiErrorBody> = {};
+        try {
+          body = (await response.json()) as Partial<ApiErrorBody>;
+        } catch {
+          // Preserve the status even when an intermediary returns non-JSON.
+        }
+        throw new ApiError(
+          response.status,
+          body,
+          `Agent request failed with HTTP ${response.status}`,
+        );
       }
       if (!response.body) {
         throw new Error('Response body is null');

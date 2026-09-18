@@ -91,6 +91,20 @@ describe('AgentNodeLifecycle', () => {
     expect(h.current().viewed).toBe(true);
   });
 
+  it('consumes a pending Ink label only when an accepted Ink terminal requests it', async () => {
+    const h = harness({
+      invocationToken: 'attempt-1',
+      pendingInkIntentLabel: true,
+    });
+    await h.lifecycle.done(TARGET, 'attempt-1');
+    expect(h.current().pendingInkIntentLabel).toBe(true);
+
+    await h.lifecycle.done(TARGET, 'attempt-1', {
+      consumePendingInkIntentLabel: true,
+    });
+    expect(h.current().pendingInkIntentLabel).toBe(false);
+  });
+
   it('binding does not invent a prompt or alter its previous outcome', async () => {
     const h = harness({
       status: 'error',

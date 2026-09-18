@@ -23,6 +23,10 @@ export type AgentNodeTransition = (
   current: AgentNodeProjection,
 ) => Record<string, unknown> | null;
 
+interface AgentNodeTerminalOptions {
+  consumePendingInkIntentLabel?: boolean;
+}
+
 interface LifecycleDependencies {
   transition: (
     target: AgentNodeTarget,
@@ -121,16 +125,21 @@ export class AgentNodeLifecycle {
     }));
   }
 
-  done(target: AgentNodeTarget, invocationToken: string): Promise<void> {
-    return this.terminal(target, invocationToken, 'done', '');
+  done(
+    target: AgentNodeTarget,
+    invocationToken: string,
+    options?: AgentNodeTerminalOptions,
+  ): Promise<void> {
+    return this.terminal(target, invocationToken, 'done', '', options);
   }
 
   error(
     target: AgentNodeTarget,
     message: string,
     invocationToken: string,
+    options?: AgentNodeTerminalOptions,
   ): Promise<void> {
-    return this.terminal(target, invocationToken, 'error', message);
+    return this.terminal(target, invocationToken, 'error', message, options);
   }
 
   bind(target: AgentNodeTarget, alreadyLocked = false): Promise<void> {
@@ -156,10 +165,19 @@ export class AgentNodeLifecycle {
     invocationToken: string,
     status: 'done' | 'error',
     errorMessage: string,
+    options?: AgentNodeTerminalOptions,
   ): Promise<void> {
     return this.dependencies.transition(target, (current) =>
       current.invocationToken === invocationToken
-        ? { status, errorMessage, viewed: false }
+        ? {
+            status,
+            errorMessage,
+            viewed: false,
+            ...(options?.consumePendingInkIntentLabel === true &&
+            current.pendingInkIntentLabel === true
+              ? { pendingInkIntentLabel: false }
+              : {}),
+          }
         : null,
     );
   }

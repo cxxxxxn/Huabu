@@ -115,6 +115,8 @@ URL tabs are not eligible for the warm slot, and their cross-origin iframe scrol
 
 Every mounted `ChatPanel` receives an explicit `ChatSession` and owning preview tab ID. There is no globally current Chat thread or Question replay pointer, so two groups can render independent conversations without sharing messages, drafts, bindings, attachments, settings, loading state, or stream control.
 
+Chat and Canvas Ink submissions delegate to the same component-independent `agentTurnController`, which owns captured sources, save barriers, per-thread stream claims, event reduction, lifecycle settlement, typed retry, and durable acceptance. Closing or unmounting Chat does not own the stream; any mounted view of the same thread can stop it. A confirmed Stop applies its acceptance before releasing the local claim, while a transport-unknown or `stopped: false` result keeps the original stream and loading state alive as the reconciliation channel instead of making resubmission appear safe.
+
 Dragging a Chat or Note block into an editable Note uses Milkdown's geometric drop position, while its fixed-position indicator is portalled to `document.body` so the Preview panel's compositor transform cannot rebase viewport coordinates in either split group.
 
 PDF area capture routes directly to a Chat or Question conversation that is active in the group beside the PDF. When no conversation is visible beside it, the Canvas's canonical unbound Chat opens to the side and the capture is staged immediately as that thread's pending attachment. The explicit Send to Chat action always produces a thread-owned attachment; the shared dashed selection attachment remains reserved for passive browser text selection.

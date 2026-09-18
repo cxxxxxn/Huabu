@@ -14,6 +14,7 @@ export interface AgentStreamClaim {
 interface ActiveClaim {
   owner: StreamOwner;
   controller: AbortController;
+  holdUntilRelease: boolean;
 }
 
 const claims = new Map<string, ActiveClaim>();
@@ -26,6 +27,7 @@ export function claimAgentStream(
   canvasId: string,
   threadId: string,
   owner: StreamOwner,
+  options?: { holdUntilRelease?: boolean },
 ): AgentStreamClaim | null {
   const key = claimKey(canvasId, threadId);
   if (claims.has(key)) return null;
@@ -33,6 +35,7 @@ export function claimAgentStream(
   const active: ActiveClaim = {
     owner,
     controller: new AbortController(),
+    holdUntilRelease: options?.holdUntilRelease ?? false,
   };
   claims.set(key, active);
 
@@ -62,6 +65,6 @@ export function abortAgentStreamClaim(
 ): void {
   const active = claims.get(claimKey(canvasId, threadId));
   if (!active) return;
-  claims.delete(claimKey(canvasId, threadId));
+  if (!active.holdUntilRelease) claims.delete(claimKey(canvasId, threadId));
   active.controller.abort();
 }

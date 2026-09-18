@@ -30,6 +30,7 @@ import type { AddNodeInput } from '@/handler/canvasCommand/uiIntent.ts';
 import type {
   AgentBinding,
   AgentConversationView,
+  AgentMode,
   CanvasNodeId,
 } from '@huabu/shared';
 import type { Node } from '@xyflow/react';
@@ -189,6 +190,25 @@ export function createQuestionNodeAndCompose(opts: {
   canvasId: string | null;
   id?: CanvasNodeId;
 }): { nodeId: CanvasNodeId; threadId: string } {
+  const created = createQuestionNode(opts);
+  enterQuestionCompose(created.conversationView, opts.canvasId);
+  return { nodeId: created.nodeId, threadId: created.threadId };
+}
+
+export function createQuestionNode(opts: {
+  addNode: (input: AddNodeInput) => void;
+  placementPoint: { x: number; y: number };
+  canvasId: string | null;
+  id?: CanvasNodeId;
+  binding?: AgentBinding;
+  mode?: AgentMode;
+  label?: string;
+  pendingInkIntentLabel?: boolean;
+}): {
+  nodeId: CanvasNodeId;
+  threadId: string;
+  conversationView: AgentConversationView;
+} {
   const nodeId = opts.id ?? (createId('node') as CanvasNodeId);
   const threadId = createId('thread');
   const canvasId = opts.canvasId ?? useCanvasStore.getState().canvasId;
@@ -199,22 +219,27 @@ export function createQuestionNodeAndCompose(opts: {
     data: {
       content: '',
       threadId,
+      ...(opts.binding ? { agentBinding: opts.binding } : {}),
+      ...(opts.mode ? { agentMode: opts.mode } : {}),
+      ...(opts.label ? { label: opts.label } : {}),
+      ...(opts.pendingInkIntentLabel ? { pendingInkIntentLabel: true } : {}),
       origin: { type: 'user-created' },
     },
   });
-  enterQuestionCompose(
-    {
-      presentationAnchor: {
-        canvasId,
-        nodeId,
-      },
-      conversationOwner: {
-        canvasId,
-        nodeId,
-        threadId,
-      },
+  const conversationView: AgentConversationView = {
+    presentationAnchor: {
+      canvasId,
+      nodeId,
     },
-    opts.canvasId,
-  );
-  return { nodeId, threadId };
+    conversationOwner: {
+      canvasId,
+      nodeId,
+      threadId,
+    },
+  };
+  if (opts.binding)
+    useChatStore.getState().setAgentBinding(threadId, opts.binding);
+  if (opts.mode)
+    useChatStore.getState().setThreadLastAction(threadId, opts.mode);
+  return { nodeId, threadId, conversationView };
 }
