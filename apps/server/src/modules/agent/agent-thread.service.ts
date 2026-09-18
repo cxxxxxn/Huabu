@@ -209,7 +209,7 @@ interface ActiveAgentInvocation {
   turnStartState: TurnStartState | null;
   turnStarted: Promise<TurnStartState>;
   resolveTurnStarted: (state: TurnStartState) => void;
-  phase: 'preparing' | 'executing' | 'stopping' | 'settled';
+  phase: 'preparing' | 'dispatching' | 'executing' | 'stopping' | 'settled';
   outcome?: 'done' | 'error';
   errorMessage?: string;
 }
@@ -669,10 +669,14 @@ export class AgentThreadService {
       !active.abortController.signal.aborted &&
       (canvasId === undefined || active.canvasId === canvasId)
     ) {
+      const phaseAtStop = active.phase;
       active.abortController.abort();
-      const state = active.turnStartState ?? { started: false as const };
-      active.resolveTurnStarted(state);
-      active.turnStartState = state;
+      if (phaseAtStop === 'preparing') {
+        const state = { started: false as const };
+        active.resolveTurnStarted(state);
+        active.turnStartState = state;
+      }
+      const state = active.turnStartState ?? (await active.turnStarted);
       return {
         stopped: true,
         acceptance: state.started && state.acceptance ? state.acceptance : null,
@@ -721,6 +725,7 @@ export class AgentThreadService {
         await settle('done');
         return;
       }
+      active.phase = 'dispatching';
       const stream = this.createDispatchStream(
         options,
         binding,

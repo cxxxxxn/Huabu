@@ -99,6 +99,8 @@ function createHarness(options?: {
   collectedSpacePrompt?: string;
   canonicalBinding?: AgentBinding;
   acceptance?: AgentTurnAccepted;
+  beforeTurnStarted?: () => Promise<void>;
+  skipTurnStarted?: boolean;
   internalGate?: Promise<void>;
 }) {
   const release = vi.fn();
@@ -126,8 +128,11 @@ function createHarness(options?: {
     (runOptions: {
       onTurnStarted?: (acceptance?: AgentTurnAccepted) => void;
     }) => {
-      runOptions.onTurnStarted?.(options?.acceptance);
       async function* emptyInternalStream(): ReturnType<typeof runAgent> {
+        await options?.beforeTurnStarted?.();
+        if (!options?.skipTurnStarted) {
+          runOptions.onTurnStarted?.(options?.acceptance);
+        }
         await options?.internalGate;
         yield* [];
         return [];
@@ -970,6 +975,83 @@ describe('AgentThreadService', () => {
       acceptance,
     });
     releaseRun();
+    await draining;
+  });
+
+  it('preserves durable acceptance when stop races with turn-start reporting', async () => {
+    const acceptance = { threadId: 'thread-a', turnStartSeq: 4 };
+    let enterTurnStart!: () => void;
+    const turnStartPending = new Promise<void>((resolve) => {
+      enterTurnStart = resolve;
+    });
+    let releaseTurnStart!: () => void;
+    const turnStartGate = new Promise<void>((resolve) => {
+      releaseTurnStart = resolve;
+    });
+    const harness = createHarness({
+      acceptance,
+      agentTarget: SELECTABLE_TARGET,
+      target: null,
+      beforeTurnStarted: async () => {
+        enterTurnStart();
+        await turnStartGate;
+      },
+    });
+    const invocation = await harness.service.invoke({
+      ...invocationOptions(),
+      fixedTarget: null,
+      requestBinding: { kind: 'internal' },
+    });
+    const draining = invocation.events.next();
+    await turnStartPending;
+
+    let stopSettled = false;
+    const stopping = harness.service.stopAndWait('thread-a').finally(() => {
+      stopSettled = true;
+    });
+    await Promise.resolve();
+    expect(stopSettled).toBe(false);
+
+    releaseTurnStart();
+    await expect(stopping).resolves.toEqual({ stopped: true, acceptance });
+    await expect(invocation.acceptance).resolves.toEqual(acceptance);
+    await draining;
+  });
+
+  it('reports not-started when dispatch settles without durable acceptance', async () => {
+    let enterTurnStart!: () => void;
+    const turnStartPending = new Promise<void>((resolve) => {
+      enterTurnStart = resolve;
+    });
+    let releaseTurnStart!: () => void;
+    const turnStartGate = new Promise<void>((resolve) => {
+      releaseTurnStart = resolve;
+    });
+    const harness = createHarness({
+      agentTarget: SELECTABLE_TARGET,
+      target: null,
+      skipTurnStarted: true,
+      beforeTurnStarted: async () => {
+        enterTurnStart();
+        await turnStartGate;
+      },
+    });
+    const invocation = await harness.service.invoke({
+      ...invocationOptions(),
+      fixedTarget: null,
+      requestBinding: { kind: 'internal' },
+    });
+    const draining = invocation.events.next();
+    await turnStartPending;
+
+    const stopping = harness.service.stopAndWait('thread-a');
+    releaseTurnStart();
+
+    await expect(stopping).resolves.toEqual({
+      stopped: true,
+      acceptance: null,
+    });
+    await expect(invocation.acceptance).resolves.toBeNull();
     await draining;
   });
 
