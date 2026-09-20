@@ -36,6 +36,14 @@ const selectedNode = {
   data: {},
 } as Node;
 
+const selectedSketch = {
+  id: 'sketch-1',
+  type: 'sketch',
+  selected: true,
+  position: { x: 30, y: 40 },
+  data: {},
+} as Node;
+
 const context = {
   inputMode: 'pen',
   interactivityLocked: false,
@@ -126,5 +134,28 @@ describe('createNodeDragRecognizer', () => {
     expect(onNodeDragStart).toHaveBeenCalledTimes(1);
     expect(cancelActiveNodeDrag).toHaveBeenCalledTimes(1);
     expect(onNodeDragStop).not.toHaveBeenCalled();
+  });
+
+  it('does not carry selected Sketch nodes in a finger drag', () => {
+    getState.mockImplementation(() => ({
+      nodes: [selectedNode, selectedSketch],
+      cancelActiveNodeDrag,
+      onNodeDragStart,
+      onNodeDragStop,
+      onNodesChange,
+    }));
+    const recognizer = createNodeDragRecognizer();
+    const down = pointer(4, 0, 0);
+
+    expect(recognizer.onDown(down, context)).toBe('claim');
+    recognizer.onMove?.(pointer(4, 9, 0), context);
+
+    expect(onNodeDragStart).toHaveBeenCalledWith(
+      expect.anything(),
+      selectedNode,
+      [selectedNode],
+    );
+    const options = nodeIdAtScreenPoint.mock.calls[0]?.[2];
+    expect(options?.excludeNodeIds.has(selectedSketch.id)).toBe(true);
   });
 });

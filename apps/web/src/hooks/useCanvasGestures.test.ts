@@ -65,6 +65,15 @@ describe('shouldOwnSingleTouchNavigation', () => {
     ).toBe(false);
   });
 
+  it('owns finger interaction on painted Sketch content', () => {
+    expect(
+      shouldOwnSingleTouchNavigation(
+        targetInside('react-flow__node react-flow__node-sketch'),
+        fingerOptions,
+      ),
+    ).toBe(true);
+  });
+
   it('owns touch over nodes in pen interaction mode', () => {
     expect(
       shouldOwnSingleTouchNavigation(targetInside('react-flow__node'), {

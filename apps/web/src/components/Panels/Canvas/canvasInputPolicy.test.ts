@@ -36,6 +36,7 @@ describe('canvas input policy', () => {
     expect(resolveNodeDraggable(true, true, true)).toBe(true);
     expect(resolveNodeDraggable(undefined, true, true)).toBeUndefined();
     expect(resolveNodeDraggable(true, false, false)).toBe(true);
+    expect(resolveNodeDraggable(true, true, true, true)).toBe(false);
   });
 
   it('routes node placement through the active direct-manipulation pointer', () => {

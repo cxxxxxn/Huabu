@@ -445,6 +445,14 @@ export function useSketchStrokeMove({
     const moved = !!offset && (offset.dx !== 0 || offset.dy !== 0);
     const store = useCanvasStore.getState();
 
+    if (!moved) {
+      if (!preview.inkSubmissionPreparing) {
+        preview.clearSketchStrokeSelection();
+        store.selectNodes([]);
+      }
+      return;
+    }
+
     // Stage 4B: a PURE stroke selection (no whole-node drag) dropped onto a
     // DIFFERENT region or empty canvas is a cross-region transfer — split
     // into a new region or merge into another — rather than a Stage-2

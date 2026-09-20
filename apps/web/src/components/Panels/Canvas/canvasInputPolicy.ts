@@ -12,6 +12,7 @@ const REACT_FLOW_PANE = '.react-flow__pane';
 const REACT_FLOW_PANEL = '.react-flow__panel';
 const REACT_FLOW_NODE = '.react-flow__node';
 const REACT_FLOW_NODE_FRAME = '.react-flow__node-frame';
+const REACT_FLOW_NODE_SKETCH = '.react-flow__node-sketch';
 const REACT_FLOW_INTERACTIVE =
   '.react-flow__panel, .react-flow__node, .react-flow__edge, .react-flow__handle';
 
@@ -28,6 +29,11 @@ export function closestNodeElement(target: Element | null): HTMLElement | null {
 /** True when the pointer target lives inside a canvas node. */
 export function isNodeTarget(target: Element | null): boolean {
   return closestNodeElement(target) !== null;
+}
+
+/** True when the pointer target lives on the painted surface of a Sketch. */
+export function isSketchNodeTarget(target: Element | null): boolean {
+  return Boolean(target?.closest(REACT_FLOW_NODE_SKETCH));
 }
 
 /**
@@ -93,7 +99,9 @@ export function resolveNodeDraggable(
   draggable: boolean | undefined,
   selected: boolean | undefined,
   isNotMouse: boolean,
+  ignoreTouchDrag = false,
 ): boolean | undefined {
+  if (ignoreTouchDrag) return false;
   return isNotMouse && selected !== true ? false : draggable;
 }
 

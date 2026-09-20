@@ -7,6 +7,7 @@ import { useEffect, type MutableRefObject } from 'react';
 import {
   isNodeTarget,
   isPanelTarget,
+  isSketchNodeTarget,
 } from '../components/Panels/Canvas/canvasInputPolicy';
 import { MAX_ZOOM, MIN_ZOOM } from '../config/canvas';
 
@@ -104,6 +105,7 @@ export function shouldOwnSingleTouchNavigation(
   if (isPanelTarget(target)) return false;
   if (inputMode === 'pen') return true;
   if (explicitToolActive) return false;
+  if (isSketchNodeTarget(target)) return true;
   return !isNodeTarget(target);
 }
 

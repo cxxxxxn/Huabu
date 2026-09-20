@@ -3,6 +3,8 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import useCanvasStore from '@/store/canvasStore';
+
 import { createViewportNavigationRecognizer } from './viewportNavigation';
 
 import type { CanvasPointerRouterContext } from '@/handler/canvasPointerRouterContext';
@@ -15,7 +17,13 @@ const {
 } = vi.hoisted(() => ({
   beginCanvasGesture: vi.fn(() => true),
   endCanvasGesture: vi.fn(),
-  nodeIdAtScreenPoint: vi.fn(() => 'node-1'),
+  nodeIdAtScreenPoint: vi.fn<
+    (
+      clientX: number,
+      clientY: number,
+      options?: { excludeNodeIds?: ReadonlySet<string> },
+    ) => string | null
+  >(() => 'node-1'),
   updateCanvasGesture: vi.fn(() => 'pending'),
 }));
 
@@ -65,6 +73,16 @@ beforeEach(() => {
   beginCanvasGesture.mockReturnValue(true);
   updateCanvasGesture.mockReturnValue('pending');
   nodeIdAtScreenPoint.mockReturnValue('node-1');
+  useCanvasStore.getState()._setStateNoAutosave({
+    nodes: [
+      {
+        id: 'sketch-1',
+        type: 'sketch',
+        position: { x: 0, y: 0 },
+        data: {},
+      },
+    ],
+  });
 });
 
 describe('createViewportNavigationRecognizer', () => {
@@ -90,5 +108,14 @@ describe('createViewportNavigationRecognizer', () => {
 
     expect(ctx.onNodeTap).toHaveBeenCalledWith('node-1');
     expect(ctx.onEmptyCanvasTap).not.toHaveBeenCalled();
+    expect(nodeIdAtScreenPoint).toHaveBeenCalledWith(
+      10,
+      20,
+      expect.objectContaining({
+        excludeNodeIds: expect.objectContaining({ has: expect.any(Function) }),
+      }),
+    );
+    const options = nodeIdAtScreenPoint.mock.calls[0]?.[2];
+    expect(options?.excludeNodeIds?.has('sketch-1')).toBe(true);
   });
 });

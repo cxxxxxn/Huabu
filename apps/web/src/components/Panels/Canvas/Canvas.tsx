@@ -706,6 +706,15 @@ export const Canvas: React.FC<CanvasProps> = ({
     // The two can coexist in one lasso. A fresh drag calls this with empty
     // args, clearing both.
     onSelect: (nodeIds, flowPolygon) => {
+      const preview = useGesturePreviewStore.getState();
+      preview.clearSketchStrokeHighlight();
+      if (
+        nodeIds.length === 0 &&
+        flowPolygon.length === 0 &&
+        preview.inkSubmissionPreparing
+      ) {
+        return;
+      }
       const strokeSelection =
         flowPolygon.length >= 3 ? findSketchStrokesInPolygon(flowPolygon) : {};
 
@@ -754,7 +763,6 @@ export const Canvas: React.FC<CanvasProps> = ({
         return true;
       });
 
-      const preview = useGesturePreviewStore.getState();
       preview.setSketchStrokeSelection(strokeSelection);
       // Retain the lasso loop for ANY non-empty selection (strokes and/or
       // whole nodes) so the user can drag inside it to move the whole
@@ -861,6 +869,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         node.draggable,
         node.selected,
         isNotMouse,
+        lastPointer === 'touch' && node.type === 'sketch',
       );
       const needsWrap =
         nextClassName !== baseClassName ||
@@ -886,7 +895,14 @@ export const Canvas: React.FC<CanvasProps> = ({
 
     zWrapCacheRef.current = nextCache;
     return result;
-  }, [isNotMouse, lassoPreviewNodeIdSet, nodes, nodeGeometryPreviews, zByNode]);
+  }, [
+    isNotMouse,
+    lassoPreviewNodeIdSet,
+    lastPointer,
+    nodes,
+    nodeGeometryPreviews,
+    zByNode,
+  ]);
 
   // Override marker colors on selected edges so arrows match the selection
   // highlight color (--color-info). CSS cannot style SVG <marker> referenced
@@ -1145,6 +1161,8 @@ export const Canvas: React.FC<CanvasProps> = ({
         suppressNextPaneClickRef.current = false;
         return;
       }
+      const preview = useGesturePreviewStore.getState();
+      preview.clearSketchStrokeHighlight();
       // 1. Click-to-place for pending node creation tools.
       if (placePendingNode(event.clientX, event.clientY)) return;
 
@@ -1152,8 +1170,13 @@ export const Canvas: React.FC<CanvasProps> = ({
       //    background click belongs to that tool — leave the expanded view
       //    alone so the user doesn't lose their context mid-gesture.
       if (pendingNodeType) return;
+
+      if (preview.inkSubmissionPreparing) return;
+
+      preview.clearSketchStrokeSelection();
+      selectNodes([]);
     },
-    [pendingNodeType, placePendingNode],
+    [pendingNodeType, placePendingNode, selectNodes],
   );
 
   // Keep layout-driven canvas resizes spatially stable. Side panels and split
@@ -1592,8 +1615,17 @@ export const Canvas: React.FC<CanvasProps> = ({
           interactivityLocked={interactivityLocked}
           explicitToolActive={tool === 'lasso' || Boolean(pendingNodeType)}
           onTouchTakeover={handleTouchTakeover}
-          onEmptyCanvasTap={() => selectNodes([])}
-          onNodeTap={(nodeId) => selectNodes([nodeId])}
+          onEmptyCanvasTap={() => {
+            const preview = useGesturePreviewStore.getState();
+            preview.clearSketchStrokeHighlight();
+            if (preview.inkSubmissionPreparing) return;
+            preview.clearSketchStrokeSelection();
+            selectNodes([]);
+          }}
+          onNodeTap={(nodeId) => {
+            useGesturePreviewStore.getState().clearSketchStrokeHighlight();
+            selectNodes([nodeId]);
+          }}
           extraRecognizers={pointerRecognizers}
         />
         <SelectionAutoPan
