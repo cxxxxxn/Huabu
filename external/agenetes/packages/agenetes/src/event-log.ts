@@ -390,6 +390,21 @@ export class EventLog {
   readonly #listeners = new Map<string, Set<EventLogListener>>();
 
   readonly #pending = new Map<string, Promise<unknown>>();
+  /**
+   * Reads join the per-thread write queue and DO inherit its failure.
+   *
+   * That looks like over-reach — a reader wants ordering, not somebody
+   * else's error — and neutralising it is a one-word change. It is load
+   * bearing: turn acceptance rests on it. `runAgent` reports a turn started
+   * by reading `logMetadata` after `run()` has opened the turn, so a
+   * `beginTurn` that failed to persist reaches that read and stops the turn
+   * being announced as accepted. Neutralise this and a turn whose Tier-1
+   * start was never written is reported as started.
+   *
+   * The cost is real and stays recorded: a `history`, `logMetadata` or live
+   * `tail` backfill can fail because a concurrent append failed. Removing
+   * the propagation means first giving acceptance a signal of its own.
+   */
   #serialize<T>(threadId: string, operation: () => Promise<T>): Promise<T> {
     const result = (this.#pending.get(threadId) ?? Promise.resolve())
       .catch(() => {})
@@ -477,7 +492,14 @@ export class EventLog {
     threadId: string,
     records: readonly EventLogRecord[],
   ): Promise<void> {
-    await this.#store.replace(namespace, threadId, records);
+    // Queued with the thread's appends, not beside them. A wholesale write
+    // that ran concurrently with an `append` would let that append resolve —
+    // handing its caller a durable `seq` — and then erase the entry the seq
+    // named.
+    await this.#serialize(
+      threadId,
+      async () => await this.#store.replace(namespace, threadId, records),
+    );
   }
 
   /**
@@ -485,7 +507,10 @@ export class EventLog {
    * Reserved for `rehome()`'s source cleanup / target compensation.
    */
   async delete(namespace: Namespace, threadId: string): Promise<void> {
-    await this.#store.delete(namespace, threadId);
+    await this.#serialize(
+      threadId,
+      async () => await this.#store.delete(namespace, threadId),
+    );
   }
 
   /**

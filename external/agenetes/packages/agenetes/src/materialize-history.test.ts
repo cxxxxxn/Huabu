@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { materializeHistory } from './materialize-history.js';
+import {
+  firstUncoveredSeq,
+  materializeHistory,
+} from './materialize-history.js';
 
 import type { EventLogRecord } from './event-log.js';
 import type { PersistedTurn } from './turn-store.js';
@@ -90,6 +93,82 @@ describe('materializeHistory', () => {
       {
         request: null,
         transcript: [{ type: 'text', data: { content: 'legacy' } }],
+        isIncomplete: true,
+      },
+    ]);
+  });
+
+  // A turn that died before committing is Tier-1 records with no folded turn.
+  // Read as "everything after the last folded turn" it survives exactly one
+  // recovery and then vanishes the moment a later turn folds past it — while
+  // whatever its tool call did to the Space stays. Coverage is per turn so
+  // that cannot happen, and the recovered turn reads where it happened.
+  it('keeps an interrupted turn once a later turn has folded over it', () => {
+    const later: PersistedTurn = {
+      turn: {
+        request: { type: 'user_text', content: 'second request' },
+        transcript: [{ type: 'text', data: { content: 'second response' } }],
+      },
+      seqStart: 3,
+      seqEnd: 4,
+    };
+    const orphaned: EventLogRecord[] = [
+      {
+        seq: 1,
+        ts: 1,
+        kind: 'turn_start',
+        request: { type: 'user_text', content: 'interrupted' },
+      },
+      {
+        seq: 2,
+        ts: 2,
+        event: { type: 'text_delta', data: { content: 'partial' } },
+      },
+    ];
+
+    expect(firstUncoveredSeq([later])).toBe(1);
+    expect(materializeHistory([later], orphaned)).toEqual([
+      {
+        request: { type: 'user_text', content: 'interrupted' },
+        transcript: [{ type: 'text', data: { content: 'partial' } }],
+        isIncomplete: true,
+      },
+      later.turn,
+    ]);
+  });
+
+  it('reads only the suffix when every turn committed', () => {
+    // The ordinary case must not start reading the whole log: with contiguous
+    // ranges the first uncovered seq is simply the next one.
+    expect(firstUncoveredSeq([])).toBe(1);
+    expect(firstUncoveredSeq([completed])).toBe(4);
+    expect(
+      firstUncoveredSeq([completed, { ...completed, seqStart: 4, seqEnd: 9 }]),
+    ).toBe(10);
+  });
+
+  it('ignores records a folded turn already accounts for', () => {
+    expect(
+      materializeHistory(
+        [completed],
+        [
+          {
+            seq: 2,
+            ts: 2,
+            event: { type: 'text_delta', data: { content: 'covered' } },
+          },
+          {
+            seq: 5,
+            ts: 5,
+            event: { type: 'text_delta', data: { content: 'tail' } },
+          },
+        ],
+      ),
+    ).toEqual([
+      completed.turn,
+      {
+        request: null,
+        transcript: [{ type: 'text', data: { content: 'tail' } }],
         isIncomplete: true,
       },
     ]);

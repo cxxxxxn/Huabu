@@ -28,7 +28,10 @@ import {
 } from './event-log.js';
 import { createTranscriptFolder } from './fold.js';
 import { copyHostMetadata } from './host-metadata.js';
-import { materializeHistory } from './materialize-history.js';
+import {
+  firstUncoveredSeq,
+  materializeHistory,
+} from './materialize-history.js';
 import { ThreadNotificationBus } from './notifications.js';
 import {
   createAgentRecoveryContext,
@@ -464,7 +467,11 @@ export function createAgenetesInstance(
   ): Promise<ObservedAgentTurn[]> => {
     const persisted = await turnStore.list(namespace, threadId);
     if (!withTail) return persisted.map(({ turn }) => turn);
-    const fence = persisted[persisted.length - 1]?.seqEnd ?? 0;
+    // Read from the first seq no folded turn accounts for, which the ranges
+    // alone answer. With nothing interrupted that is the last turn's `seqEnd`
+    // — the suffix read, unchanged — and when a turn died before committing
+    // it reaches back far enough to find it again.
+    const fence = firstUncoveredSeq(persisted) - 1;
     return materializeHistory(
       persisted,
       await eventLog.readRecords(namespace, threadId, fence),
@@ -476,6 +483,42 @@ export function createAgenetesInstance(
   // A handle without `onState` (a driver that reports no out-of-turn meta)
   // wires nothing and its notification stream stays empty.
   const pendingReports = new Map<string, Promise<void>>();
+  /**
+   * The last up-report failure a thread has not yet reported to anyone.
+   *
+   * Held beside the queue rather than left in it. A rejected promise in
+   * `pendingReports` would do two things at once: stop every later report
+   * being attempted, because `.then` on a rejection forwards it without
+   * running the callback, and answer every later `record` / `run` / `close`
+   * with a write from minutes ago. Keeping the queue always-settled separates
+   * those — the chain carries on, and the failure is surfaced once, to
+   * whoever next asks about the thread.
+   */
+  const reportFailures = new Map<string, unknown>();
+  /**
+   * Threads with a turn streaming right now.
+   *
+   * `rehome` refuses a thread whose handle is live, because relocating a
+   * conversation out from under a running turn would drop whatever that turn
+   * appends between the read of the source log and the write of the target.
+   * A **threaded Job** never enters the live-handle table, though its `run()`
+   * is logged like any other — so the live table alone does not answer the
+   * question the precondition is asking, and this does.
+   */
+  const activeRuns = new Set<string>();
+
+  /**
+   * Drain a thread's queued state writes, then surface one failure if the
+   * queue produced one. Clearing it as it is thrown is what keeps a single
+   * transient write failure from becoming the permanent answer.
+   */
+  const drainReports = async (threadId: string): Promise<void> => {
+    await pendingReports.get(threadId);
+    if (!reportFailures.has(threadId)) return;
+    const failure = reportFailures.get(threadId);
+    reportFailures.delete(threadId);
+    throw failure;
+  };
 
   const wireUpReport = (
     spec: WorkloadSpec,
@@ -483,24 +526,26 @@ export function createAgenetesInstance(
     handle: AgentHandle,
   ): void => {
     const unsub = handle.onState?.((snapshot: AgentStateSnapshot) => {
-      const pending = (
-        pendingReports.get(spec.threadId) ?? Promise.resolve()
-      ).then(async () => {
-        await threadStore.upsert(spec.namespace, spec.threadId, {
-          ...(await threadStore.get(spec.namespace, spec.threadId)),
-          driverSchemaVersion: driver.schemaVersion,
-          spec,
-          state: snapshot,
+      // The queue is kept always-settled so the next report is attempted
+      // whatever this one does; the failure itself moves to `reportFailures`,
+      // where `record` / `run` / `close` pick it up exactly once.
+      const pending = (pendingReports.get(spec.threadId) ?? Promise.resolve())
+        .then(async () => {
+          await threadStore.upsert(spec.namespace, spec.threadId, {
+            ...(await threadStore.get(spec.namespace, spec.threadId)),
+            driverSchemaVersion: driver.schemaVersion,
+            spec,
+            state: snapshot,
+          });
+          if (snapshot.metadata !== undefined) {
+            bus.publish(spec.threadId, snapshot.metadata, spec.namespace.name);
+            bus.publish(spec.threadId, snapshot.metadata);
+          }
+        })
+        .catch((error: unknown) => {
+          reportFailures.set(spec.threadId, error);
         });
-        if (snapshot.metadata !== undefined) {
-          bus.publish(spec.threadId, snapshot.metadata, spec.namespace.name);
-          bus.publish(spec.threadId, snapshot.metadata);
-        }
-      });
       pendingReports.set(spec.threadId, pending);
-      // Driver callbacks cannot await. Retain failures for record/run/close to
-      // surface; attach a handler immediately so no rejection is unobserved.
-      void pending.catch(() => {});
     });
     // Register cleanup even for silent handles, whose scoped streams must end.
     unsubscribers.set(spec.threadId, () => {
@@ -541,10 +586,11 @@ export function createAgenetesInstance(
       const folder = createTranscriptFolder();
       let meta: AgentTurnMeta | undefined;
       let completed = false;
+      activeRuns.add(threadId);
       try {
         let step = await source.next();
         while (!step.done) {
-          await pendingReports.get(threadId);
+          await drainReports(threadId);
           const event = step.value;
           await eventLog.append(namespace, threadId, event);
           folder.fold(event);
@@ -555,7 +601,7 @@ export function createAgenetesInstance(
         // The generator returned. Commit the Tier-2 turn pinned to its Tier-1
         // range, then pass the raw return value through UNCHANGED so the host's
         // own consumer still sees whatever `TResult` the driver produced.
-        await pendingReports.get(threadId);
+        await drainReports(threadId);
         const seqEnd = await eventLog.maxSeq(namespace, threadId);
         const turn: AgentTurn = {
           request: start.request,
@@ -566,6 +612,7 @@ export function createAgenetesInstance(
         completed = true;
         return step.value;
       } finally {
+        activeRuns.delete(threadId);
         if (!completed) await source.return(undefined);
       }
     }
@@ -586,7 +633,7 @@ export function createAgenetesInstance(
             );
             void start.catch(() => {});
             return (async function* () {
-              await pendingReports.get(threadId);
+              await drainReports(threadId);
               const boundary = await start;
               const source = (
                 target.run as (
@@ -766,6 +813,12 @@ export function createAgenetesInstance(
         throw new AgenetesError(
           'rehome_conflict',
           `cannot rehome thread '${source.namespace.name}/${source.threadId}' with a live handle`,
+        );
+      }
+      if (activeRuns.has(source.threadId)) {
+        throw new AgenetesError(
+          'rehome_conflict',
+          `cannot rehome thread '${source.namespace.name}/${source.threadId}' while a turn is streaming`,
         );
       }
       const sourceRecord = await threadStore.get(
@@ -950,9 +1003,12 @@ export function createAgenetesInstance(
         // A snapshot reported during teardown is still this thread's. Persist
         // and deliver it before either notification scope ends — tearing the
         // listener down first would drop the driver's last word.
-        await pendingReports.get(threadId);
+        await drainReports(threadId);
       } finally {
         pendingReports.delete(threadId);
+        // A failure `drainReports` did not get to report belongs to the
+        // handle being torn down, not to whatever spawns this thread next.
+        reportFailures.delete(threadId);
         const unsub = unsubscribers.get(threadId);
         if (unsub) {
           unsub();
@@ -965,7 +1021,7 @@ export function createAgenetesInstance(
       namespace: Namespace,
       threadId: string,
     ): Promise<ThreadRecord | undefined> {
-      await pendingReports.get(threadId);
+      await drainReports(threadId);
       const record = await threadStore.get(namespace, threadId);
       return record ? validateRecord(record) : undefined;
     },
