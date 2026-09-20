@@ -314,8 +314,55 @@ test.describe('canvas mouse mode', () => {
     }
     await page.mouse.up();
 
+    const selectedInk = page.locator(
+      '[data-sketch-stroke-emphasis="selected"]',
+    );
+    await expect(selectedInk).toBeVisible();
+    await expect(selectedInk).toHaveAttribute('stroke', 'var(--color-info)');
+    await expect(selectedInk).toHaveAttribute(
+      'vector-effect',
+      'non-scaling-stroke',
+    );
+
     const send = page.getByRole('button', { name: 'Send ink request' });
     await expect(send).toBeVisible();
+    const retainedLasso = await page
+      .locator('[data-stroke-selection-region]')
+      .boundingBox();
+    const inkToolbar = await send
+      .locator('xpath=ancestor::*[@data-floating-chrome][1]')
+      .boundingBox();
+    if (!retainedLasso || !inkToolbar) {
+      throw new Error('Ink toolbar or retained Lasso has no bounding box');
+    }
+    expect(
+      Math.abs(
+        inkToolbar.x +
+          inkToolbar.width / 2 -
+          (retainedLasso.x + retainedLasso.width / 2),
+      ),
+    ).toBeLessThanOrEqual(2);
+
+    await page.mouse.click(retainedLasso.x + 10, retainedLasso.y + 10);
+    await expect(selectedInk).toHaveCount(0);
+    await expect(page.locator('[data-stroke-selection-region]')).toHaveCount(0);
+    await expect(send).toHaveCount(0);
+
+    await page.mouse.move(path[0].x, path[0].y);
+    await page.mouse.down();
+    for (let index = 1; index < path.length; index += 1) {
+      await page.mouse.move(path[index].x, path[index].y, { steps: 6 });
+    }
+    await page.mouse.up();
+    await expect(selectedInk).toBeVisible();
+    await expect(send).toBeVisible();
+    const sendBox = await send.boundingBox();
+    if (!sendBox) throw new Error('Ink send button has no bounding box');
+
+    let releaseAgentRequest!: () => void;
+    const agentRequestHeld = new Promise<void>((resolve) => {
+      releaseAgentRequest = resolve;
+    });
     await page.route('**/api/agent', async (route) => {
       if (route.request().method() !== 'POST') {
         await route.continue();
@@ -326,6 +373,7 @@ test.describe('canvas mouse mode', () => {
         inputKind?: string;
       };
       expect(request.inputKind).toBe('ink-intent');
+      await agentRequestHeld;
       const frame = (type: string, data: unknown) =>
         `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
       await route.fulfill({
@@ -341,8 +389,24 @@ test.describe('canvas mouse mode', () => {
 
     await send.click();
 
+    const pendingSend = page.getByRole('button', {
+      name: 'Sending ink request',
+    });
+    const spinner = pendingSend.locator('[data-loading-spinner]');
+    await expect(spinner).toBeVisible();
+    const pendingSendBox = await pendingSend.boundingBox();
+    if (!pendingSendBox) {
+      throw new Error('Pending Ink send button has no bounding box');
+    }
+    expect(pendingSendBox.width).toBe(sendBox.width);
+    expect(pendingSendBox.height).toBe(sendBox.height);
+    await expect(page.getByRole('tooltip')).toHaveCount(0);
+    releaseAgentRequest();
+
     await expect(page.locator('.react-flow__node-question')).toHaveCount(1);
     await expect(send).toHaveCount(0);
+    await expect(page.locator('[data-stroke-selection-region]')).toHaveCount(0);
+    await expect(selectedInk).toHaveCount(0);
   });
 
   test('mixed Ink submits hidden current-LOD Canvas grounding', async ({

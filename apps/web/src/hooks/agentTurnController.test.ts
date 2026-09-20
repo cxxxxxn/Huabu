@@ -145,6 +145,53 @@ afterEach(() => {
 });
 
 describe('shared Agent turn input', () => {
+  it('deduplicates Frame-nested Ink while excluding its Question anchor', () => {
+    useCanvasStore.getState()._setStateNoAutosave({
+      nodes: [
+        {
+          id: 'frame-1',
+          type: 'frame',
+          selected: true,
+          position: { x: 0, y: 0 },
+          data: {},
+        },
+        {
+          id: 'question-1',
+          type: 'question',
+          parentId: 'frame-1',
+          position: { x: 10, y: 10 },
+          data: { threadId: 'thread-1' },
+        },
+        {
+          id: 'sketch-1',
+          type: 'sketch',
+          parentId: 'frame-1',
+          position: { x: 20, y: 20 },
+          data: {},
+        },
+      ],
+    });
+
+    const sources = captureAgentTurnSources(questionSession, {
+      nodeIds: ['frame-1'],
+      strokeSelection: { 'sketch-1': ['stroke-1'] },
+    });
+
+    expect(sources.canvasContext.selectedNodes).toEqual([
+      {
+        id: 'frame-1',
+        type: 'frame',
+        children: [
+          {
+            id: 'sketch-1',
+            type: 'sketch',
+            strokeIds: ['stroke-1'],
+          },
+        ],
+      },
+    ]);
+  });
+
   it('projects inferred Ink intent without rendering its tool call', () => {
     useChatStore.getState().addMessage('thread-1', {
       id: 'ink-user',
