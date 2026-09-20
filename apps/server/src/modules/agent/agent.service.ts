@@ -90,7 +90,7 @@ export async function assertInkModelCapability(options: {
   const namespace = canvasAcpNamespace(options.canvasId ?? '');
   const durableRecord =
     workloadType === 'Deployment'
-      ? agenetes.record(namespace, threadId)
+      ? await agenetes.record(namespace, threadId)
       : undefined;
   const priorSelection = (durableRecord?.state?.driverState ?? {}) as {
     modelId?: unknown;
@@ -357,7 +357,7 @@ export async function* runAgent(
       : undefined;
   const durableRecord =
     workloadType === 'Deployment'
-      ? agenetes.record(namespace, deploymentThreadId)
+      ? await agenetes.record(namespace, deploymentThreadId)
       : undefined;
   const priorSelection = (durableRecord?.state?.driverState ?? {}) as {
     modelId?: unknown;
@@ -395,7 +395,7 @@ export async function* runAgent(
   // Static DriverMap construction guarantees that `internal` is the
   // pi-backed handle. Deployments get-or-create by `threadId`; Jobs mint a
   // fresh handle.
-  const handle = agenetes.create(spec) as BuiltinHandle;
+  const handle = (await agenetes.create(spec)) as BuiltinHandle;
   await options.onExecutionCreated?.();
   if (signal?.aborted) return [];
   if (
@@ -471,8 +471,9 @@ export async function* runAgent(
     deploymentThreadId
       ? {
           threadId: deploymentThreadId,
-          turnStartSeq: agenetes.logMetadata(namespace, deploymentThreadId)
-            .eventCount,
+          turnStartSeq: (
+            await agenetes.logMetadata(namespace, deploymentThreadId)
+          ).eventCount,
         }
       : undefined,
   );

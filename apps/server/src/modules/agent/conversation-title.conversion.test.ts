@@ -51,12 +51,12 @@ forEachProductProfile((profile, label) => {
         .mockResolvedValue({ label: 'Generated title' });
     });
     afterEach(async () => {
-      agenetes.close(threadId);
+      await agenetes.close(threadId);
       vi.restoreAllMocks();
       await mounted.close();
     });
-    function realize() {
-      return agenetes.create(
+    async function realize() {
+      return await agenetes.create(
         buildHuabuPiWorkloadSpec({
           kind: 'internal',
           workloadType: 'Deployment',
@@ -168,7 +168,7 @@ forEachProductProfile((profile, label) => {
       );
       expect(createHandle).not.toHaveBeenCalled();
       expect(
-        agenetes.record(canvasAcpNamespace(canvasId), threadId),
+        await agenetes.record(canvasAcpNamespace(canvasId), threadId),
       ).toBeUndefined();
       wait.finish();
       expect((await pending).patch).toEqual({});
@@ -276,7 +276,7 @@ forEachProductProfile((profile, label) => {
     );
     it('retains valid ACP across generation failure, filters multiline updates, retries and deduplicates', async () => {
       await create();
-      realize();
+      await realize();
       generate.mockRejectedValueOnce(new Error('offline'));
       await service.initialize(canvasId, threadId, 'First user prompt');
       await notify('ACP title');
@@ -295,19 +295,24 @@ forEachProductProfile((profile, label) => {
         source: 'generated',
       });
       expect(
-        agenetes.record(canvasAcpNamespace(canvasId), threadId)?.hostMetadata,
+        (await agenetes.record(canvasAcpNamespace(canvasId), threadId))
+          ?.hostMetadata,
       ).toBeUndefined();
     });
     it.each(['fallback', 'acp', 'generated', 'user'] as const)(
       'transfers %s Chat authority at conversion without freezing automatic names',
       async (source) => {
-        realize();
-        agenetes.updateHostMetadata(canvasAcpNamespace(canvasId), threadId, {
-          [CONVERSATION_TITLE_METADATA_KEY]: {
-            title: 'Latest backend title',
-            source,
+        await realize();
+        await agenetes.updateHostMetadata(
+          canvasAcpNamespace(canvasId),
+          threadId,
+          {
+            [CONVERSATION_TITLE_METADATA_KEY]: {
+              title: 'Latest backend title',
+              source,
+            },
           },
-        });
+        );
         await create({ label: 'Stale frontend title' });
         expect((await current()).data.label).toBe('Latest backend title');
         await service.initialize(canvasId, threadId, 'First user prompt');
@@ -329,7 +334,7 @@ forEachProductProfile((profile, label) => {
       },
     );
     it('routes pre-conversion generation completion to the newly authoritative node', async () => {
-      realize();
+      await realize();
       const wait = delayed();
       const pending = service.initialize(
         canvasId,

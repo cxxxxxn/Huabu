@@ -88,8 +88,10 @@ interface RealizationDependencies {
   readRecord: (
     namespace: Namespace,
     threadId: string,
-  ) => ReturnType<typeof agenetes.record>;
-  createHandle: (spec: AcpWorkloadSpec) => AcpHandle;
+  ) =>
+    | ReturnType<typeof agenetes.record>
+    | Awaited<ReturnType<typeof agenetes.record>>;
+  createHandle: (spec: AcpWorkloadSpec) => AcpHandle | Promise<AcpHandle>;
   buildSpec: typeof buildAcpWorkloadSpec;
   subscribeProfileCache: typeof ensureProfileCacheSubscription;
   subscribeTitles?: (canvasId: string, threadId: string) => void;
@@ -120,7 +122,7 @@ async function ensureSessionFromCanonicalSpec(
     resolvedEnvironment || spec.spec.env
       ? { ...resolvedEnvironment, ...spec.spec.env }
       : undefined;
-  const record = agenetes.record(spec.namespace, spec.threadId);
+  const record = await agenetes.record(spec.namespace, spec.threadId);
   return ensureAcpSession({
     agentletId: resolveAcpAgentletId(spec),
     threadId: spec.threadId,
@@ -148,8 +150,9 @@ const DEFAULT_DEPENDENCIES: RealizationDependencies = {
   resolveFixedAgentNode: (canvasId, threadId) =>
     agentThreadResolver.resolveFixedAgentNode(canvasId, threadId),
   collectSpacePrompt: resolveSpacePrompt,
-  readRecord: (namespace, threadId) => agenetes.record(namespace, threadId),
-  createHandle: (spec) => agenetes.create(spec) as AcpHandle,
+  readRecord: async (namespace, threadId) =>
+    await agenetes.record(namespace, threadId),
+  createHandle: async (spec) => (await agenetes.create(spec)) as AcpHandle,
   buildSpec: buildAcpWorkloadSpec,
   subscribeProfileCache: ensureProfileCacheSubscription,
   subscribeTitles: (canvasId, threadId) =>
@@ -199,7 +202,10 @@ export class ExternalAgentRealizationService {
     options: RealizeExternalAgentThreadOptions,
     namespace: Namespace,
   ): Promise<RealizedExternalAgentThread> {
-    const record = this.dependencies.readRecord(namespace, options.threadId);
+    const record = await this.dependencies.readRecord(
+      namespace,
+      options.threadId,
+    );
     const release =
       !record && !options.turnLeaseHeld && this.dependencies.acquireTurn
         ? this.dependencies.acquireTurn(options.threadId)
@@ -220,7 +226,7 @@ export class ExternalAgentRealizationService {
   private async realizeAdmitted(
     options: RealizeExternalAgentThreadOptions,
     namespace: Namespace,
-    record: ReturnType<typeof agenetes.record>,
+    record: Awaited<ReturnType<typeof agenetes.record>>,
   ): Promise<RealizedExternalAgentThread> {
     const fixedTarget =
       options.fixedTarget === undefined
@@ -260,7 +266,7 @@ export class ExternalAgentRealizationService {
         fixedTarget,
         agentTarget,
         spec,
-        handle: this.dependencies.createHandle(spec),
+        handle: await this.dependencies.createHandle(spec),
       };
       this.dependencies.subscribeProfileCache(
         options.threadId,
@@ -350,7 +356,7 @@ export class ExternalAgentRealizationService {
       fixedTarget,
       agentTarget,
       spec,
-      handle: this.dependencies.createHandle(spec),
+      handle: await this.dependencies.createHandle(spec),
     };
     if (agentTarget)
       await this.dependencies.confirmBinding?.(agentTarget, { required: true });
