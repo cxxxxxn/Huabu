@@ -47,6 +47,13 @@ async function tables(database: Pool): Promise<void> {
   if (!pending) {
     pending = (async () => {
       const client = await database.connect();
+      // pg-pool drops its own idle listener while a client is checked out and
+      // `pg` emits `error` on an unexpected disconnection, so a backend that
+      // goes away mid-transaction would raise an unhandled 'error' event and
+      // take the process down. The statement's own rejection below is the
+      // signal this code acts on; the event only needs an ear.
+      const ignoreDisconnect = () => {};
+      client.on('error', ignoreDisconnect);
       let broken = false;
       try {
         await client.query('BEGIN');
@@ -63,6 +70,7 @@ async function tables(database: Pool): Promise<void> {
         throw error;
       } finally {
         client.release(broken);
+        client.removeListener('error', ignoreDisconnect);
       }
     })();
     prepared.set(database, pending);
@@ -87,14 +95,30 @@ async function read<T>(
   const value = await substrate(namespace);
   return value ? operation(value.database, value.extensionId) : missing;
 }
-async function mutate<T>(
-  namespace: Namespace,
+type ConversationSubstrate = NonNullable<Awaited<ReturnType<typeof substrate>>>;
+
+/**
+ * Run `operation` on one client, in one transaction, under the thread's lock.
+ *
+ * Reads that span several statements take it too, not just writes. Read
+ * committed gives every statement its own snapshot, and statements issued on
+ * the pool need not even reach the same connection — so a multi-statement
+ * read left outside this can assemble its answer from two different
+ * arrangements of a thread whose log was replaced between them.
+ */
+async function locked<T>(
+  value: ConversationSubstrate,
   threadId: string,
   operation: (database: PoolClient, id: number) => Promise<T>,
 ): Promise<T> {
-  const value = await substrate(namespace);
-  if (!value) throw new Error('Cannot persist conversation in a missing Space');
   const client = await value.database.connect();
+  // pg-pool drops its own idle listener while a client is checked out and
+  // `pg` emits `error` on an unexpected disconnection, so a backend that
+  // goes away mid-transaction would raise an unhandled 'error' event and
+  // take the process down. The statement's own rejection below is the
+  // signal this code acts on; the event only needs an ear.
+  const ignoreDisconnect = () => {};
+  client.on('error', ignoreDisconnect);
   let broken = false;
   try {
     await client.query('BEGIN');
@@ -115,7 +139,29 @@ async function mutate<T>(
     throw error;
   } finally {
     client.release(broken);
+    client.removeListener('error', ignoreDisconnect);
   }
+}
+
+async function mutate<T>(
+  namespace: Namespace,
+  threadId: string,
+  operation: (database: PoolClient, id: number) => Promise<T>,
+): Promise<T> {
+  const value = await substrate(namespace);
+  if (!value) throw new Error('Cannot persist conversation in a missing Space');
+  return await locked(value, threadId, operation);
+}
+
+/** A read whose statements have to agree with each other; see {@link locked}. */
+async function readLocked<T>(
+  namespace: Namespace,
+  threadId: string,
+  missing: T,
+  operation: (database: PoolClient, id: number) => Promise<T>,
+): Promise<T> {
+  const value = await substrate(namespace);
+  return value ? await locked(value, threadId, operation) : missing;
 }
 
 export class PostgresThreadStore implements ThreadStore {
@@ -370,9 +416,14 @@ export class PostgresTurnStore implements TurnStore {
     options: TurnStorePageOptions,
   ): Promise<TurnStorePage> {
     requireTurnPageLimit(options.limit);
-    const value = await substrate(namespace);
-    if (!value) {
-      return {
+    // The whole page is assembled inside one locked transaction. Its pieces —
+    // the generation the cursors are stamped with, the upper bound, the group
+    // starts and the turns themselves — only describe one conversation if a
+    // wholesale replacement cannot land between them.
+    return await readLocked<TurnStorePage>(
+      namespace,
+      threadId,
+      {
         groups: [],
         next: encodeTurnCursor({
           version: 1,
@@ -381,103 +432,109 @@ export class PostgresTurnStore implements TurnStore {
           ordinal: 1,
         }),
         hasMore: false,
-      };
-    }
-    const { database, extensionId } = value;
-    const generation = await this.#generation(database, extensionId, threadId);
-    const cursor = options.before
-      ? decodeTurnCursor(options.before, threadId)
-      : undefined;
-    if (cursor && cursor.generation !== generation) {
-      throw new StaleTurnCursorError('History cursor is stale');
-    }
-    const end =
-      cursor?.ordinal ??
-      Number(
-        (
-          await database.query(
-            `SELECT COALESCE(MAX(ordinal), 0) + 1 AS ordinal FROM agenetes_turns
+      },
+      async (database, extensionId) => {
+        const generation = await this.#generation(
+          database,
+          extensionId,
+          threadId,
+        );
+        const cursor = options.before
+          ? decodeTurnCursor(options.before, threadId)
+          : undefined;
+        if (cursor && cursor.generation !== generation) {
+          throw new StaleTurnCursorError('History cursor is stale');
+        }
+        const end =
+          cursor?.ordinal ??
+          Number(
+            (
+              await database.query(
+                `SELECT COALESCE(MAX(ordinal), 0) + 1 AS ordinal FROM agenetes_turns
              WHERE extension_id=$1 AND thread_id=$2`,
-            [extensionId, threadId],
-          )
-        ).rows[0].ordinal,
-      );
-    // One display group starts at each turn that carries a request; a
-    // requestless turn continues the group before it.
-    const starts = (
-      await database.query(
-        `SELECT ordinal FROM agenetes_turns
+                [extensionId, threadId],
+              )
+            ).rows[0].ordinal,
+          );
+        // One display group starts at each turn that carries a request; a
+        // requestless turn continues the group before it.
+        const starts = (
+          await database.query(
+            `SELECT ordinal FROM agenetes_turns
          WHERE extension_id=$1 AND thread_id=$2 AND ordinal < $3
            AND json_typeof((turn_json::json) -> 'request') <> 'null'
          ORDER BY ordinal DESC LIMIT $4`,
-        [extensionId, threadId, end, options.limit + 1],
-      )
-    ).rows.map((row) => Number(row.ordinal));
-    // A log that opens with requestless turns still has a first group.
-    const first = (
-      await database.query(
-        `SELECT ordinal, json_typeof((turn_json::json) -> 'request') AS request_type
+            [extensionId, threadId, end, options.limit + 1],
+          )
+        ).rows.map((row) => Number(row.ordinal));
+        // A log that opens with requestless turns still has a first group.
+        const first = (
+          await database.query(
+            `SELECT ordinal, json_typeof((turn_json::json) -> 'request') AS request_type
          FROM agenetes_turns
          WHERE extension_id=$1 AND thread_id=$2 AND ordinal < $3
          ORDER BY ordinal LIMIT 1`,
-        [extensionId, threadId, end],
-      )
-    ).rows[0];
-    if (
-      first &&
-      first.request_type === 'null' &&
-      starts.length <= options.limit
-    )
-      starts.push(Number(first.ordinal));
-    starts.sort((a, b) => b - a);
-    const selectedStarts = starts.slice(0, options.limit);
-    const hasMore = starts.length > options.limit;
-    if (selectedStarts.length === 0) {
-      return {
-        groups: [],
-        next: encodeTurnCursor({
-          version: 1,
-          threadId,
-          generation,
-          ordinal: end,
-        }),
-        hasMore: false,
-      };
-    }
-    const lower = selectedStarts[selectedStarts.length - 1]!;
-    const persisted = (
-      await database.query(
-        `SELECT seq_start, seq_end, turn_json FROM agenetes_turns
-         WHERE extension_id=$1 AND thread_id=$2 AND ordinal >= $3 AND ordinal < $4
-         ORDER BY ordinal`,
-        [extensionId, threadId, lower, end],
-      )
-    ).rows.map((row) => ({
-      seqStart: Number(row.seq_start),
-      seqEnd: Number(row.seq_end),
-      turn: JSON.parse(row.turn_json) as PersistedTurn['turn'],
-    }));
-    return {
-      groups: groupPersistedTurns(threadId, generation, persisted, lower),
-      next: encodeTurnCursor({
-        version: 1,
-        threadId,
-        generation,
-        ordinal: end,
-      }),
-      ...(hasMore
-        ? {
-            before: encodeTurnCursor({
+            [extensionId, threadId, end],
+          )
+        ).rows[0];
+        if (
+          first &&
+          first.request_type === 'null' &&
+          starts.length <= options.limit
+        )
+          starts.push(Number(first.ordinal));
+        starts.sort((a, b) => b - a);
+        const selectedStarts = starts.slice(0, options.limit);
+        const hasMore = starts.length > options.limit;
+        if (selectedStarts.length === 0) {
+          return {
+            groups: [],
+            next: encodeTurnCursor({
               version: 1,
               threadId,
               generation,
-              ordinal: lower,
+              ordinal: end,
             }),
-          }
-        : {}),
-      hasMore,
-    };
+            hasMore: false,
+          };
+        }
+        const lower = selectedStarts[selectedStarts.length - 1]!;
+        const persisted = (
+          await database.query(
+            `SELECT seq_start, seq_end, turn_json FROM agenetes_turns
+         WHERE extension_id=$1 AND thread_id=$2 AND ordinal >= $3 AND ordinal < $4
+         ORDER BY ordinal`,
+            [extensionId, threadId, lower, end],
+          )
+        ).rows.map((row) => ({
+          seqStart: Number(row.seq_start),
+          seqEnd: Number(row.seq_end),
+          turn: JSON.parse(row.turn_json) as PersistedTurn['turn'],
+        }));
+        return {
+          groups: groupPersistedTurns(threadId, generation, persisted, lower),
+          next: encodeTurnCursor({
+            version: 1,
+            threadId,
+            generation,
+            ordinal: end,
+          }),
+          ...(hasMore
+            ? {
+                before: encodeTurnCursor({
+                  version: 1,
+                  threadId,
+                  generation,
+                  ordinal: lower,
+                }),
+              }
+            : {}),
+          hasMore,
+        };
+      },
+    );
   }
+
   async count(namespace: Namespace, threadId: string): Promise<number> {
     return read(namespace, 0, async (db, id) =>
       Number(

@@ -597,9 +597,13 @@ function ensure(): Storage {
   if (current) return current;
 
   const profile = parseStorageProfile();
-  // Build first, so an unimplemented backend reports that rather than the
-  // initialization complaint below.
-  const storage = createStorage(profile);
+  // Refuse before building. Building first would memoize a pool from the
+  // environment and only then say "call initStorage() during startup" — so a
+  // caller who fixed HUABU_POSTGRES_URL and followed that advice would get
+  // the context built from the old value, since only closeStorage() clears
+  // it. It would also let a misconfigured-but-implemented backend answer
+  // with its own error instead of the one explaining the profile needs an
+  // awaited init.
   if (requiresExplicitInit(profile)) {
     throw new StorageProfileError(
       `Storage was used before initStorage(). The ` +
@@ -608,7 +612,9 @@ function ensure(): Storage {
         `Call initStorage() during startup.`,
     );
   }
-  current = storage;
+  // Only the lazy-safe profiles reach here, and an unimplemented backend
+  // still reports itself rather than the complaint above.
+  current = createStorage(profile);
   return current;
 }
 
@@ -843,10 +849,14 @@ export async function deleteSpace(
       // directory those areas sat in. Sweeping the areas is the port's
       // contract; removing what composition placed them under is this
       // module's, and it is what stops a deleted Space leaving a husk behind.
-      if (
-        storage.profile.structured.kind !== 'disk' &&
-        storage.profile.blobs.kind === 'disk'
-      ) {
+      if (storage.profile.structured.kind !== 'disk') {
+        // Not narrowed to local blobs. With remote bytes this root was never
+        // created and `force` makes the call a no-op, so the only deployment
+        // the two forms differ on is one that wrote Spaces with local bytes
+        // and later moved `HUABU_BLOB_BACKEND` to azure: there the
+        // pre-migration artifacts, uploads, memory and guide are still on
+        // disk, and skipping this would leave them behind the Space forever.
+        // One stat syscall per deletion is the whole cost of not doing that.
         await rm(detachedSpaceRoot(canvasId), {
           recursive: true,
           force: true,
