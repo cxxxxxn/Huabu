@@ -356,6 +356,51 @@ forEachProductProfile((profile, label) => {
       },
     );
 
+    it('waits for the handle to be down before rehoming its conversation', async () => {
+      await seed();
+      const order: string[] = [];
+      let finishClose!: () => void;
+      const closing = new Promise<void>((resolve) => {
+        finishClose = resolve;
+      });
+      // Closing is a promise now, and a close merely started still leaves the
+      // handle wired to the source Space's conversation stores.
+      vi.spyOn(agenetes, 'close').mockImplementation(async (threadId) => {
+        order.push('close-started');
+        await closing;
+        order.push('close-settled');
+        return runtime.close(threadId);
+      });
+      vi.spyOn(agenetes, 'rehome').mockImplementation(
+        async (...args: Parameters<typeof runtime.rehome>) => {
+          order.push('rehome');
+          return runtime.rehome(...args);
+        },
+      );
+
+      const moving = move();
+      while (!order.includes('close-started')) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      expect(order).toEqual(['close-started']);
+
+      finishClose();
+      await moving;
+
+      expect(order).toEqual(['close-started', 'close-settled', 'rehome']);
+      expect(runtime.get(THREAD)).toBeUndefined();
+      expect(
+        await runtime.record(canvasAcpNamespace(DESTINATION), THREAD),
+      ).toBeDefined();
+      expect(
+        await runtime.record(canvasAcpNamespace(SOURCE), THREAD),
+      ).toBeUndefined();
+      expect(
+        (await runtime.history(canvasAcpNamespace(DESTINATION), THREAD)).turns,
+      ).toHaveLength(1);
+      assertReleased();
+    });
+
     it.each([
       'active',
       'leased',

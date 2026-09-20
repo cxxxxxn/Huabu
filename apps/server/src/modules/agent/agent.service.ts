@@ -467,6 +467,13 @@ export async function* runAgent(
     onRendered,
     tools: turnTools,
   });
+  // The boundary is read after `run()` opened the turn, so it is whatever the
+  // log holds when the read answers rather than where this turn began. That is
+  // only the same number because the per-thread turn lease upstream in
+  // `AgentThreadService.invoke` keeps two turns on one thread from overlapping
+  // — two that did would both report the later boundary. The read also has to
+  // reach a failed `beginTurn`, which is what stops a turn whose Tier-1 start
+  // was never written from being announced as accepted.
   onTurnStarted?.(
     deploymentThreadId
       ? {
