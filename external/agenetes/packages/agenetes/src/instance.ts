@@ -75,9 +75,9 @@ export interface Agenetes {
    * Either way the durable thread record is upserted so the query surface
    * can read it independent of handle liveness (I9.4).
    */
-  create(spec: WorkloadSpec): AgentHandle;
+  create(spec: WorkloadSpec): Promise<AgentHandle>;
   /** Fork source turns with fresh driver state and deep-copied host metadata. */
-  fork(source: ThreadIdentity, targetSpec: WorkloadSpec): AgentHandle;
+  fork(source: ThreadIdentity, targetSpec: WorkloadSpec): Promise<AgentHandle>;
   /**
    * The destructive counterpart to {@link Agenetes.fork}: relocate a
    * durable thread's complete conversation ownership — its thread record,
@@ -111,7 +111,7 @@ export interface Agenetes {
    * "unknown, do not assume the source is intact" rather than a normal
    * determinate failure.
    */
-  rehome(source: ThreadIdentity, targetSpec: WorkloadSpec): void;
+  rehome(source: ThreadIdentity, targetSpec: WorkloadSpec): Promise<void>;
   /**
    * Pure lookup of the live handle for `threadId` — **never spawns**
    * (I9.3). A missing handle is a precondition failure (e.g. a control
@@ -119,17 +119,20 @@ export interface Agenetes {
    */
   get(threadId: string): AgentHandle | undefined;
   /** Tear the live handle down and evict it from the live table (I9.3). */
-  close(threadId: string): void;
+  close(threadId: string): Promise<void>;
   /**
    * Read one durable thread record by `(namespace, threadId)` (I9.4),
    * independent of whether a handle is live.
    */
-  record(namespace: Namespace, threadId: string): ThreadRecord | undefined;
+  record(
+    namespace: Namespace,
+    threadId: string,
+  ): Promise<ThreadRecord | undefined>;
   /** Enumerate a namespace's persisted thread records (I9.4). */
-  records(namespace: Namespace): ThreadRecord[];
+  records(namespace: Namespace): Promise<ThreadRecord[]>;
   /**
-   * Synchronously shallow-merge host metadata keys into an existing record,
-   * without spawning or changing spec/state. Values must be JSON-compatible;
+   * Shallow-merge host metadata keys into an existing record, without
+   * spawning or changing spec/state. Values must be JSON-compatible;
    * null is a stored value, not deletion. Throws `thread_not_found` when absent
    * or `invalid_host_metadata` for a non-JSON patch. Does not emit driver metadata.
    */
@@ -137,7 +140,7 @@ export interface Agenetes {
     namespace: Namespace,
     threadId: string,
     patch: Record<string, unknown>,
-  ): ThreadRecord;
+  ): Promise<ThreadRecord>;
   /**
    * The notification surface (I9.7): subscribe to a thread's driver-agnostic
    * `AgentMetadata` as it changes. The instance persists each up-reported
@@ -156,7 +159,10 @@ export interface Agenetes {
    * Read lightweight metadata about the two-tier conversation log without
    * loading its events or folded turns.
    */
-  logMetadata(namespace: Namespace, threadId: string): ThreadLogMetadata;
+  logMetadata(
+    namespace: Namespace,
+    threadId: string,
+  ): Promise<ThreadLogMetadata>;
   /**
    * Read a thread's durable conversation as folded {@link AgentTurn}s
    * (Tier 2 of the two-tier log, README I9.8). With `withTail`, the
@@ -167,13 +173,13 @@ export interface Agenetes {
     namespace: Namespace,
     threadId: string,
     options?: HistoryOptions,
-  ): ThreadHistory;
+  ): Promise<ThreadHistory>;
   /** Read a bounded page of display-turn groups without loading full history. */
   historyPage(
     namespace: Namespace,
     threadId: string,
     options: HistoryPageOptions,
-  ): ThreadHistoryPage;
+  ): Promise<ThreadHistoryPage>;
   /**
    * Follow a thread's LIVE tail: the Tier-1 events appended after the last
    * folded turn (the uncommitted in-flight turn, replayed on connect) plus
@@ -258,7 +264,7 @@ function createTail(
   eventLog: EventLog,
   namespace: Namespace,
   threadId: string,
-  sinceSeq: number,
+  readFence: () => number | Promise<number>,
 ): AsyncIterable<AgentStreamEvent> {
   return {
     [Symbol.asyncIterator](): AsyncIterator<AgentStreamEvent> {
@@ -267,7 +273,7 @@ function createTail(
         null;
       let finished = false;
       // The highest seq already delivered; the dedup / resume watermark.
-      let lastSeq = sinceSeq;
+      let lastSeq = 0;
 
       let unsub: () => void = () => {};
       const finish = (): void => {
@@ -292,7 +298,17 @@ function createTail(
       });
 
       // Snapshot the already-persisted tail (entries after the fence).
-      const backfill = eventLog.read(namespace, threadId, sinceSeq);
+      let backfill: EventLogEntry[] = [];
+      const readyBackfill = (async () => {
+        const fence = await readFence();
+        const persisted = await eventLog.read(namespace, threadId, fence);
+        // A turn can finish while a remote fence read is in flight. Keep
+        // events observed live even if that fence now includes their turn.
+        backfill = [...persisted, ...live.splice(0)].sort(
+          (a, b) => a.seq - b.seq,
+        );
+      })();
+      void readyBackfill.catch(() => finish());
       let backfillIdx = 0;
 
       // Pull the next not-yet-delivered entry: backfill first (ascending
@@ -318,12 +334,11 @@ function createTail(
       };
 
       return {
-        next(): Promise<IteratorResult<AgentStreamEvent>> {
+        async next(): Promise<IteratorResult<AgentStreamEvent>> {
+          await readyBackfill;
+          if (finished) return { value: undefined, done: true };
           const ready = pump();
-          if (ready) return Promise.resolve(ready);
-          if (finished) {
-            return Promise.resolve({ value: undefined, done: true });
-          }
+          if (ready) return ready;
           return new Promise((resolve) => {
             waiting = resolve;
           });
@@ -436,17 +451,17 @@ export function createAgenetesInstance(
     };
   };
 
-  const readHistory = (
+  const readHistory = async (
     namespace: Namespace,
     threadId: string,
     withTail: boolean,
-  ): ObservedAgentTurn[] => {
-    const persisted = turnStore.list(namespace, threadId);
+  ): Promise<ObservedAgentTurn[]> => {
+    const persisted = await turnStore.list(namespace, threadId);
     if (!withTail) return persisted.map(({ turn }) => turn);
     const fence = persisted[persisted.length - 1]?.seqEnd ?? 0;
     return materializeHistory(
       persisted,
-      eventLog.readRecords(namespace, threadId, fence),
+      await eventLog.readRecords(namespace, threadId, fence),
     );
   };
 
@@ -454,22 +469,32 @@ export function createAgenetesInstance(
   // FIRST (sole writer), then re-emit its metadata (persist-then-notify).
   // A handle without `onState` (a driver that reports no out-of-turn meta)
   // wires nothing and its notification stream stays empty.
+  const pendingReports = new Map<string, Promise<void>>();
+
   const wireUpReport = (
     spec: WorkloadSpec,
     driver: MountedAgentDriver,
     handle: AgentHandle,
   ): void => {
     const unsub = handle.onState?.((snapshot: AgentStateSnapshot) => {
-      threadStore.upsert(spec.namespace, spec.threadId, {
-        ...threadStore.get(spec.namespace, spec.threadId),
-        driverSchemaVersion: driver.schemaVersion,
-        spec,
-        state: snapshot,
+      const pending = (
+        pendingReports.get(spec.threadId) ?? Promise.resolve()
+      ).then(async () => {
+        await threadStore.upsert(spec.namespace, spec.threadId, {
+          ...(await threadStore.get(spec.namespace, spec.threadId)),
+          driverSchemaVersion: driver.schemaVersion,
+          spec,
+          state: snapshot,
+        });
+        if (snapshot.metadata !== undefined) {
+          bus.publish(spec.threadId, snapshot.metadata, spec.namespace.name);
+          bus.publish(spec.threadId, snapshot.metadata);
+        }
       });
-      if (snapshot.metadata !== undefined) {
-        bus.publish(spec.threadId, snapshot.metadata, spec.namespace.name);
-        bus.publish(spec.threadId, snapshot.metadata);
-      }
+      pendingReports.set(spec.threadId, pending);
+      // Driver callbacks cannot await. Retain failures for record/run/close to
+      // surface; attach a handler immediately so no rejection is unobserved.
+      void pending.catch(() => {});
     });
     // Register cleanup even for silent handles, whose scoped streams must end.
     unsubscribers.set(spec.threadId, () => {
@@ -509,26 +534,34 @@ export function createAgenetesInstance(
       // the deltas the driver already yields, so `TResult` stays free.
       const folder = createTranscriptFolder();
       let meta: AgentTurnMeta | undefined;
-      let step = await source.next();
-      while (!step.done) {
-        const event = step.value;
-        eventLog.append(namespace, threadId, event);
-        folder.fold(event);
-        if (event.type === AGENT_STREAM_EVENTS.Done) meta = event.data.meta;
-        yield event;
-        step = await source.next();
+      let completed = false;
+      try {
+        let step = await source.next();
+        while (!step.done) {
+          await pendingReports.get(threadId);
+          const event = step.value;
+          await eventLog.append(namespace, threadId, event);
+          folder.fold(event);
+          if (event.type === AGENT_STREAM_EVENTS.Done) meta = event.data.meta;
+          yield event;
+          step = await source.next();
+        }
+        // The generator returned. Commit the Tier-2 turn pinned to its Tier-1
+        // range, then pass the raw return value through UNCHANGED so the host's
+        // own consumer still sees whatever `TResult` the driver produced.
+        await pendingReports.get(threadId);
+        const seqEnd = await eventLog.maxSeq(namespace, threadId);
+        const turn: AgentTurn = {
+          request: start.request,
+          transcript: folder.result(),
+          ...(meta ? { meta } : {}),
+        };
+        await turnStore.append(namespace, threadId, { turn, seqStart, seqEnd });
+        completed = true;
+        return step.value;
+      } finally {
+        if (!completed) await source.return(undefined);
       }
-      // The generator returned. Commit the Tier-2 turn pinned to its Tier-1
-      // range, then pass the raw return value through UNCHANGED so the host's
-      // own consumer still sees whatever `TResult` the driver produced.
-      const seqEnd = eventLog.maxSeq(namespace, threadId);
-      const turn: AgentTurn = {
-        request: start.request,
-        transcript: folder.result(),
-        ...(meta ? { meta } : {}),
-      };
-      turnStore.append(namespace, threadId, { turn, seqStart, seqEnd });
-      return step.value;
     }
 
     return new Proxy(inner, {
@@ -538,20 +571,25 @@ export function createAgenetesInstance(
             submission: unknown,
             ctx: unknown,
           ): AsyncGenerator<AgentStreamEvent, unknown> => {
+            // Starting run() records the boundary immediately, even before the
+            // generator is pulled; recovery can observe an empty in-flight turn.
             const start = eventLog.beginTurn(
               namespace,
               threadId,
               coerceSubmission(submission),
             );
-            return loggingRun(
-              (
+            void start.catch(() => {});
+            return (async function* () {
+              await pendingReports.get(threadId);
+              const boundary = await start;
+              const source = (
                 target.run as (
                   s: unknown,
                   c: unknown,
                 ) => AsyncGenerator<AgentStreamEvent, unknown>
-              )(submission, ctx),
-              start,
-            );
+              )(submission, ctx);
+              return yield* loggingRun(source, boundary);
+            })();
           };
         }
         // Forward every other member to the backing handle. Bind methods to
@@ -563,13 +601,30 @@ export function createAgenetesInstance(
     });
   };
 
-  const realize = (
+  const realize = async (
     targetSpec: WorkloadSpec,
     driver: MountedAgentDriver,
     context: AgentCreateContext,
     initialState: AgentStateSnapshot,
     hostMetadata?: Record<string, unknown>,
-  ): AgentHandle => {
+  ): Promise<AgentHandle> => {
+    // Persist the initial record before the handle exists: realization now
+    // awaits, and an up-report must never overwrite initialization.
+    const isTransientJob =
+      targetSpec.workloadType === 'Job' && !targetSpec.threadId;
+    if (!isTransientJob) {
+      const latest = await threadStore.get(
+        targetSpec.namespace,
+        targetSpec.threadId,
+      );
+      await threadStore.upsert(targetSpec.namespace, targetSpec.threadId, {
+        ...(hostMetadata !== undefined ? { hostMetadata } : {}),
+        ...latest,
+        driverSchemaVersion: driver.schemaVersion,
+        spec: targetSpec,
+        state: latest?.state ?? initialState,
+      });
+    }
     let handle: AgentHandle;
     let needsUpReport = false;
     if (targetSpec.workloadType === 'Job') {
@@ -590,31 +645,17 @@ export function createAgenetesInstance(
       needsUpReport = !wasLive;
     }
 
-    const isTransientJob =
-      targetSpec.workloadType === 'Job' && !targetSpec.threadId;
-    if (!isTransientJob) {
-      const latest = threadStore.get(targetSpec.namespace, targetSpec.threadId);
-      threadStore.upsert(targetSpec.namespace, targetSpec.threadId, {
-        ...(hostMetadata !== undefined ? { hostMetadata } : {}),
-        ...latest,
-        driverSchemaVersion: driver.schemaVersion,
-        spec: targetSpec,
-        state: latest?.state ?? initialState,
-      });
-    }
-    // Persist the initial record before subscribing: onState may immediately
-    // report a newer snapshot, which must not be overwritten by initialization.
     if (needsUpReport) wireUpReport(targetSpec, driver, handle);
     return handle;
   };
 
-  return {
-    create(rawSpec: WorkloadSpec): AgentHandle {
+  const api: Agenetes = {
+    async create(rawSpec: WorkloadSpec): Promise<AgentHandle> {
       const incoming = validateSpec(rawSpec);
       // A persisted same-thread spec is authoritative across restart,
       // preserving reuse-ignores-spec semantics when no live handle exists.
       const rawPrior = incoming.spec.threadId
-        ? threadStore.get(incoming.spec.namespace, incoming.spec.threadId)
+        ? await threadStore.get(incoming.spec.namespace, incoming.spec.threadId)
         : undefined;
       const prior = rawPrior ? validateRecord(rawPrior) : undefined;
       if (prior && prior.spec.kind !== incoming.spec.kind) {
@@ -636,7 +677,7 @@ export function createAgenetesInstance(
             recovery,
             recoveryInput: {
               state: prior.state,
-              turns: readHistory(
+              turns: await readHistory(
                 incoming.spec.namespace,
                 incoming.spec.threadId,
                 true,
@@ -649,10 +690,16 @@ export function createAgenetesInstance(
         ({
           driverState: target.driver.initialState(),
         } satisfies AgentStateSnapshot);
-      return realize(target.spec, target.driver, context, initialState);
+      return await realize(target.spec, target.driver, context, initialState);
     },
-    fork(source: ThreadIdentity, rawTargetSpec: WorkloadSpec): AgentHandle {
-      const sourceRecord = threadStore.get(source.namespace, source.threadId);
+    async fork(
+      source: ThreadIdentity,
+      rawTargetSpec: WorkloadSpec,
+    ): Promise<AgentHandle> {
+      const sourceRecord = await threadStore.get(
+        source.namespace,
+        source.threadId,
+      );
       if (!sourceRecord) {
         throw new AgenetesError(
           'invalid_workload',
@@ -670,9 +717,10 @@ export function createAgenetesInstance(
       }
       if (
         runtime.get(targetSpec.threadId) !== undefined ||
-        threadStore.get(targetSpec.namespace, targetSpec.threadId) !==
+        (await threadStore.get(targetSpec.namespace, targetSpec.threadId)) !==
           undefined ||
-        turnStore.list(targetSpec.namespace, targetSpec.threadId).length > 0
+        (await turnStore.list(targetSpec.namespace, targetSpec.threadId))
+          .length > 0
       ) {
         throw new AgenetesError(
           'invalid_workload',
@@ -685,14 +733,14 @@ export function createAgenetesInstance(
           'fork target threadId must not be empty',
         );
       }
-      return realize(
+      return await realize(
         targetSpec,
         target.driver,
         {
           recovery,
           forkInput: {
             source,
-            turns: readHistory(source.namespace, source.threadId, true),
+            turns: await readHistory(source.namespace, source.threadId, true),
           },
         },
         { driverState: target.driver.initialState() },
@@ -704,14 +752,20 @@ export function createAgenetesInstance(
           : undefined,
       );
     },
-    rehome(source: ThreadIdentity, rawTargetSpec: WorkloadSpec): void {
+    async rehome(
+      source: ThreadIdentity,
+      rawTargetSpec: WorkloadSpec,
+    ): Promise<void> {
       if (runtime.get(source.threadId) !== undefined) {
         throw new AgenetesError(
           'rehome_conflict',
           `cannot rehome thread '${source.namespace.name}/${source.threadId}' with a live handle`,
         );
       }
-      const sourceRecord = threadStore.get(source.namespace, source.threadId);
+      const sourceRecord = await threadStore.get(
+        source.namespace,
+        source.threadId,
+      );
       if (!sourceRecord) {
         throw new AgenetesError(
           'invalid_workload',
@@ -746,13 +800,14 @@ export function createAgenetesInstance(
         );
       }
       const targetHasRecord =
-        threadStore.get(targetSpec.namespace, targetSpec.threadId) !==
+        (await threadStore.get(targetSpec.namespace, targetSpec.threadId)) !==
         undefined;
       const targetHasTurns =
-        turnStore.list(targetSpec.namespace, targetSpec.threadId).length > 0;
+        (await turnStore.list(targetSpec.namespace, targetSpec.threadId))
+          .length > 0;
       const targetHasEvents =
-        eventLog.readRecords(targetSpec.namespace, targetSpec.threadId).length >
-        0;
+        (await eventLog.readRecords(targetSpec.namespace, targetSpec.threadId))
+          .length > 0;
       if (targetHasRecord || targetHasTurns || targetHasEvents) {
         throw new AgenetesError(
           'rehome_conflict',
@@ -763,11 +818,14 @@ export function createAgenetesInstance(
       // Snapshot the complete source BEFORE any write, so a determinate
       // failure at any later step can restore it byte-for-byte regardless
       // of which step failed.
-      const sourceEvents = eventLog.readRecords(
+      const sourceEvents = await eventLog.readRecords(
         source.namespace,
         source.threadId,
       );
-      const sourceTurns = turnStore.list(source.namespace, source.threadId);
+      const sourceTurns = await turnStore.list(
+        source.namespace,
+        source.threadId,
+      );
       const targetRecord: ThreadRecord = {
         ...validatedSource,
         spec: targetSpec,
@@ -776,9 +834,12 @@ export function createAgenetesInstance(
       // Each step's compensation is pushed ONLY once the step itself
       // durably succeeds, so a mid-sequence failure unwinds exactly the
       // completed prefix — never more, never less.
-      const undo: Array<() => void> = [];
-      const step = (write: () => void, compensate: () => void): void => {
-        write();
+      const undo: Array<() => void | Promise<void>> = [];
+      const step = async (
+        write: () => void | Promise<void>,
+        compensate: () => void | Promise<void>,
+      ): Promise<void> => {
+        await write();
         undo.push(compensate);
       };
 
@@ -787,49 +848,65 @@ export function createAgenetesInstance(
         // thread record LAST — the record write is the destination
         // visibility point (I9.4): the first moment a reader can observe
         // the thread under `targetSpec.namespace`.
-        step(
-          () =>
-            eventLog.replace(
+        await step(
+          async () =>
+            await eventLog.replace(
               targetSpec.namespace,
               targetSpec.threadId,
               sourceEvents,
             ),
-          () => eventLog.delete(targetSpec.namespace, targetSpec.threadId),
+          async () =>
+            await eventLog.delete(targetSpec.namespace, targetSpec.threadId),
         );
-        step(
-          () =>
-            turnStore.replace(
+        await step(
+          async () =>
+            await turnStore.replace(
               targetSpec.namespace,
               targetSpec.threadId,
               sourceTurns,
             ),
-          () => turnStore.delete(targetSpec.namespace, targetSpec.threadId),
+          async () =>
+            await turnStore.delete(targetSpec.namespace, targetSpec.threadId),
         );
-        step(
-          () =>
-            threadStore.upsert(
+        await step(
+          async () =>
+            await threadStore.upsert(
               targetSpec.namespace,
               targetSpec.threadId,
               targetRecord,
             ),
-          () => threadStore.delete(targetSpec.namespace, targetSpec.threadId),
+          async () =>
+            await threadStore.delete(targetSpec.namespace, targetSpec.threadId),
         );
         // Only once the target is completely durable: remove the source
         // record (its own visibility point) before its now-orphaned logs.
-        step(
-          () => threadStore.delete(source.namespace, source.threadId),
-          () =>
-            threadStore.upsert(source.namespace, source.threadId, sourceRecord),
+        await step(
+          async () =>
+            await threadStore.delete(source.namespace, source.threadId),
+          async () =>
+            await threadStore.upsert(
+              source.namespace,
+              source.threadId,
+              sourceRecord,
+            ),
         );
-        step(
-          () => eventLog.delete(source.namespace, source.threadId),
-          () =>
-            eventLog.replace(source.namespace, source.threadId, sourceEvents),
+        await step(
+          async () => await eventLog.delete(source.namespace, source.threadId),
+          async () =>
+            await eventLog.replace(
+              source.namespace,
+              source.threadId,
+              sourceEvents,
+            ),
         );
-        step(
-          () => turnStore.delete(source.namespace, source.threadId),
-          () =>
-            turnStore.replace(source.namespace, source.threadId, sourceTurns),
+        await step(
+          async () => await turnStore.delete(source.namespace, source.threadId),
+          async () =>
+            await turnStore.replace(
+              source.namespace,
+              source.threadId,
+              sourceTurns,
+            ),
         );
       } catch (error) {
         // Unwind the completed prefix in reverse (LIFO) order, restoring
@@ -842,7 +919,7 @@ export function createAgenetesInstance(
         const rollbackErrors: unknown[] = [];
         for (const compensate of undo.reverse()) {
           try {
-            compensate();
+            await compensate();
           } catch (rollbackError) {
             rollbackErrors.push(rollbackError);
           }
@@ -860,7 +937,7 @@ export function createAgenetesInstance(
     get(threadId: string): AgentHandle | undefined {
       return runtime.get(threadId);
     },
-    close(threadId: string): void {
+    async close(threadId: string): Promise<void> {
       // Tear down the up-report listener + end any open notification streams
       // before evicting the live handle.
       const unsub = unsubscribers.get(threadId);
@@ -868,38 +945,71 @@ export function createAgenetesInstance(
         unsub();
         unsubscribers.delete(threadId);
       }
-      bus.closeThread(threadId);
-      runtime.close(threadId);
+      try {
+        await pendingReports.get(threadId);
+      } finally {
+        pendingReports.delete(threadId);
+        bus.closeThread(threadId);
+        runtime.close(threadId);
+      }
     },
-    record(namespace: Namespace, threadId: string): ThreadRecord | undefined {
-      const record = threadStore.get(namespace, threadId);
+    async record(
+      namespace: Namespace,
+      threadId: string,
+    ): Promise<ThreadRecord | undefined> {
+      await pendingReports.get(threadId);
+      const record = await threadStore.get(namespace, threadId);
       return record ? validateRecord(record) : undefined;
     },
-    records(namespace: Namespace): ThreadRecord[] {
-      return threadStore.list(namespace).map(validateRecord);
+    async records(namespace: Namespace): Promise<ThreadRecord[]> {
+      await Promise.all(pendingReports.values());
+      return (await threadStore.list(namespace)).map(validateRecord);
     },
-    updateHostMetadata(namespace, threadId, patch): ThreadRecord {
-      const record = threadStore.get(namespace, threadId);
-      if (!record) {
-        throw new AgenetesError(
-          'thread_not_found',
-          `cannot update host metadata for missing thread '${namespace.name}/${threadId}'`,
-          { namespace: namespace.name, threadId },
-        );
-      }
-      const hostMetadata = copyHostMetadata(
-        {
-          ...record.hostMetadata,
-          ...copyHostMetadata(patch, 'invalid_host_metadata'),
+    async updateHostMetadata(
+      namespace,
+      threadId,
+      patch,
+    ): Promise<ThreadRecord> {
+      // The merge now spans awaits, so it shares the thread's up-report queue:
+      // every writer of one record reads what the previous writer persisted.
+      // A rejected patch is reported to this caller alone and never queued, so
+      // a refused merge cannot fail a later `record` read.
+      const merged = (pendingReports.get(threadId) ?? Promise.resolve()).then(
+        async () => {
+          const record = await threadStore.get(namespace, threadId);
+          if (!record) {
+            throw new AgenetesError(
+              'thread_not_found',
+              `cannot update host metadata for missing thread '${namespace.name}/${threadId}'`,
+              { namespace: namespace.name, threadId },
+            );
+          }
+          const hostMetadata = copyHostMetadata(
+            {
+              ...record.hostMetadata,
+              ...copyHostMetadata(patch, 'invalid_host_metadata'),
+            },
+            'invalid_host_metadata',
+          );
+          const updated = { ...record, hostMetadata };
+          await threadStore.upsert(namespace, threadId, updated);
+          return updated;
         },
-        'invalid_host_metadata',
       );
-      const updated = { ...record, hostMetadata };
-      // Both writers read/merge/write synchronously; no async mutex is needed.
-      threadStore.upsert(namespace, threadId, updated);
+      pendingReports.set(
+        threadId,
+        merged.then(
+          () => undefined,
+          () => undefined,
+        ),
+      );
+      const updated = await merged;
       return {
         ...updated,
-        hostMetadata: copyHostMetadata(hostMetadata, 'invalid_host_metadata'),
+        hostMetadata: copyHostMetadata(
+          updated.hostMetadata ?? {},
+          'invalid_host_metadata',
+        ),
       };
     },
     notifications(
@@ -908,33 +1018,40 @@ export function createAgenetesInstance(
     ): AsyncIterable<AgentMetadata> {
       return bus.subscribe(threadId, namespace?.name);
     },
-    logMetadata(namespace: Namespace, threadId: string): ThreadLogMetadata {
+    async logMetadata(
+      namespace: Namespace,
+      threadId: string,
+    ): Promise<ThreadLogMetadata> {
       return {
-        eventCount: eventLog.maxSeq(namespace, threadId),
-        turnCount: turnStore.count(namespace, threadId),
+        eventCount: await eventLog.maxSeq(namespace, threadId),
+        turnCount: await turnStore.count(namespace, threadId),
       };
     },
-    history(
+    async history(
       namespace: Namespace,
       threadId: string,
       options?: HistoryOptions,
-    ): ThreadHistory {
+    ): Promise<ThreadHistory> {
       return {
-        turns: readHistory(namespace, threadId, options?.withTail === true),
+        turns: await readHistory(
+          namespace,
+          threadId,
+          options?.withTail === true,
+        ),
       };
     },
-    historyPage(
+    async historyPage(
       namespace: Namespace,
       threadId: string,
       options: HistoryPageOptions,
-    ): ThreadHistoryPage {
+    ): Promise<ThreadHistoryPage> {
       const includeTail =
         options.before === undefined && options.withTail === true;
-      const fence = turnStore.fence(namespace, threadId);
+      const fence = await turnStore.fence(namespace, threadId);
       const tail = includeTail
         ? materializeHistory(
             [],
-            eventLog.readRecords(namespace, threadId, fence),
+            await eventLog.readRecords(namespace, threadId, fence),
           )[0]
         : undefined;
       const tailStartsGroup = tail !== undefined && tail.request !== null;
@@ -942,7 +1059,7 @@ export function createAgenetesInstance(
         tailStartsGroup === true
           ? Math.max(1, options.limit - 1)
           : options.limit;
-      const page = turnStore.page(namespace, threadId, {
+      const page = await turnStore.page(namespace, threadId, {
         limit: persistedLimit,
         ...(options.before ? { before: options.before } : {}),
       });
@@ -998,8 +1115,25 @@ export function createAgenetesInstance(
       namespace: Namespace,
       threadId: string,
     ): AsyncIterable<AgentStreamEvent> {
-      const fence = turnStore.fence(namespace, threadId);
-      return createTail(eventLog, namespace, threadId, fence);
+      return createTail(eventLog, namespace, threadId, () =>
+        turnStore.fence(namespace, threadId),
+      );
     },
+  };
+  // Async persistence adds scheduling points to the former synchronous
+  // lifecycle. Keep create/fork/rehome/close mutually exclusive so a move
+  // cannot race a spawn or a second move across its compensation boundary.
+  let lifecycle: Promise<unknown> = Promise.resolve();
+  const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
+    const result = lifecycle.catch(() => {}).then(operation);
+    lifecycle = result;
+    return result;
+  };
+  return {
+    ...api,
+    create: (spec) => serialize(() => api.create(spec)),
+    fork: (source, target) => serialize(() => api.fork(source, target)),
+    rehome: (source, target) => serialize(() => api.rehome(source, target)),
+    close: (threadId) => serialize(() => api.close(threadId)),
   };
 }
