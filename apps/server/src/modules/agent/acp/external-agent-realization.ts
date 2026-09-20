@@ -177,6 +177,33 @@ export class ExternalAgentRealizationService {
   ): Promise<RealizedExternalAgentThread> {
     const namespace = canvasAcpNamespace(options.canvasId ?? '');
     const key = `${namespace.name}\u0000${namespace.storage?.root ?? ''}\u0000${options.threadId}`;
+    try {
+      return await this.join(key, options, namespace);
+    } catch (error) {
+      // A caller holding the turn lease cannot legitimately be told the
+      // thread is busy — it *is* the busy turn. What happened is that it
+      // joined a flight started by a caller without the lease, that flight
+      // lost admission to this very lease, and its rejection went to
+      // everyone waiting on it. The flight is keyed by thread alone and
+      // carries no notion of admission, so this is the seam where the two
+      // are told apart. Retried once, on its own terms.
+      if (
+        !options.turnLeaseHeld ||
+        !(error instanceof AgentNodeBindingError) ||
+        error.code !== 'agent_draft_busy'
+      ) {
+        throw error;
+      }
+      return await this.join(key, options, namespace);
+    }
+  }
+
+  /** Share one realization per thread; see {@link realize} for the exception. */
+  private async join(
+    key: string,
+    options: RealizeExternalAgentThreadOptions,
+    namespace: Namespace,
+  ): Promise<RealizedExternalAgentThread> {
     let pending = this.inFlight.get(key);
     if (!pending) {
       pending = this.realizeOnce(options, namespace);
