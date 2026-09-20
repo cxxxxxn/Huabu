@@ -573,24 +573,78 @@ describe('StrokeSelectionToolbar Ink submission', () => {
     expect(mocks.dispatch).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps a newer selection when an earlier turn is accepted', async () => {
-    const pending = deferredResult();
+  it('retains an ambiguous reservation until Stop confirms no acceptance', async () => {
     let callbacks: AgentTurnCallbacks | undefined;
     mocks.dispatch.mockImplementationOnce(
       (_input: unknown, received: AgentTurnCallbacks) => {
         callbacks = received;
-        return pending.promise;
+        return Promise.resolve({
+          status: 'unknown',
+          error: new Error('Connection lost'),
+        });
+      },
+    );
+    const button = await renderToolbar();
+
+    await act(async () => button.click());
+
+    expect(useGesturePreviewStore.getState().inkSubmissionPreparing).toBe(true);
+    const pendingButton = document.body.querySelector<HTMLButtonElement>(
+      'button[aria-label="Sending ink request"]',
+    );
+    expect(pendingButton?.disabled).toBe(true);
+
+    act(() => callbacks?.onAcceptanceRejected?.());
+
+    expect(useGesturePreviewStore.getState().inkSubmissionPreparing).toBe(
+      false,
+    );
+    expect(useGesturePreviewStore.getState().sketchStrokeSelection).toEqual({
+      'sketch-1': ['stroke-1'],
+    });
+    const retryButton = document.body.querySelector<HTMLButtonElement>(
+      'button[aria-label="Send ink request"]',
+    );
+    expect(retryButton?.disabled).toBe(false);
+  });
+
+  it('preserves a newer Lasso when the older turn is accepted', async () => {
+    const olderPending = deferredResult();
+    let callbacks: AgentTurnCallbacks | undefined;
+    mocks.dispatch.mockImplementationOnce(
+      (_input: unknown, received: AgentTurnCallbacks) => {
+        callbacks = received;
+        return olderPending.promise;
       },
     );
     const button = await renderToolbar();
 
     act(() => button.click());
-    useGesturePreviewStore.setState({
-      sketchStrokeSelection: { 'sketch-1': ['stroke-2'] },
+    await act(async () => {
+      useGesturePreviewStore.setState({
+        sketchStrokeSelection: { 'sketch-1': ['stroke-2'] },
+        sketchSelectionPolygon: [
+          { x: 120, y: 130 },
+          { x: 180, y: 130 },
+          { x: 180, y: 170 },
+          { x: 120, y: 170 },
+        ],
+      });
+      await Promise.resolve();
     });
+
+    expect(useGesturePreviewStore.getState().inkSubmissionPreparing).toBe(
+      false,
+    );
+
     act(() =>
       callbacks?.onAccepted?.({ threadId: 'thread-1', turnStartSeq: 1 }),
     );
+    olderPending.resolve({
+      status: 'completed',
+      accepted: { threadId: 'thread-1', turnStartSeq: 1 },
+    });
+    await act(async () => olderPending.promise);
 
     expect(useGesturePreviewStore.getState().sketchStrokeSelection).toEqual({
       'sketch-1': ['stroke-2'],
@@ -598,17 +652,6 @@ describe('StrokeSelectionToolbar Ink submission', () => {
     expect(useGesturePreviewStore.getState().inkSubmissionPreparing).toBe(
       false,
     );
-    expect(
-      document.body.querySelector('button[aria-label="Sending ink request"]'),
-    ).toBeNull();
-    expect(
-      document.body.querySelector('button[aria-label="Send ink request"]'),
-    ).not.toBeNull();
-    pending.resolve({
-      status: 'completed',
-      accepted: { threadId: 'thread-1', turnStartSeq: 1 },
-    });
-    await act(async () => pending.promise);
   });
 
   it('clears the matching Lasso when only whole-node projection changed', async () => {

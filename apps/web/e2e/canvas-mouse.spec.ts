@@ -166,6 +166,62 @@ test.describe('canvas mouse mode', () => {
     ).toBeGreaterThan(60);
   });
 
+  test('selected Sketch restores mouse dragging after a touch interaction', async ({
+    page,
+  }) => {
+    const center = await paneCenter(page);
+    const toolbar = page.locator('.react-flow__panel.bottom.center');
+    await toolbar.getByRole('button', { name: /^Sketch/ }).click();
+    await page.mouse.move(center.x - 45, center.y);
+    await page.mouse.down();
+    await page.mouse.move(center.x + 45, center.y, { steps: 12 });
+    await page.mouse.up();
+    await expect(page.locator('.react-flow__node-sketch')).toHaveCount(1);
+
+    await page.evaluate(() => {
+      const key = 'huabu-sketch-tools';
+      const persisted = JSON.parse(localStorage.getItem(key) ?? '{}') as {
+        state?: Record<string, unknown>;
+        version?: number;
+      };
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          ...persisted,
+          state: { ...persisted.state, inputModePreference: 'finger' },
+        }),
+      );
+    });
+    await page.reload();
+    await page.waitForSelector('.react-flow__pane');
+
+    const sketch = page.locator('.react-flow__node-sketch').first();
+    const sketchBox = await sketch.boundingBox();
+    if (!sketchBox) throw new Error('sketch has no bounding box');
+    await page.keyboard.press('s');
+    await page.mouse.click(
+      sketchBox.x + sketchBox.width / 2,
+      sketchBox.y + sketchBox.height / 2,
+    );
+    await expect(sketch).toHaveClass(/\bselected\b/);
+    await expect(sketch).toHaveClass(/\bdraggable\b/);
+
+    const pointerTarget = toolbar.getByRole('button', { name: /^Select/ });
+    await pointerTarget.dispatchEvent('pointerdown', {
+      bubbles: true,
+      pointerId: 41,
+      pointerType: 'touch',
+    });
+    await expect(sketch).not.toHaveClass(/\bdraggable\b/);
+
+    await pointerTarget.dispatchEvent('pointerdown', {
+      bubbles: true,
+      pointerId: 42,
+      pointerType: 'mouse',
+    });
+    await expect(sketch).toHaveClass(/\bdraggable\b/);
+  });
+
   test('empty drag box-selects a node in Select tool', async ({ page }) => {
     const c = await paneCenter(page);
     await placeTextNode(page, c);
@@ -401,6 +457,9 @@ test.describe('canvas mouse mode', () => {
     expect(pendingSendBox.width).toBe(sendBox.width);
     expect(pendingSendBox.height).toBe(sendBox.height);
     await expect(page.getByRole('tooltip')).toHaveCount(0);
+    await page.keyboard.press('s');
+    await expect(page.locator('[data-stroke-selection-region]')).toBeVisible();
+    await expect(selectedInk).toBeVisible();
     releaseAgentRequest();
 
     await expect(page.locator('.react-flow__node-question')).toHaveCount(1);

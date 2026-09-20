@@ -64,5 +64,7 @@ describe('StrokeSelectionRegion', () => {
     expect(region.style.width).toBe('40px');
     expect(region.style.height).toBe('60px');
     expect(region.getAttribute('viewBox')).toBe('0 0 20 30');
+    expect(region.classList.contains('pointer-events-none')).toBe(true);
+    expect(region.querySelector('polygon')?.style.pointerEvents).toBe('');
   });
 });

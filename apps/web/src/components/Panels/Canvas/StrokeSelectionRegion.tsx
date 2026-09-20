@@ -15,10 +15,9 @@ import { useGesturePreviewStore } from '@/store/gesturePreviewStore';
  * it to move the whole selection; during a move it follows the live offset.
  *
  * The loop only renders when a selection's retained polygon exists, so it
- * always represents a grab-to-move affordance: its interior hit-tests with
- * a `move` cursor and captures pointer events above every Canvas node. The
- * actual move gesture is claimed by the pointer router via point-in-polygon;
- * this element only advertises the cursor and captures the grab.
+ * always represents a grab-to-move affordance. The HUD is visual-only so
+ * native node controls remain reachable; the pointer router claims the actual
+ * move gesture from screen coordinates via point-in-polygon.
  */
 export const StrokeSelectionRegion = memo(() => {
   const polygon = useGesturePreviewStore((s) => s.sketchSelectionPolygon);
@@ -65,7 +64,6 @@ export const StrokeSelectionRegion = memo(() => {
         strokeWidth={1}
         strokeDasharray="4 3"
         vectorEffect="non-scaling-stroke"
-        style={{ pointerEvents: 'auto', cursor: 'move' }}
       />
     </svg>,
     domNode,

@@ -74,6 +74,21 @@ describe('shouldOwnSingleTouchNavigation', () => {
     ).toBe(true);
   });
 
+  it.each(['react-flow__handle', 'react-flow__resize-control'])(
+    'does not steal finger interaction from a Sketch %s',
+    (controlClass) => {
+      const sketch = document.createElement('div');
+      sketch.className = 'react-flow__node react-flow__node-sketch';
+      const control = document.createElement('div');
+      control.className = controlClass;
+      sketch.append(control);
+
+      expect(shouldOwnSingleTouchNavigation(control, fingerOptions)).toBe(
+        false,
+      );
+    },
+  );
+
   it('owns touch over nodes in pen interaction mode', () => {
     expect(
       shouldOwnSingleTouchNavigation(targetInside('react-flow__node'), {

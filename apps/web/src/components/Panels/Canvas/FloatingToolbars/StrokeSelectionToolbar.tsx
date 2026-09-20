@@ -112,7 +112,10 @@ export const StrokeSelectionToolbar = () => {
   );
   const isNotMouse = useIsNotMouse();
   const attemptRef = useRef<InkSubmissionAttempt | null>(null);
-  const preparationTokenRef = useRef<object | null>(null);
+  const preparationRef = useRef<{
+    token: object;
+    lassoIdentity: string;
+  } | null>(null);
   const [isPreparing, setIsPreparing] = useState(false);
 
   const hasSelection = Object.keys(selection).length > 0;
@@ -151,8 +154,21 @@ export const StrokeSelectionToolbar = () => {
       ),
     [],
   );
+  const renderedLassoIdentity = inkLassoIdentity(
+    useCanvasStore.getState().canvasId,
+    selection,
+    selectionPolygon,
+  );
+  useEffect(() => {
+    const active = preparationRef.current;
+    if (!active || active.lassoIdentity === renderedLassoIdentity) return;
+    attemptRef.current = null;
+    preparationRef.current = null;
+    setInkSubmissionPreparing(false);
+    setIsPreparing(false);
+  }, [renderedLassoIdentity, setInkSubmissionPreparing]);
   const handleSubmit = useCallback(async () => {
-    if (preparationTokenRef.current) return;
+    if (preparationRef.current) return;
     const canvas = useCanvasStore.getState();
     const strokeSelection =
       useGesturePreviewStore.getState().sketchStrokeSelection;
@@ -185,15 +201,19 @@ export const StrokeSelectionToolbar = () => {
       capturedSources.canvasContext,
     );
     const preparationToken = {};
-    preparationTokenRef.current = preparationToken;
+    preparationRef.current = {
+      token: preparationToken,
+      lassoIdentity,
+    };
     setInkSubmissionPreparing(true);
     setIsPreparing(true);
     const releasePreparation = () => {
-      if (preparationTokenRef.current !== preparationToken) return;
-      preparationTokenRef.current = null;
+      if (preparationRef.current?.token !== preparationToken) return;
+      preparationRef.current = null;
       setInkSubmissionPreparing(false);
       setIsPreparing(false);
     };
+    let retainReservation = false;
     try {
       let attempt =
         attemptRef.current?.identity === identity ? attemptRef.current : null;
@@ -342,16 +362,18 @@ export const StrokeSelectionToolbar = () => {
           clearSelection();
           useCanvasStore.getState().selectNodes([]);
         },
+        onAcceptanceRejected: releasePreparation,
       });
       if (!result.accepted && result.error) {
         toast(result.error.message, { tone: 'danger' });
       }
+      retainReservation = result.status === 'unknown' && !result.accepted;
     } catch (error) {
       toast(error instanceof Error ? error.message : String(error), {
         tone: 'danger',
       });
     } finally {
-      releasePreparation();
+      if (!retainReservation) releasePreparation();
     }
   }, [
     addNode,

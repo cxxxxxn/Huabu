@@ -56,6 +56,7 @@ function pointer(
   pointerId: number,
   clientX: number,
   clientY: number,
+  target?: Element,
 ): PointerEvent {
   return {
     pointerId,
@@ -63,7 +64,7 @@ function pointer(
     isPrimary: true,
     clientX,
     clientY,
-    target: document.createElement('div'),
+    target: target ?? document.createElement('div'),
     preventDefault: vi.fn(),
     stopPropagation: vi.fn(),
   } as unknown as PointerEvent;
@@ -92,6 +93,23 @@ describe('createNodeDragRecognizer', () => {
       }),
     ).toBe(false);
   });
+
+  it.each(['react-flow__handle', 'react-flow__resize-control'])(
+    'does not claim a touch on a Sketch %s over a selected node',
+    (controlClass) => {
+      const recognizer = createNodeDragRecognizer();
+      const sketch = document.createElement('div');
+      sketch.className = 'react-flow__node react-flow__node-sketch';
+      const control = document.createElement('div');
+      control.className = controlClass;
+      sketch.append(control);
+
+      expect(recognizer.canClaim(pointer(5, 0, 0, control), context)).toBe(
+        false,
+      );
+      expect(nodeIdAtScreenPoint).not.toHaveBeenCalled();
+    },
+  );
 
   it('cancels a locked drag without running drop resolution', () => {
     const recognizer = createNodeDragRecognizer();

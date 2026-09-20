@@ -87,6 +87,7 @@ import { getEdgeIdsBetweenSelectedNodes } from '@/utils/selection';
 
 import { applyNodeGeometryPreviews } from './applyNodeGeometryPreview';
 import {
+  canStartRetainedSelectionMove,
   canDirectlyManipulateWithPointer,
   closestNodeElement,
   isLassoStartTarget,
@@ -503,6 +504,9 @@ export const Canvas: React.FC<CanvasProps> = ({
   const isNotMouse = useIsNotMouse();
   const inputMode = useEffectiveInputMode();
   const lastPointer = useInputMode();
+  const inkSubmissionPreparing = useGesturePreviewStore(
+    (state) => state.inkSubmissionPreparing,
+  );
 
   // Keyboard shortcuts + paste handler (extracted to hook).
   // Also manages tool state (select/pan) and Space-key temporary pan.
@@ -789,10 +793,10 @@ export const Canvas: React.FC<CanvasProps> = ({
   // tool (where it is produced and its delete toolbar shows). Drop it the
   // moment the tool changes so the highlight + toolbar don't linger.
   useEffect(() => {
-    if (tool !== 'lasso') {
+    if (tool !== 'lasso' && !inkSubmissionPreparing) {
       useGesturePreviewStore.getState().clearSketchStrokeSelection();
     }
-  }, [tool]);
+  }, [inkSubmissionPreparing, tool]);
   // A sketch node is never whole-node selected by the lasso (it always
   // yields stroke-level hits, R3), so it must not flash the whole-node
   // preview box while the lasso passes over it — only its captured strokes
@@ -851,12 +855,19 @@ export const Canvas: React.FC<CanvasProps> = ({
       const nextPosition = previewedNode.position;
       const nextStyle = previewedNode.style;
       const nextMeasured = previewedNode.measured;
+      const touchDraggable = resolveNodeDraggable(
+        node.draggable,
+        node.selected,
+        isNotMouse,
+        lastPointer === 'touch' && node.type === 'sketch',
+      );
 
       const cached = prevCache.get(node);
       if (
         cached &&
         cached.zIndex === z &&
         cached.className === nextClassName &&
+        cached.draggable === touchDraggable &&
         cached.position === nextPosition &&
         cached.style === nextStyle &&
         cached.measured === nextMeasured
@@ -865,12 +876,6 @@ export const Canvas: React.FC<CanvasProps> = ({
         return cached;
       }
 
-      const touchDraggable = resolveNodeDraggable(
-        node.draggable,
-        node.selected,
-        isNotMouse,
-        lastPointer === 'touch' && node.type === 'sketch',
-      );
       const needsWrap =
         nextClassName !== baseClassName ||
         node.zIndex !== z ||
@@ -1113,6 +1118,8 @@ export const Canvas: React.FC<CanvasProps> = ({
           if (useToolStore.getState().pendingNodeType !== null) return false;
           if (toolRef.current !== 'lasso') return false;
           if (event.button !== 0 || !event.isPrimary) return false;
+          if (!canStartRetainedSelectionMove(event.target as Element | null))
+            return false;
           if (
             !canDirectlyManipulateWithPointer(event.pointerType, ctx.inputMode)
           )

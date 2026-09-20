@@ -1,7 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { isPanelTarget } from '@/components/Panels/Canvas/canvasInputPolicy';
+import {
+  isNodeControlTarget,
+  isPanelTarget,
+} from '@/components/Panels/Canvas/canvasInputPolicy';
 import { getDragActivationDistance } from '@/handler/canvasGestureSession';
 import { nodeIdAtScreenPoint } from '@/handler/canvasNodeAtPoint';
 import useCanvasStore from '@/store/canvasStore';
@@ -128,6 +131,7 @@ export function createNodeDragRecognizer(): PointerRecognizer<
       ctx.inputMode === 'pen' &&
       event.isPrimary &&
       !isPanelTarget(event.target as Element | null) &&
+      !isNodeControlTarget(event.target as Element | null) &&
       selectedNodeIdAt(event) !== null,
     onDown: (event) => {
       const primaryId = selectedNodeIdAt(event);

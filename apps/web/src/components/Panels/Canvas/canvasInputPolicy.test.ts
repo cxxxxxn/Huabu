@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  canStartRetainedSelectionMove,
   canDirectlyManipulateWithPointer,
   canManipulateCanvasWithPointer,
   canPlaceNodeWithPointer,
@@ -133,4 +134,17 @@ describe('canvas input policy', () => {
     expect(isEmptyPaneTarget(panel)).toBe(false);
     expect(isEmptyPaneTarget(null)).toBe(false);
   });
+
+  it.each(['react-flow__handle', 'react-flow__resize-control'])(
+    'reserves %s for its native control instead of retained Lasso movement',
+    (controlClass) => {
+      const control = document.createElement('div');
+      control.className = controlClass;
+
+      expect(canStartRetainedSelectionMove(control)).toBe(false);
+      expect(canStartRetainedSelectionMove(document.createElement('div'))).toBe(
+        true,
+      );
+    },
+  );
 });

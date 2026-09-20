@@ -1,7 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { isPanelTarget } from '@/components/Panels/Canvas/canvasInputPolicy';
+import {
+  isNodeControlTarget,
+  isPanelTarget,
+} from '@/components/Panels/Canvas/canvasInputPolicy';
 import {
   beginCanvasGesture,
   cancelPendingCanvasGesture,
@@ -76,6 +79,7 @@ export function createViewportNavigationRecognizer(): PointerRecognizer<
     if (event.pointerType !== 'touch') return;
     if (ctx.inputMode === 'mouse') return;
     if (isPanelTarget(event.target as Element | null)) return;
+    if (isNodeControlTarget(event.target as Element | null)) return;
     const point = { x: event.clientX, y: event.clientY };
     activeTouches.set(event.pointerId, point);
 
