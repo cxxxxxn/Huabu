@@ -568,6 +568,40 @@ describe('mounted Agenetes instance (M5 INST skeleton)', () => {
     expect(inst.get('thr_1')).toBeUndefined();
   });
 
+  it('retains the cached handle and durable record when close throws, then retries idempotently', async () => {
+    const inst = mount();
+    const spec: StubSpec = {
+      threadId: 'close_retry',
+      kind: 'external',
+      workloadType: 'Deployment',
+      namespace: ns('close_retry_source'),
+      spec: { note: 'preserved workload' },
+    };
+    const handle = (await inst.create(spec)) as unknown as StubHandle;
+    await inst.updateHostMetadata(spec.namespace, spec.threadId, {
+      label: 'preserved host metadata',
+    });
+    const before = await inst.record(spec.namespace, spec.threadId);
+    const failure = new Error('synthetic close failure');
+    const close = vi.spyOn(handle, 'close').mockImplementationOnce(() => {
+      throw failure;
+    });
+
+    await expect(inst.close(spec.threadId)).rejects.toThrow(failure);
+    expect(handle.closed).toBe(false);
+    expect(inst.get(spec.threadId)).toBe(handle);
+    expect(await inst.create(spec)).toBe(handle);
+    expect(await inst.record(spec.namespace, spec.threadId)).toEqual(before);
+
+    await inst.close(spec.threadId);
+    expect(handle.closed).toBe(true);
+    expect(inst.get(spec.threadId)).toBeUndefined();
+    expect(await inst.record(spec.namespace, spec.threadId)).toEqual(before);
+    await inst.close(spec.threadId);
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(await inst.record(spec.namespace, spec.threadId)).toEqual(before);
+  });
+
   it('a Job is minted fresh each turn and never enters the live table (I3.2/I9.3)', async () => {
     const inst = mount();
     const spec: StubSpec = {
