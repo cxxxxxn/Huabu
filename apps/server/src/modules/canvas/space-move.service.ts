@@ -380,7 +380,7 @@ export async function moveCanvasSelection(
               throw new SpaceMoveError('MOVE_AGENT_PENDING_CHANGES');
             }
             const namespace = canvasAcpNamespace(sourceCanvasId);
-            const record = agenetes.record(namespace, threadId);
+            const record = await agenetes.record(namespace, threadId);
             if (!record) {
               const target = await agentThreadResolver.resolveAgentNode(
                 sourceCanvasId,
@@ -464,7 +464,7 @@ export async function moveCanvasSelection(
             for (const move of threadMoves) {
               phase = 'agent-close';
               try {
-                agenetes.close(move.threadId);
+                await agenetes.close(move.threadId);
               } catch (error) {
                 throw new SpaceMoveError('MOVE_AGENT_CLOSE_FAILED', 500, {
                   cause: error,
@@ -472,7 +472,7 @@ export async function moveCanvasSelection(
               }
               phase = 'agent-rehome';
               try {
-                agenetes.rehome(
+                await agenetes.rehome(
                   {
                     namespace: canvasAcpNamespace(sourceCanvasId),
                     threadId: move.threadId,
@@ -562,7 +562,7 @@ export async function moveCanvasSelection(
             try {
               compensation = 'threads';
               for (const move of completedThreads.reverse()) {
-                agenetes.rehome(
+                await agenetes.rehome(
                   {
                     namespace: canvasAcpNamespace(destinationCanvasId),
                     threadId: move.threadId,

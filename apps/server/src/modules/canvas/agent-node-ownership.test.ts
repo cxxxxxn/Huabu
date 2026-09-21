@@ -152,7 +152,7 @@ forEachProductProfile((profile, label) => {
           { type: 'DELETE_NODES', nodeIds: [node.id as `node-${string}`] },
         ],
       });
-      vi.spyOn(agenetes, 'record').mockReturnValue({
+      vi.spyOn(agenetes, 'record').mockResolvedValue({
         spec: {
           threadId: 'thread-agent',
           namespace: { name: canvasId },
@@ -162,7 +162,7 @@ forEachProductProfile((profile, label) => {
         },
         state: { driverState: {} },
         driverSchemaVersion: 1,
-      } as NonNullable<ReturnType<typeof agenetes.record>>);
+      } as NonNullable<Awaited<ReturnType<typeof agenetes.record>>>);
       const response = await app.inject({
         method: 'POST',
         url: `/canvas/${canvasId}/nodes/${node.id}/association`,
@@ -228,7 +228,7 @@ forEachProductProfile((profile, label) => {
     });
 
     it('confirms a realized chat attachment and rejects duplicate thread owners', async () => {
-      vi.spyOn(agenetes, 'record').mockReturnValue({
+      vi.spyOn(agenetes, 'record').mockResolvedValue({
         spec: {
           threadId: 'thread-attached',
           namespace: { name: canvasId },
@@ -238,7 +238,7 @@ forEachProductProfile((profile, label) => {
         },
         state: { driverState: {} },
         driverSchemaVersion: 1,
-      } as NonNullable<ReturnType<typeof agenetes.record>>);
+      } as NonNullable<Awaited<ReturnType<typeof agenetes.record>>>);
       await executeOnServer({
         canvasId,
         originator: { source: 'ui' },
@@ -659,8 +659,8 @@ forEachProductProfile((profile, label) => {
         },
         state: { driverState: {} },
         driverSchemaVersion: 1,
-      } as NonNullable<ReturnType<typeof agenetes.record>>;
-      const readRecord = vi.spyOn(agenetes, 'record').mockReturnValue(record);
+      } as NonNullable<Awaited<ReturnType<typeof agenetes.record>>>;
+      const readRecord = vi.spyOn(agenetes, 'record').mockResolvedValue(record);
       const response = await app.inject({
         method: 'PUT',
         url: `/canvas/${canvasId}`,

@@ -138,7 +138,7 @@ forEachProductProfile((profile, label) => {
     afterEach(async () => {
       closeFailure = false;
       vi.restoreAllMocks();
-      for (const node of nodes) runtime.close(String(node.data.threadId));
+      for (const node of nodes) await runtime.close(String(node.data.threadId));
       await mounted.close();
     });
 
@@ -164,8 +164,10 @@ forEachProductProfile((profile, label) => {
             },
           },
         };
-        const handle = runtime.create(spec);
-        runtime.updateHostMetadata(namespace, threadId, { test: 'preserved' });
+        const handle = await runtime.create(spec);
+        await runtime.updateHostMetadata(namespace, threadId, {
+          test: 'preserved',
+        });
         for await (const event of handle.run(submission, {})) {
           expect(event.type).toBeDefined();
         }
@@ -251,16 +253,17 @@ forEachProductProfile((profile, label) => {
       for (const node of nodes) {
         const threadId = String(node.data.threadId);
         expect(
-          runtime.record(canvasAcpNamespace(SOURCE), threadId),
+          await runtime.record(canvasAcpNamespace(SOURCE), threadId),
         ).toBeDefined();
         expect(
-          runtime.record(canvasAcpNamespace(DESTINATION), threadId),
+          await runtime.record(canvasAcpNamespace(DESTINATION), threadId),
         ).toBeUndefined();
         expect(
-          runtime.history(canvasAcpNamespace(SOURCE), threadId).turns,
+          (await runtime.history(canvasAcpNamespace(SOURCE), threadId)).turns,
         ).toHaveLength(1);
         expect(
-          runtime.history(canvasAcpNamespace(DESTINATION), threadId).turns,
+          (await runtime.history(canvasAcpNamespace(DESTINATION), threadId))
+            .turns,
         ).toHaveLength(0);
       }
       assertReleased();
@@ -270,13 +273,15 @@ forEachProductProfile((profile, label) => {
       'closes a completed cached %s Agent and recovers in the destination',
       async (kind) => {
         await seed([kind]);
-        const before = runtime.record(canvasAcpNamespace(SOURCE), THREAD);
+        const before = await runtime.record(canvasAcpNamespace(SOURCE), THREAD);
         assert.ok(before);
-        const events = conversationEventLogStore.readRecords(
+        const events = await conversationEventLogStore.readRecords(
           canvasAcpNamespace(SOURCE),
           THREAD,
         );
-        const turns = runtime.history(canvasAcpNamespace(SOURCE), THREAD).turns;
+        const turns = (
+          await runtime.history(canvasAcpNamespace(SOURCE), THREAD)
+        ).turns;
         const destinationWrite = vi.spyOn(
           executor,
           'executeOnServerAlreadyLocked',
@@ -294,22 +299,26 @@ forEachProductProfile((profile, label) => {
         );
         expect(closeOrder).toBeLessThan(rehomeOrder);
         expect(runtime.get(THREAD)).toBeUndefined();
-        const moved = runtime.record(canvasAcpNamespace(DESTINATION), THREAD);
+        const moved = await runtime.record(
+          canvasAcpNamespace(DESTINATION),
+          THREAD,
+        );
         assert.ok(moved);
         expect(moved.state).toEqual(before.state);
         expect(moved.hostMetadata).toEqual(before.hostMetadata);
         expect(moved.spec.threadId).toBe(THREAD);
         expect(
-          runtime.record(canvasAcpNamespace(SOURCE), THREAD),
+          await runtime.record(canvasAcpNamespace(SOURCE), THREAD),
         ).toBeUndefined();
         expect(
-          conversationEventLogStore.readRecords(
+          await conversationEventLogStore.readRecords(
             canvasAcpNamespace(DESTINATION),
             THREAD,
           ),
         ).toEqual(events);
         expect(
-          runtime.history(canvasAcpNamespace(DESTINATION), THREAD).turns,
+          (await runtime.history(canvasAcpNamespace(DESTINATION), THREAD))
+            .turns,
         ).toEqual(turns);
         expect(moved.spec.spec).toMatchObject(
           kind === 'internal'
@@ -321,7 +330,7 @@ forEachProductProfile((profile, label) => {
                 },
               },
         );
-        const recovered = runtime.create(moved.spec);
+        const recovered = await runtime.create(moved.spec);
         expect(handles.at(-1)?.context.recoveryInput).toMatchObject({
           state: before.state,
           turns,
@@ -329,10 +338,11 @@ forEachProductProfile((profile, label) => {
         for await (const event of recovered.run(submission, {}))
           expect(event.type).toBeDefined();
         expect(
-          runtime.history(canvasAcpNamespace(DESTINATION), THREAD).turns,
+          (await runtime.history(canvasAcpNamespace(DESTINATION), THREAD))
+            .turns,
         ).toHaveLength(2);
         expect(
-          runtime.history(canvasAcpNamespace(SOURCE), THREAD).turns,
+          (await runtime.history(canvasAcpNamespace(SOURCE), THREAD)).turns,
         ).toHaveLength(0);
         const destination = await storage.space(DESTINATION).read();
         assert.ok(destination && nodes[0]);
@@ -391,12 +401,16 @@ forEachProductProfile((profile, label) => {
             );
         }
         if (reason === 'invalid-binding') {
-          const spec = runtime.record(canvasAcpNamespace(SOURCE), THREAD);
+          const spec = await runtime.record(canvasAcpNamespace(SOURCE), THREAD);
           assert.ok(spec);
-          conversationThreadStore.upsert(canvasAcpNamespace(SOURCE), THREAD, {
-            ...spec,
-            spec: { ...spec.spec, threadId: 'mismatched-test-thread' },
-          });
+          await conversationThreadStore.upsert(
+            canvasAcpNamespace(SOURCE),
+            THREAD,
+            {
+              ...spec,
+              spec: { ...spec.spec, threadId: 'mismatched-test-thread' },
+            },
+          );
         }
         try {
           await expect(move()).rejects.toMatchObject({
@@ -484,9 +498,9 @@ forEachProductProfile((profile, label) => {
       expect(runtime.get(THREAD)).toBeUndefined();
       expect(handles).toHaveLength(1);
       await assertRestored();
-      const record = runtime.record(canvasAcpNamespace(SOURCE), THREAD);
+      const record = await runtime.record(canvasAcpNamespace(SOURCE), THREAD);
       assert.ok(record);
-      runtime.create(record.spec);
+      await runtime.create(record.spec);
       expect(handles.at(-1)?.context.recoveryInput?.turns).toHaveLength(1);
     });
 
@@ -528,7 +542,7 @@ forEachProductProfile((profile, label) => {
       vi.spyOn(conversationThreadStore, 'upsert').mockImplementation(
         (namespace, threadId, record) => {
           if (namespace.name === DESTINATION) throw new Error(PRIVATE_ERROR);
-          upsert(namespace, threadId, record);
+          return upsert(namespace, threadId, record);
         },
       );
       await expect(move()).rejects.toMatchObject({
@@ -540,7 +554,7 @@ forEachProductProfile((profile, label) => {
 
     it('rejects missing canonical state on a Bound Agent without closing', async () => {
       await seed();
-      conversationThreadStore.delete(canvasAcpNamespace(SOURCE), THREAD);
+      await conversationThreadStore.delete(canvasAcpNamespace(SOURCE), THREAD);
       await expect(move()).rejects.toMatchObject({
         code: 'MOVE_AGENT_HISTORY_INVALID',
       });

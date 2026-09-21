@@ -159,6 +159,32 @@ describe('storage dependency direction', () => {
     expect(violations).toEqual([]);
   });
 
+  /**
+   * Storage is below its consumers, tests included.
+   *
+   * The agent module reaches into storage — conversation stores take a Space's
+   * substrate, the memory helpers take a place to write. Nothing goes back the
+   * other way: an import in this direction would make a backend's own suite
+   * depend on the module it serves, and the first one was a test reaching for
+   * a helper that already existed one module up.
+   */
+  it('never imports a consumer module from storage/', () => {
+    const violations: string[] = [];
+    for (const file of storageFiles) {
+      for (const spec of specifiersOf(file)) {
+        if (spec.startsWith('@agenetes/')) {
+          violations.push(`${file} → ${spec}`);
+          continue;
+        }
+        const target = resolveSpecifier(file, spec);
+        if (target?.startsWith('modules/agent/')) {
+          violations.push(`${file} → ${spec}`);
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
   it('reaches backends/ only from the storage module itself', () => {
     const violations: string[] = [];
     for (const file of sourceFiles) {
@@ -226,7 +252,9 @@ describe('storage dependency direction', () => {
       // Tests construct adapters directly — that is how an adapter gets
       // exercised. The rule is about production source: one place decides
       // which backend the process runs.
-      .filter((f) => !f.endsWith('.test.ts'))
+      .filter(
+        (f) => !f.endsWith('.test.ts') && f !== 'modules/storage/testing.ts',
+      )
       .filter((file) =>
         specifiersOf(file).some((spec) => {
           const target = resolveSpecifier(file, spec);
@@ -369,9 +397,10 @@ describe('Disk Space tree capability', () => {
 
   /**
    * `sqliteTree` is the same kind of thing as `diskTree` and gets the same
-   * fence. It is narrower on purpose: the *only* reason it exists rather than
-   * the port's async `extension()` is that Agenetes's storage ports are
-   * synchronous, so exactly one owner should ever appear here.
+   * fence. It is narrower on purpose: the only reason it exists rather than
+   * the port's async `extension()` is that the SQLite conversation stores
+   * answer Agenetes synchronously, which `node:sqlite` lets them do. Exactly
+   * one owner should ever appear here.
    */
   const EXPECTED_SQLITE_CONSUMERS = [
     'modules/agent/agenetes/sqlite-stores.ts',
