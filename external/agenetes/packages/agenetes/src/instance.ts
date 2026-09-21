@@ -243,6 +243,15 @@ export interface ThreadLogMetadata {
   readonly turnCount: number;
 }
 
+/**
+ * How many times a history page is reassembled when a turn folds mid-read.
+ *
+ * Each attempt costs one extra fence read, and a fold is a once-per-turn
+ * event, so a handful of attempts covers a real collision; the count exists
+ * so a thread folding continuously still gets an answer.
+ */
+const MAX_HISTORY_PAGE_ATTEMPTS = 3;
+
 /** Stream frames that terminate a run's live tail (README I8 run contract). */
 const TERMINAL_EVENT_TYPES = new Set<string>([
   AGENT_STREAM_EVENTS.End,
@@ -482,7 +491,20 @@ export function createAgenetesInstance(
   // FIRST (sole writer), then re-emit its metadata (persist-then-notify).
   // A handle without `onState` (a driver that reports no out-of-turn meta)
   // wires nothing and its notification stream stays empty.
-  const pendingReports = new Map<string, Promise<void>>();
+  /**
+   * Each thread's queued state writes, and the namespace they belong to.
+   *
+   * Keyed by the globally unique `threadId` (I4.2), like every other
+   * per-thread table here, so `close` / `record` / `run` reach a thread's
+   * queue by the only identity they are given. The namespace rides alongside
+   * because the durable thread table is namespace-partitioned (I4.1):
+   * enumerating one namespace must not wait behind a write queued for a
+   * thread in another, which shares nothing with it.
+   */
+  const pendingReports = new Map<
+    string,
+    { readonly namespace: string; readonly promise: Promise<void> }
+  >();
   /**
    * The last up-report failure a thread has not yet reported to anyone.
    *
@@ -513,7 +535,7 @@ export function createAgenetesInstance(
    * transient write failure from becoming the permanent answer.
    */
   const drainReports = async (threadId: string): Promise<void> => {
-    await pendingReports.get(threadId);
+    await pendingReports.get(threadId)?.promise;
     if (!reportFailures.has(threadId)) return;
     const failure = reportFailures.get(threadId);
     reportFailures.delete(threadId);
@@ -529,7 +551,9 @@ export function createAgenetesInstance(
       // The queue is kept always-settled so the next report is attempted
       // whatever this one does; the failure itself moves to `reportFailures`,
       // where `record` / `run` / `close` pick it up exactly once.
-      const pending = (pendingReports.get(spec.threadId) ?? Promise.resolve())
+      const pending = (
+        pendingReports.get(spec.threadId)?.promise ?? Promise.resolve()
+      )
         .then(async () => {
           await threadStore.upsert(spec.namespace, spec.threadId, {
             ...(await threadStore.get(spec.namespace, spec.threadId)),
@@ -545,7 +569,10 @@ export function createAgenetesInstance(
         .catch((error: unknown) => {
           reportFailures.set(spec.threadId, error);
         });
-      pendingReports.set(spec.threadId, pending);
+      pendingReports.set(spec.threadId, {
+        namespace: spec.namespace.name,
+        promise: pending,
+      });
     });
     // Register cleanup even for silent handles, whose scoped streams must end.
     unsubscribers.set(spec.threadId, () => {
@@ -1026,7 +1053,15 @@ export function createAgenetesInstance(
       return record ? validateRecord(record) : undefined;
     },
     async records(namespace: Namespace): Promise<ThreadRecord[]> {
-      await Promise.all(pendingReports.values());
+      // Only this namespace's queued writes are waited for. A thread in
+      // another namespace writes to another partition of the thread table, so
+      // its queue cannot change the answer — and a write parked in it must not
+      // hold this enumeration open.
+      await Promise.all(
+        [...pendingReports.values()]
+          .filter((queued) => queued.namespace === namespace.name)
+          .map((queued) => queued.promise),
+      );
       return (await threadStore.list(namespace)).map(validateRecord);
     },
     async updateHostMetadata(
@@ -1038,35 +1073,35 @@ export function createAgenetesInstance(
       // every writer of one record reads what the previous writer persisted.
       // A rejected patch is reported to this caller alone and never queued, so
       // a refused merge cannot fail a later `record` read.
-      const merged = (pendingReports.get(threadId) ?? Promise.resolve()).then(
-        async () => {
-          const record = await threadStore.get(namespace, threadId);
-          if (!record) {
-            throw new AgenetesError(
-              'thread_not_found',
-              `cannot update host metadata for missing thread '${namespace.name}/${threadId}'`,
-              { namespace: namespace.name, threadId },
-            );
-          }
-          const hostMetadata = copyHostMetadata(
-            {
-              ...record.hostMetadata,
-              ...copyHostMetadata(patch, 'invalid_host_metadata'),
-            },
-            'invalid_host_metadata',
+      const merged = (
+        pendingReports.get(threadId)?.promise ?? Promise.resolve()
+      ).then(async () => {
+        const record = await threadStore.get(namespace, threadId);
+        if (!record) {
+          throw new AgenetesError(
+            'thread_not_found',
+            `cannot update host metadata for missing thread '${namespace.name}/${threadId}'`,
+            { namespace: namespace.name, threadId },
           );
-          const updated = { ...record, hostMetadata };
-          await threadStore.upsert(namespace, threadId, updated);
-          return updated;
-        },
-      );
-      pendingReports.set(
-        threadId,
-        merged.then(
+        }
+        const hostMetadata = copyHostMetadata(
+          {
+            ...record.hostMetadata,
+            ...copyHostMetadata(patch, 'invalid_host_metadata'),
+          },
+          'invalid_host_metadata',
+        );
+        const updated = { ...record, hostMetadata };
+        await threadStore.upsert(namespace, threadId, updated);
+        return updated;
+      });
+      pendingReports.set(threadId, {
+        namespace: namespace.name,
+        promise: merged.then(
           () => undefined,
           () => undefined,
         ),
-      );
+      });
       const updated = await merged;
       return {
         ...updated,
@@ -1111,69 +1146,88 @@ export function createAgenetesInstance(
     ): Promise<ThreadHistoryPage> {
       const includeTail =
         options.before === undefined && options.withTail === true;
-      const fence = await turnStore.fence(namespace, threadId);
-      const tail = includeTail
-        ? materializeHistory(
-            [],
-            await eventLog.readRecords(namespace, threadId, fence),
-          )[0]
-        : undefined;
-      const tailStartsGroup = tail !== undefined && tail.request !== null;
-      const persistedLimit =
-        tailStartsGroup === true
-          ? Math.max(1, options.limit - 1)
-          : options.limit;
-      const page = await turnStore.page(namespace, threadId, {
-        limit: persistedLimit,
-        ...(options.before ? { before: options.before } : {}),
-      });
-      let groups: ThreadHistoryGroup[] = page.groups.map((group) => ({
-        id: group.id,
-        turns: group.turns.map(({ turn }) => turn),
-      }));
-      let before = page.before;
-      let hasMore = page.hasMore;
+      // The fence, the tail events and the page are three reads of a log that
+      // a running turn is still writing. A turn that folds between the first
+      // and the last lands in both halves of the answer: `page` returns it as
+      // a persisted turn while the tail still projects its events as the
+      // active one, and the caller sees one turn twice. So the fold boundary
+      // is read again after paging, and a page assembled across a fold is
+      // discarded and rebuilt against the settled layout. A boundary that
+      // keeps moving under repeated attempts answers from the persisted page
+      // alone — a turn behind, rather than self-contradictory.
+      let wantTail = includeTail;
+      for (let attempt = 1; ; attempt += 1) {
+        const fence = await turnStore.fence(namespace, threadId);
+        const tail = wantTail
+          ? materializeHistory(
+              [],
+              await eventLog.readRecords(namespace, threadId, fence),
+            )[0]
+          : undefined;
+        const tailStartsGroup = tail !== undefined && tail.request !== null;
+        const persistedLimit =
+          tailStartsGroup === true
+            ? Math.max(1, options.limit - 1)
+            : options.limit;
+        const page = await turnStore.page(namespace, threadId, {
+          limit: persistedLimit,
+          ...(options.before ? { before: options.before } : {}),
+        });
+        if (
+          wantTail &&
+          (await turnStore.fence(namespace, threadId)) !== fence
+        ) {
+          wantTail = attempt < MAX_HISTORY_PAGE_ATTEMPTS;
+          continue;
+        }
+        let groups: ThreadHistoryGroup[] = page.groups.map((group) => ({
+          id: group.id,
+          turns: group.turns.map(({ turn }) => turn),
+        }));
+        let before = page.before;
+        let hasMore = page.hasMore;
 
-      if (tail) {
-        if (tailStartsGroup) {
-          if (options.limit === 1) {
-            hasMore = page.groups.length > 0;
-            before = hasMore ? page.next : undefined;
-            groups = [];
-          } else {
-            groups = groups.slice(-(options.limit - 1));
-          }
-          groups.push({
-            id: page.next,
-            turns: [tail],
-            isActive: true,
-            activeTurnIndex: 0,
-          });
-        } else if (groups.length > 0) {
-          const latest = groups[groups.length - 1]!;
-          groups[groups.length - 1] = {
-            ...latest,
-            turns: [...latest.turns, tail],
-            isActive: true,
-            activeTurnIndex: latest.turns.length,
-          };
-        } else {
-          groups = [
-            {
+        if (tail) {
+          if (tailStartsGroup) {
+            if (options.limit === 1) {
+              hasMore = page.groups.length > 0;
+              before = hasMore ? page.next : undefined;
+              groups = [];
+            } else {
+              groups = groups.slice(-(options.limit - 1));
+            }
+            groups.push({
               id: page.next,
               turns: [tail],
               isActive: true,
               activeTurnIndex: 0,
-            },
-          ];
+            });
+          } else if (groups.length > 0) {
+            const latest = groups[groups.length - 1]!;
+            groups[groups.length - 1] = {
+              ...latest,
+              turns: [...latest.turns, tail],
+              isActive: true,
+              activeTurnIndex: latest.turns.length,
+            };
+          } else {
+            groups = [
+              {
+                id: page.next,
+                turns: [tail],
+                isActive: true,
+                activeTurnIndex: 0,
+              },
+            ];
+          }
         }
-      }
 
-      return {
-        groups,
-        ...(before ? { before } : {}),
-        hasMore,
-      };
+        return {
+          groups,
+          ...(before ? { before } : {}),
+          hasMore,
+        };
+      }
     },
     tail(
       namespace: Namespace,

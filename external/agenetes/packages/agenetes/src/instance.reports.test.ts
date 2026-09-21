@@ -278,4 +278,43 @@ describe('up-report ordering', () => {
       .toEqual({ sessionId: 'recovered' });
     await inst.close(threadId);
   });
+
+  // The queue is per-thread but the thread table is per-namespace (I4.1), so
+  // an enumeration may only wait for the writes that could change its answer.
+  it('enumerates a namespace while another namespace has a write parked', async () => {
+    const stores = createAsyncStores();
+    const inst = mount(stores);
+    const elsewhere: Namespace = { name: 'reports-elsewhere' };
+    const elsewhereThread = 'thr_reports_elsewhere';
+    const handle = (await inst.create(
+      deployment,
+    )) as unknown as ReportingHandle;
+    await inst.create({
+      ...deployment,
+      threadId: elsewhereThread,
+      namespace: elsewhere,
+    });
+
+    stores.hold('threadStore.upsert', 1);
+    handle.emit({ driverState: { sessionId: 'in flight' } });
+    await stores.parked('threadStore.upsert');
+
+    // A regression does not answer wrongly here — it never answers at all, so
+    // the read is raced against a window rather than simply awaited.
+    const listed = await Promise.race([
+      inst.records(elsewhere),
+      new Promise<'never answered'>((resolve) => {
+        setTimeout(() => resolve('never answered'), 20);
+      }),
+    ]);
+    expect(listed).toEqual([
+      expect.objectContaining({
+        spec: expect.objectContaining({ threadId: elsewhereThread }),
+      }),
+    ]);
+
+    (await stores.parked('threadStore.upsert')).settle();
+    await inst.close(elsewhereThread);
+    await inst.close(threadId);
+  });
 });

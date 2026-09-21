@@ -405,3 +405,55 @@ it('keeps live frames when a remote fence read completes after the turn is folde
   expect((await tail.next()).done).toBe(true);
   await inst.close(threadId);
 });
+
+it('answers one history page without folding a turn into it twice', async () => {
+  const turns = new InMemoryTurnStore();
+  const gate = Promise.withResolvers<void>();
+  const entered = Promise.withResolvers<void>();
+  let gated = true;
+  const turnStore: TurnStore = new Proxy(turns, {
+    get(target, key) {
+      if (key === 'page')
+        return async (...args: Parameters<typeof target.page>) => {
+          // Only the first page read is held open; the reassembly that the
+          // moved fence triggers has to be free to finish.
+          if (gated) {
+            gated = false;
+            entered.resolve();
+            await gate.promise;
+          }
+          return target.page(...args);
+        };
+      const value = Reflect.get(target, key);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  const inst = mountAgenetes({
+    drivers: { external: scriptedDriver() },
+    turnStore,
+  });
+  const handle = await inst.create(deployment);
+  raw!.scripts.push({ events: [text('folding'), end()], result: [] });
+  const run = handle.run(
+    { type: 'user_text', content: 'question' } as never,
+    {} as never,
+  );
+  // One frame is in Tier-1 and nothing is folded yet, so the page's tail is
+  // the only place this turn can appear.
+  await run.next();
+
+  const paging = inst.historyPage(ns, threadId, { limit: 10, withTail: true });
+  await entered.promise;
+  // The turn folds while the page read is in flight: the fence the tail was
+  // built against no longer describes the log the page will return.
+  for await (const _ of run) {
+    // discard — the fold happens on the generator's return
+  }
+  expect(turns.fence(ns, threadId)).toBeGreaterThan(0);
+  gate.resolve();
+
+  const page = await paging;
+  expect(page.groups.flatMap((group) => group.turns)).toHaveLength(1);
+  expect(page.groups.some((group) => group.isActive === true)).toBe(false);
+  await inst.close(threadId);
+});
