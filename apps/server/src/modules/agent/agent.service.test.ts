@@ -421,7 +421,7 @@ describe('runAgent Ink model requirements', () => {
     const canvasId = 'ink-models';
     const threadId = 'persisted-model-context';
     const namespace = canvasAcpNamespace(canvasId);
-    agenetes.create(
+    await agenetes.create(
       buildHuabuPiWorkloadSpec({
         kind: 'internal',
         workloadType: 'Deployment',
@@ -432,7 +432,7 @@ describe('runAgent Ink model requirements', () => {
         hasImage: false,
       }),
     );
-    agenetes.close(threadId);
+    await agenetes.close(threadId);
     resolveModelForRoleAsync.mockImplementation(async (role: string) => ({
       id: role,
       input: role === 'chat' ? ['text'] : ['text', 'image'],

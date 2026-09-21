@@ -83,7 +83,7 @@ forEachProductProfile((profile, label) => {
     });
 
     afterEach(async () => {
-      if (target) agenetes.close(target.threadId);
+      if (target) await agenetes.close(target.threadId);
       await mounted?.close();
     });
 
@@ -156,7 +156,7 @@ forEachProductProfile((profile, label) => {
       expect((await current()).data.viewed).toBe(false);
       await agentNodeLifecycle.acknowledge(target, 'second');
       expect((await current()).data.viewed).toBe(true);
-      agenetes.close(target.threadId);
+      await agenetes.close(target.threadId);
       await mounted.reopen();
       expect((await current()).data).toMatchObject({
         bindingState: 'bound',
@@ -330,7 +330,7 @@ forEachProductProfile((profile, label) => {
           bindingState: 'bound',
           agentBinding: { kind: 'internal' },
         });
-        agenetes.close(target.threadId);
+        await agenetes.close(target.threadId);
         await mounted.reopen();
         expect((await current()).data.bindingState).toBe('bound');
         expect((await space(target.canvasId).read())?.version).toBe(
