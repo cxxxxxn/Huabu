@@ -21,6 +21,7 @@
  * "durable" mean the backend.
  */
 
+import { randomUUID } from 'node:crypto';
 import { deflateSync } from 'node:zlib';
 
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
@@ -28,6 +29,18 @@ import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import { restartBackend } from './storage-profile-server';
 
 const NOTE_TEXT = 'Postgres and Azure profile proof.';
+/**
+ * A fact that exists only in the conversation.
+ *
+ * `NOTE_TEXT` is the wrong thing to ask a recovered Agent about: it is also on
+ * the Space, in the Note the first turn created, so a model that lost its
+ * history entirely could still answer by reading the canvas in front of it.
+ * This codeword is never written anywhere the Agent can inspect — the test
+ * asserts as much against the Space the server holds — so quoting it back
+ * after a restart is only possible from recovered conversation history. Minted
+ * per run, so a provider-side cache cannot supply it either.
+ */
+const CODEWORD = `huabu-${randomUUID().slice(0, 8)}`;
 const PROFILE = process.env.E2E_STORAGE_PROFILE ?? 'unknown';
 
 /** A PNG built in-process, so the bytes that come back can be compared to bytes that went out. */
@@ -175,6 +188,36 @@ async function waitForServerToHold(
       { timeout: 30_000 },
     )
     .toContain(text);
+}
+
+/**
+ * Assert the codeword reached no part of the Space the server holds.
+ *
+ * `/api/canvas/<id>` carries the structure; each node's text lives behind its
+ * own content route, so the structure payload alone would not notice a
+ * codeword written into the Note. Node ids are read straight out of the
+ * structure text rather than through a schema, which keeps this from having an
+ * opinion about the canvas wire format.
+ */
+async function expectCodewordOffTheSpace(
+  page: Page,
+  canvasId: string,
+): Promise<void> {
+  const structure = await page.request.get(`/api/canvas/${canvasId}`);
+  // A failed read would make every assertion below vacuous, which is the same
+  // false pass this helper exists to close.
+  expect(structure.ok()).toBe(true);
+  const structureText = await structure.text();
+  expect(structureText).not.toContain(CODEWORD);
+  const nodeIds = new Set(
+    [...structureText.matchAll(/"id"\s*:\s*"([^"]+)"/g)].map((m) => m[1]),
+  );
+  for (const nodeId of nodeIds) {
+    const content = await page.request.get(
+      `/api/canvas/${canvasId}/nodes/${encodeURIComponent(nodeId)}/content`,
+    );
+    if (content.ok()) expect(await content.text()).not.toContain(CODEWORD);
+  }
 }
 
 /**
@@ -342,7 +385,9 @@ test.describe(`storage profile ${PROFILE}`, () => {
       name: /Describe the Space change/i,
     });
     await composer.fill(
-      `Create a single Note on this Space whose text is exactly: ${NOTE_TEXT} Then stop.`,
+      `Remember this codeword for later: ${CODEWORD}. Do not write the ` +
+        `codeword on the Space or in the Note. Create a single Note on this ` +
+        `Space whose text is exactly: ${NOTE_TEXT} Then stop.`,
     );
     await composer.press('Enter');
 
@@ -355,6 +400,13 @@ test.describe(`storage profile ${PROFILE}`, () => {
     // canvas signal alone kills the process mid-turn.
     await expect(agentReplies(page).first()).toBeVisible({ timeout: 150_000 });
     await waitForHistoryTurns(page, canvasId, threadId, 1);
+    // What makes the codeword evidence: the Space the server holds does not
+    // contain it, so after the restart there is nowhere but recovered history
+    // for the model to have read it from. Structure and node bodies are served
+    // separately, and the body is where a model that ignored the instruction
+    // would have put it, so both are checked. A failure here is the premise
+    // collapsing rather than a recovery bug, and it should be loud either way.
+    await expectCodewordOffTheSpace(page, canvasId);
     const repliesBeforeRestart = await agentReplies(page).count();
     await shot(page, testInfo, 'first turn');
 
@@ -373,7 +425,9 @@ test.describe(`storage profile ${PROFILE}`, () => {
       name: /Describe the Space change/i,
     });
     await second.fill(
-      'What exact text did you put in the Note you created earlier? Answer in one short sentence, and do not change the Space.',
+      'What codeword did I ask you to remember, and what exact text did you ' +
+        'put in the Note you created earlier? Answer in one short sentence, ' +
+        'and do not change the Space.',
     );
     await second.press('Enter');
 
@@ -384,6 +438,12 @@ test.describe(`storage profile ${PROFILE}`, () => {
     // prompt that quotes the same string.
     const answer = agentReplies(page).nth(repliesBeforeRestart);
     await expect(answer).toBeVisible({ timeout: 150_000 });
+    // The codeword first: it was asserted absent from the Space above, so the
+    // only place it can have come from is the recovered conversation. The
+    // Note's text is the weaker of the two — the Note is still on the canvas
+    // — but it stays, because it is the claim the Space half of the profile
+    // makes and a regression there should not hide behind the codeword.
+    await expect(answer).toContainText(CODEWORD, { timeout: 150_000 });
     await expect(answer).toContainText(NOTE_TEXT, { timeout: 150_000 });
     // The discriminating assertion. Now that a later turn has folded, the read
     // fence sits at its `seqEnd`, so anything the first turn left uncommitted

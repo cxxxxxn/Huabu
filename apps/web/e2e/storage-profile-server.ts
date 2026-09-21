@@ -17,7 +17,7 @@
  * would not survive the crossing. A pid and an argv is all a restart needs.
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   copyFileSync,
   existsSync,
@@ -149,6 +149,15 @@ async function waitForExit(pid: number, timeoutMs = 30_000): Promise<void> {
  *
  * Returns whether the copy happened, so a machine without credentials runs the
  * storage half of the suite and skips the model half instead of failing.
+ *
+ * Readiness is the whole decryptable set, not the two filenames.
+ * `encrypted-secrets.json` cannot be read without the master key, and
+ * `initializeSecretStore` treats that pairing as fatal rather than falling
+ * back to the environment (`apps/server/src/security/secret-store.ts`). So
+ * staging the file without `HUABU_SECRET_KEY` would fail the backend's start
+ * inside globalSetup, before any `test.skip` could be reached — taking the
+ * credential-free storage test down with it, on the common machine that has
+ * the files checked out but no key exported.
  */
 export function stageLlmCredentials(dataDir: string): boolean {
   const from = process.env.E2E_LLM_CREDENTIALS_FROM
@@ -156,6 +165,7 @@ export function stageLlmCredentials(dataDir: string): boolean {
     : join(repoRoot, 'apps/server/data');
   const files = ['llm-config.json', 'encrypted-secrets.json'];
   if (!files.every((name) => existsSync(join(from, name)))) return false;
+  if (!process.env.HUABU_SECRET_KEY?.trim()) return false;
   mkdirSync(dataDir, { recursive: true });
   for (const name of files) copyFileSync(join(from, name), join(dataDir, name));
   return true;
@@ -181,25 +191,45 @@ export async function startBackend(
   return state;
 }
 
+/**
+ * Take down the backend's whole process tree.
+ *
+ * The spawn was detached, so on POSIX the pnpm wrapper and the server it
+ * exec'd share a process group, and signalling the group is what actually
+ * frees the port. Windows has no group to signal: a negative pid throws
+ * there, and swallowing that would leave the backend running until
+ * `restartBackend` gave up waiting for a port that never came free. Mirrors
+ * `killTree` in `scripts/dev-child-supervisor.mjs`, which already solves this
+ * for the dev stack.
+ */
+function killBackendTree(pid: number, signal: NodeJS.Signals): void {
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    return;
+  }
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    try {
+      process.kill(pid, signal);
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
 /** Stop the backend, leaving whatever it persisted behind. */
 export async function stopBackend(): Promise<void> {
   if (!existsSync(backendStateFile())) return;
   const state = readState();
-  // The spawn was detached, so the pnpm wrapper and the server it exec'd share
-  // a process group. Signalling the group is what actually frees the port.
-  try {
-    process.kill(-state.pid, 'SIGTERM');
-  } catch {
-    /* already gone */
-  }
+  killBackendTree(state.pid, 'SIGTERM');
   try {
     await waitForExit(state.pid);
   } catch {
-    try {
-      process.kill(-state.pid, 'SIGKILL');
-    } catch {
-      /* already gone */
-    }
+    killBackendTree(state.pid, 'SIGKILL');
   }
 }
 

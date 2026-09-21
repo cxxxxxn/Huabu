@@ -503,12 +503,13 @@ it('returns its client to the pool every time a write is refused', async () => {
   expect(await threads.get(ns, THREAD_ID)).toEqual(threadRecord('after'));
 });
 
-// A Postgres connection that dies mid-transaction takes the process with it:
-// pg detaches its own error listener while a client is checked out, and
-// neither `mutate` nor the store context attaches one, so the client's
-// `error` event has no handler. Skipped because running it aborts the whole
-// worker — see
-// scratchpad/findings/C-postgres-client-error-crashes-process.md.
+// A Postgres connection that dies mid-transaction used to take the whole
+// process with it: pg drops its own error listener while a client is checked
+// out, so an unexpected disconnection raised an `error` event that nothing was
+// listening for. `locked` in `postgres-stores.ts` now keeps an ear on the
+// client for the length of the checkout, and releases it as broken when the
+// rollback itself fails. That pairing is what this case pins down: the pool
+// must not hand a dead client to the next caller.
 it('discards a client whose connection died mid-transaction without stranding the pool', async () => {
   await openWorkspace(CANVAS_ID);
   const ns = namespace(CANVAS_ID);
