@@ -2078,7 +2078,14 @@ const useCanvasStore = create<RFState>()(
       // their stroke subset so the server can auto-snapshot + address
       // just those strokes and tell the agent it is a partial selection.
       const strokeSel = selection.strokeSelection;
-      const selectedIds = new Set(selectedNodes.map((n) => n.id));
+      const selectedIds = new Set<string>();
+      const collectSelectedIds = (values: WireSelectionNode[]): void => {
+        for (const value of values) {
+          selectedIds.add(value.id);
+          if (value.children?.length) collectSelectedIds(value.children);
+        }
+      };
+      collectSelectedIds(selectedNodes);
       for (const [nodeId, strokeIds] of Object.entries(strokeSel)) {
         if (selection.excludeNodeIds?.includes(nodeId)) continue;
         if (!strokeIds || strokeIds.length === 0) continue;

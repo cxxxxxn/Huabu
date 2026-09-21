@@ -95,6 +95,9 @@ type GesturePreviewData = {
    */
   sketchStrokeMoveCarriedNodeIds: string[];
 
+  /** Whether the retained Ink selection is reserved by submission prep. */
+  inkSubmissionPreparing: boolean;
+
   /**
    * Previews of how frames would resize based on the current drag/resize.
    * One entry per affected frame — allows showing both the source frame
@@ -164,6 +167,9 @@ type GesturePreviewState = GesturePreviewData & {
   /** Set / clear the carried-node ids for the current mixed move. */
   setSketchStrokeMoveCarriedNodeIds: (ids: string[]) => void;
 
+  /** Reserve or release the retained Ink selection for submission prep. */
+  setInkSubmissionPreparing: (preparing: boolean) => void;
+
   /**
    * Replace the preview list. Called by `canvasStore` after it has
    * computed the fit for each affected frame.
@@ -223,6 +229,7 @@ const INITIAL_PREVIEW_DATA: GesturePreviewData = {
   sketchSelectionPolygon: null,
   sketchStrokeMovePreview: null,
   sketchStrokeMoveCarriedNodeIds: [],
+  inkSubmissionPreparing: false,
   frameFitPreviews: [],
   snapGuides: [],
   structuredDropPreview: null,
@@ -281,6 +288,8 @@ export const useGesturePreviewStore = create<GesturePreviewState>()((set) => ({
     set({ sketchStrokeMovePreview }),
   setSketchStrokeMoveCarriedNodeIds: (sketchStrokeMoveCarriedNodeIds) =>
     set({ sketchStrokeMoveCarriedNodeIds }),
+  setInkSubmissionPreparing: (inkSubmissionPreparing) =>
+    set({ inkSubmissionPreparing }),
   setFrameFitPreviews: (previews) => set({ frameFitPreviews: previews }),
   clearFrameFitPreview: () => set({ frameFitPreviews: [] }),
   setSnapGuides: (guides) => set({ snapGuides: guides }),

@@ -17,8 +17,10 @@ import {
   captureAgentTurnSources,
   dispatchAgentTurn,
   handleStreamEvent,
+  observeAgentTurnAcceptance,
   prepareAgentTurn,
   prepareAgentTurnRetry,
+  resetAgentTurnAcceptanceObserversForTests,
   stopAgentTurn,
 } from './agentTurnController';
 import { useAgentStream, type UseAgentStreamReturn } from './useAgentStream';
@@ -86,6 +88,7 @@ function request(inputKind: 'text' | 'ink-intent' = 'text', owner = session) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetAgentTurnAcceptanceObserversForTests();
   mocks.save.mockReset().mockResolvedValue(undefined);
   mocks.stop.mockReset().mockResolvedValue({
     stopped: true,
@@ -145,6 +148,53 @@ afterEach(() => {
 });
 
 describe('shared Agent turn input', () => {
+  it('deduplicates Frame-nested Ink while excluding its Question anchor', () => {
+    useCanvasStore.getState()._setStateNoAutosave({
+      nodes: [
+        {
+          id: 'frame-1',
+          type: 'frame',
+          selected: true,
+          position: { x: 0, y: 0 },
+          data: {},
+        },
+        {
+          id: 'question-1',
+          type: 'question',
+          parentId: 'frame-1',
+          position: { x: 10, y: 10 },
+          data: { threadId: 'thread-1' },
+        },
+        {
+          id: 'sketch-1',
+          type: 'sketch',
+          parentId: 'frame-1',
+          position: { x: 20, y: 20 },
+          data: {},
+        },
+      ],
+    });
+
+    const sources = captureAgentTurnSources(questionSession, {
+      nodeIds: ['frame-1'],
+      strokeSelection: { 'sketch-1': ['stroke-1'] },
+    });
+
+    expect(sources.canvasContext.selectedNodes).toEqual([
+      {
+        id: 'frame-1',
+        type: 'frame',
+        children: [
+          {
+            id: 'sketch-1',
+            type: 'sketch',
+            strokeIds: ['stroke-1'],
+          },
+        ],
+      },
+    ]);
+  });
+
   it('projects inferred Ink intent without rendering its tool call', () => {
     useChatStore.getState().addMessage('thread-1', {
       id: 'ink-user',
@@ -393,6 +443,90 @@ describe('shared Agent turn input', () => {
     });
   });
 
+  it('retains the acceptance observer after an ambiguous transport failure', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.stream.mockRejectedValueOnce(new Error('Connection lost'));
+    const accepted = vi.fn();
+
+    await expect(
+      dispatchAgentTurn(request('ink-intent'), { onAccepted: accepted }),
+    ).resolves.toMatchObject({ status: 'unknown' });
+
+    const acceptance = { threadId: 'thread-1', turnStartSeq: 12 };
+    observeAgentTurnAcceptance('canvas-1', acceptance);
+    observeAgentTurnAcceptance('canvas-1', acceptance);
+    expect(accepted).toHaveBeenCalledExactlyOnceWith(acceptance);
+  });
+
+  it('blocks same-thread replacement until unknown acceptance is reconciled', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.stream.mockRejectedValueOnce(new Error('Connection lost'));
+    const accepted = vi.fn();
+
+    await expect(
+      dispatchAgentTurn(request('ink-intent'), { onAccepted: accepted }),
+    ).resolves.toMatchObject({ status: 'unknown' });
+
+    await expect(
+      dispatchAgentTurn(request('ink-intent')),
+    ).resolves.toMatchObject({
+      status: 'busy',
+      error: {
+        message:
+          'The previous Agent turn is still awaiting acceptance reconciliation',
+      },
+    });
+    expect(mocks.stream).toHaveBeenCalledTimes(1);
+
+    observeAgentTurnAcceptance('canvas-1', {
+      threadId: 'thread-1',
+      turnStartSeq: 12,
+    });
+    expect(accepted).toHaveBeenCalledOnce();
+
+    await expect(
+      dispatchAgentTurn(request('ink-intent')),
+    ).resolves.toMatchObject({ status: 'completed' });
+    expect(mocks.stream).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not deliver a duplicate older acceptance to a newer turn', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.stream.mockRejectedValueOnce(new Error('Connection lost'));
+    const olderAccepted = vi.fn();
+
+    await dispatchAgentTurn(request('ink-intent'), {
+      onAccepted: olderAccepted,
+    });
+    const olderAcceptance = { threadId: 'thread-1', turnStartSeq: 20 };
+    observeAgentTurnAcceptance('canvas-1', olderAcceptance);
+    expect(olderAccepted).toHaveBeenCalledExactlyOnceWith(olderAcceptance);
+
+    const newerAccepted = vi.fn();
+    mocks.stream.mockImplementationOnce(
+      async (_content, _thread, _mode, callbacks: AgentStreamCallbacks) => {
+        observeAgentTurnAcceptance('canvas-1', olderAcceptance);
+        expect(newerAccepted).not.toHaveBeenCalled();
+        callbacks.onAccepted?.({ threadId: 'thread-1', turnStartSeq: 21 });
+        callbacks.onComplete();
+      },
+    );
+
+    await expect(
+      dispatchAgentTurn(request('ink-intent'), {
+        onAccepted: newerAccepted,
+      }),
+    ).resolves.toMatchObject({
+      status: 'completed',
+      accepted: { threadId: 'thread-1', turnStartSeq: 21 },
+    });
+    expect(olderAccepted).toHaveBeenCalledOnce();
+    expect(newerAccepted).toHaveBeenCalledExactlyOnceWith({
+      threadId: 'thread-1',
+      turnStartSeq: 21,
+    });
+  });
+
   it('does not POST after a rejected save or leak its preparation claim', async () => {
     mocks.save.mockRejectedValueOnce(new Error('save conflict'));
     const result = await dispatchAgentTurn(request('ink-intent'));
@@ -582,6 +716,27 @@ describe('shared Agent turn input', () => {
       threadId: 'thread-1',
       turnStartSeq: 9,
     });
+  });
+
+  it('releases an unknown acceptance observer after a definitive pre-acceptance stop', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.stream.mockRejectedValueOnce(new Error('Connection lost'));
+    const acceptanceRejected = vi.fn();
+
+    await expect(
+      dispatchAgentTurn(request('ink-intent'), {
+        onAcceptanceRejected: acceptanceRejected,
+      }),
+    ).resolves.toMatchObject({ status: 'unknown' });
+
+    mocks.stop.mockResolvedValueOnce({ stopped: true, acceptance: null });
+    stopAgentTurn(session);
+    await vi.waitFor(() => expect(acceptanceRejected).toHaveBeenCalledOnce());
+
+    await expect(
+      dispatchAgentTurn(request('ink-intent')),
+    ).resolves.toMatchObject({ status: 'completed' });
+    expect(mocks.stream).toHaveBeenCalledTimes(2);
   });
 
   it('keeps monitoring when the stop outcome is unknown', async () => {

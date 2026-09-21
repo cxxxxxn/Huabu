@@ -87,6 +87,7 @@ import { getEdgeIdsBetweenSelectedNodes } from '@/utils/selection';
 
 import { applyNodeGeometryPreviews } from './applyNodeGeometryPreview';
 import {
+  canStartRetainedSelectionMove,
   canDirectlyManipulateWithPointer,
   closestNodeElement,
   isLassoStartTarget,
@@ -503,6 +504,9 @@ export const Canvas: React.FC<CanvasProps> = ({
   const isNotMouse = useIsNotMouse();
   const inputMode = useEffectiveInputMode();
   const lastPointer = useInputMode();
+  const inkSubmissionPreparing = useGesturePreviewStore(
+    (state) => state.inkSubmissionPreparing,
+  );
 
   // Keyboard shortcuts + paste handler (extracted to hook).
   // Also manages tool state (select/pan) and Space-key temporary pan.
@@ -706,6 +710,15 @@ export const Canvas: React.FC<CanvasProps> = ({
     // The two can coexist in one lasso. A fresh drag calls this with empty
     // args, clearing both.
     onSelect: (nodeIds, flowPolygon) => {
+      const preview = useGesturePreviewStore.getState();
+      preview.clearSketchStrokeHighlight();
+      if (
+        nodeIds.length === 0 &&
+        flowPolygon.length === 0 &&
+        preview.inkSubmissionPreparing
+      ) {
+        return;
+      }
       const strokeSelection =
         flowPolygon.length >= 3 ? findSketchStrokesInPolygon(flowPolygon) : {};
 
@@ -754,7 +767,6 @@ export const Canvas: React.FC<CanvasProps> = ({
         return true;
       });
 
-      const preview = useGesturePreviewStore.getState();
       preview.setSketchStrokeSelection(strokeSelection);
       // Retain the lasso loop for ANY non-empty selection (strokes and/or
       // whole nodes) so the user can drag inside it to move the whole
@@ -781,10 +793,10 @@ export const Canvas: React.FC<CanvasProps> = ({
   // tool (where it is produced and its delete toolbar shows). Drop it the
   // moment the tool changes so the highlight + toolbar don't linger.
   useEffect(() => {
-    if (tool !== 'lasso') {
+    if (tool !== 'lasso' && !inkSubmissionPreparing) {
       useGesturePreviewStore.getState().clearSketchStrokeSelection();
     }
-  }, [tool]);
+  }, [inkSubmissionPreparing, tool]);
   // A sketch node is never whole-node selected by the lasso (it always
   // yields stroke-level hits, R3), so it must not flash the whole-node
   // preview box while the lasso passes over it — only its captured strokes
@@ -843,12 +855,19 @@ export const Canvas: React.FC<CanvasProps> = ({
       const nextPosition = previewedNode.position;
       const nextStyle = previewedNode.style;
       const nextMeasured = previewedNode.measured;
+      const touchDraggable = resolveNodeDraggable(
+        node.draggable,
+        node.selected,
+        isNotMouse,
+        lastPointer === 'touch' && node.type === 'sketch',
+      );
 
       const cached = prevCache.get(node);
       if (
         cached &&
         cached.zIndex === z &&
         cached.className === nextClassName &&
+        cached.draggable === touchDraggable &&
         cached.position === nextPosition &&
         cached.style === nextStyle &&
         cached.measured === nextMeasured
@@ -857,11 +876,6 @@ export const Canvas: React.FC<CanvasProps> = ({
         return cached;
       }
 
-      const touchDraggable = resolveNodeDraggable(
-        node.draggable,
-        node.selected,
-        isNotMouse,
-      );
       const needsWrap =
         nextClassName !== baseClassName ||
         node.zIndex !== z ||
@@ -886,7 +900,14 @@ export const Canvas: React.FC<CanvasProps> = ({
 
     zWrapCacheRef.current = nextCache;
     return result;
-  }, [isNotMouse, lassoPreviewNodeIdSet, nodes, nodeGeometryPreviews, zByNode]);
+  }, [
+    isNotMouse,
+    lassoPreviewNodeIdSet,
+    lastPointer,
+    nodes,
+    nodeGeometryPreviews,
+    zByNode,
+  ]);
 
   // Override marker colors on selected edges so arrows match the selection
   // highlight color (--color-info). CSS cannot style SVG <marker> referenced
@@ -1097,6 +1118,8 @@ export const Canvas: React.FC<CanvasProps> = ({
           if (useToolStore.getState().pendingNodeType !== null) return false;
           if (toolRef.current !== 'lasso') return false;
           if (event.button !== 0 || !event.isPrimary) return false;
+          if (!canStartRetainedSelectionMove(event.target as Element | null))
+            return false;
           if (
             !canDirectlyManipulateWithPointer(event.pointerType, ctx.inputMode)
           )
@@ -1145,6 +1168,8 @@ export const Canvas: React.FC<CanvasProps> = ({
         suppressNextPaneClickRef.current = false;
         return;
       }
+      const preview = useGesturePreviewStore.getState();
+      preview.clearSketchStrokeHighlight();
       // 1. Click-to-place for pending node creation tools.
       if (placePendingNode(event.clientX, event.clientY)) return;
 
@@ -1152,8 +1177,13 @@ export const Canvas: React.FC<CanvasProps> = ({
       //    background click belongs to that tool — leave the expanded view
       //    alone so the user doesn't lose their context mid-gesture.
       if (pendingNodeType) return;
+
+      if (preview.inkSubmissionPreparing) return;
+
+      preview.clearSketchStrokeSelection();
+      selectNodes([]);
     },
-    [pendingNodeType, placePendingNode],
+    [pendingNodeType, placePendingNode, selectNodes],
   );
 
   // Keep layout-driven canvas resizes spatially stable. Side panels and split
@@ -1592,8 +1622,17 @@ export const Canvas: React.FC<CanvasProps> = ({
           interactivityLocked={interactivityLocked}
           explicitToolActive={tool === 'lasso' || Boolean(pendingNodeType)}
           onTouchTakeover={handleTouchTakeover}
-          onEmptyCanvasTap={() => selectNodes([])}
-          onNodeTap={(nodeId) => selectNodes([nodeId])}
+          onEmptyCanvasTap={() => {
+            const preview = useGesturePreviewStore.getState();
+            preview.clearSketchStrokeHighlight();
+            if (preview.inkSubmissionPreparing) return;
+            preview.clearSketchStrokeSelection();
+            selectNodes([]);
+          }}
+          onNodeTap={(nodeId) => {
+            useGesturePreviewStore.getState().clearSketchStrokeHighlight();
+            selectNodes([nodeId]);
+          }}
           extraRecognizers={pointerRecognizers}
         />
         <SelectionAutoPan

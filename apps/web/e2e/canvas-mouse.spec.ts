@@ -166,6 +166,62 @@ test.describe('canvas mouse mode', () => {
     ).toBeGreaterThan(60);
   });
 
+  test('selected Sketch restores mouse dragging after a touch interaction', async ({
+    page,
+  }) => {
+    const center = await paneCenter(page);
+    const toolbar = page.locator('.react-flow__panel.bottom.center');
+    await toolbar.getByRole('button', { name: /^Sketch/ }).click();
+    await page.mouse.move(center.x - 45, center.y);
+    await page.mouse.down();
+    await page.mouse.move(center.x + 45, center.y, { steps: 12 });
+    await page.mouse.up();
+    await expect(page.locator('.react-flow__node-sketch')).toHaveCount(1);
+
+    await page.evaluate(() => {
+      const key = 'huabu-sketch-tools';
+      const persisted = JSON.parse(localStorage.getItem(key) ?? '{}') as {
+        state?: Record<string, unknown>;
+        version?: number;
+      };
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          ...persisted,
+          state: { ...persisted.state, inputModePreference: 'finger' },
+        }),
+      );
+    });
+    await page.reload();
+    await page.waitForSelector('.react-flow__pane');
+
+    const sketch = page.locator('.react-flow__node-sketch').first();
+    const sketchBox = await sketch.boundingBox();
+    if (!sketchBox) throw new Error('sketch has no bounding box');
+    await page.keyboard.press('s');
+    await page.mouse.click(
+      sketchBox.x + sketchBox.width / 2,
+      sketchBox.y + sketchBox.height / 2,
+    );
+    await expect(sketch).toHaveClass(/\bselected\b/);
+    await expect(sketch).toHaveClass(/\bdraggable\b/);
+
+    const pointerTarget = toolbar.getByRole('button', { name: /^Select/ });
+    await pointerTarget.dispatchEvent('pointerdown', {
+      bubbles: true,
+      pointerId: 41,
+      pointerType: 'touch',
+    });
+    await expect(sketch).not.toHaveClass(/\bdraggable\b/);
+
+    await pointerTarget.dispatchEvent('pointerdown', {
+      bubbles: true,
+      pointerId: 42,
+      pointerType: 'mouse',
+    });
+    await expect(sketch).toHaveClass(/\bdraggable\b/);
+  });
+
   test('empty drag box-selects a node in Select tool', async ({ page }) => {
     const c = await paneCenter(page);
     await placeTextNode(page, c);
@@ -314,8 +370,55 @@ test.describe('canvas mouse mode', () => {
     }
     await page.mouse.up();
 
+    const selectedInk = page.locator(
+      '[data-sketch-stroke-emphasis="selected"]',
+    );
+    await expect(selectedInk).toBeVisible();
+    await expect(selectedInk).toHaveAttribute('stroke', 'var(--color-info)');
+    await expect(selectedInk).toHaveAttribute(
+      'vector-effect',
+      'non-scaling-stroke',
+    );
+
     const send = page.getByRole('button', { name: 'Send ink request' });
     await expect(send).toBeVisible();
+    const retainedLasso = await page
+      .locator('[data-stroke-selection-region]')
+      .boundingBox();
+    const inkToolbar = await send
+      .locator('xpath=ancestor::*[@data-floating-chrome][1]')
+      .boundingBox();
+    if (!retainedLasso || !inkToolbar) {
+      throw new Error('Ink toolbar or retained Lasso has no bounding box');
+    }
+    expect(
+      Math.abs(
+        inkToolbar.x +
+          inkToolbar.width / 2 -
+          (retainedLasso.x + retainedLasso.width / 2),
+      ),
+    ).toBeLessThanOrEqual(2);
+
+    await page.mouse.click(retainedLasso.x + 10, retainedLasso.y + 10);
+    await expect(selectedInk).toHaveCount(0);
+    await expect(page.locator('[data-stroke-selection-region]')).toHaveCount(0);
+    await expect(send).toHaveCount(0);
+
+    await page.mouse.move(path[0].x, path[0].y);
+    await page.mouse.down();
+    for (let index = 1; index < path.length; index += 1) {
+      await page.mouse.move(path[index].x, path[index].y, { steps: 6 });
+    }
+    await page.mouse.up();
+    await expect(selectedInk).toBeVisible();
+    await expect(send).toBeVisible();
+    const sendBox = await send.boundingBox();
+    if (!sendBox) throw new Error('Ink send button has no bounding box');
+
+    let releaseAgentRequest!: () => void;
+    const agentRequestHeld = new Promise<void>((resolve) => {
+      releaseAgentRequest = resolve;
+    });
     await page.route('**/api/agent', async (route) => {
       if (route.request().method() !== 'POST') {
         await route.continue();
@@ -326,6 +429,7 @@ test.describe('canvas mouse mode', () => {
         inputKind?: string;
       };
       expect(request.inputKind).toBe('ink-intent');
+      await agentRequestHeld;
       const frame = (type: string, data: unknown) =>
         `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
       await route.fulfill({
@@ -341,8 +445,27 @@ test.describe('canvas mouse mode', () => {
 
     await send.click();
 
+    const pendingSend = page.getByRole('button', {
+      name: 'Sending ink request',
+    });
+    const spinner = pendingSend.locator('[data-loading-spinner]');
+    await expect(spinner).toBeVisible();
+    const pendingSendBox = await pendingSend.boundingBox();
+    if (!pendingSendBox) {
+      throw new Error('Pending Ink send button has no bounding box');
+    }
+    expect(pendingSendBox.width).toBe(sendBox.width);
+    expect(pendingSendBox.height).toBe(sendBox.height);
+    await expect(page.getByRole('tooltip')).toHaveCount(0);
+    await page.keyboard.press('s');
+    await expect(page.locator('[data-stroke-selection-region]')).toBeVisible();
+    await expect(selectedInk).toBeVisible();
+    releaseAgentRequest();
+
     await expect(page.locator('.react-flow__node-question')).toHaveCount(1);
     await expect(send).toHaveCount(0);
+    await expect(page.locator('[data-stroke-selection-region]')).toHaveCount(0);
+    await expect(selectedInk).toHaveCount(0);
   });
 
   test('mixed Ink submits hidden current-LOD Canvas grounding', async ({

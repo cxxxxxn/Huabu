@@ -1,12 +1,14 @@
 # Ink Lasso Question Flow
 
-> Status: **Proposed** · Last updated: 2026-09-17
+> Status: **Proposed** · Last updated: 2026-09-18
 
 ## 1. Summary
 
 Huabu should let a user lasso handwritten Sketch strokes together with optional Canvas nodes and explicitly submit that bounded selection as an Agent request. The selected Ink is a source that carries the user's intent. New tasks use the built-in Huabu `operate` Agent to infer that intent from the partial-stroke image and execute it through the existing Agent and Canvas toolchain; an existing Question thread retains its internal or external binding and effective mode.
 
 The V1 flow reuses the existing Lasso gesture, retained stroke selection, partial-stroke snapshotting, Question Node lifecycle, Agent request pipeline, and Chat history. It does not add a second pointer engine, a separate Ink runtime, OCR, an intent-recognizer model call, or an Ink-specific execution backend. The executing Agent may publish one structured inferred-intent summary from the same turn so the generated Question and Ink history row become understandable without pretending the user typed that text.
+
+The Post-V1 amendment in §14 plans three interaction-polish changes for retained-selection dismissal, submission feedback, and touch-on-Ink behavior.
 
 The earlier interactive HTML concept was a visual exploration and is not included in this branch. This Markdown proposal is the self-contained implementation contract and records the deliberate differences from that concept in §3.
 
@@ -60,9 +62,9 @@ The V1 product contract differs from the HTML concept in these deliberate ways:
 - New nodes initially display `New ink request`; a same-turn structured inferred intent may replace that untouched placeholder without a separate title-model call.
 - Mixed Ink/object requests add a hidden WYSIWYG relationship image; they do not expose that derived image as a Chat attachment.
 
-## 4. Non-Goals
+## 4. V1 Non-Goals
 
-V1 does not include:
+The V1 baseline does not include the following. Section 14 explicitly amends only the empty-Canvas dismissal, touch-on-Ink, and pending-feedback boundaries; the remaining exclusions still apply.
 
 - voice recording or transcription;
 - OCR or durable recognized text for Sketch strokes;
@@ -358,7 +360,7 @@ The new Question Node is retained if dispatch fails after creation. Automatic de
 
 The accepted boundary must be explicit and shared with text Chat. The current initial SSE `meta` is emitted before the invocation is consumed and before `handle.run()` persists the submission, so it is not a durable acceptance acknowledgement. V1 needs a shared, typed acknowledgement emitted only after the canonical turn-start persistence boundary; the client transport/controller must expose it to both callers. Neither a resolved `fetch` nor the current `meta` event authorizes selection clearing. This is an extension to the existing Agent SSE contract, not a separate Ink protocol.
 
-At acknowledgement, retire the retained selection only if the originating Canvas and selection identity still match the captured attempt. A newer Lasso selection, undo/reset, or Canvas switch must not be cleared by a delayed callback. Once a turn has been accepted, a later Agent error does not restore an obsolete selection over the user's current work.
+At acknowledgement, retire the retained selection only if the originating Canvas and Lasso gesture identity still match the captured attempt. That identity is derived from the retained polygon plus its partial-stroke subsets, not React Flow's whole-node `selected` projection, because Question creation and Canvas lifecycle synchronization may refresh that projection before acceptance without creating a new Lasso. A different polygon or stroke subset, undo/reset, or Canvas switch must not be cleared by a delayed callback. Once a turn has been accepted, a later Agent error does not restore an obsolete selection over the user's current work.
 
 ### 9.1 Retry Is Not Replay
 
@@ -519,6 +521,7 @@ V1 is complete when all of the following are true:
 Each follow-up requires its own proposal or an explicit lifecycle update to this one:
 
 - Voice as an additional intent source, including recording, transcription, and privacy/error states.
+- General-purpose Sketch OCR for search and passive question detection remains owned by [`sketch-region-redesign.md`](./sketch-region-redesign.md); §14 does not implement or replace it.
 - A two-stage `infer -> confirm/execute` flow with a structured `ready | clarify | unsupported` result.
 - Full inferred-intent parity for external ACP Agents, gated on an authoritative structured capability rather than session-title or reply-text heuristics.
 - ACP vision capability declaration and capability-gated Ink affordances.
@@ -526,11 +529,101 @@ Each follow-up requires its own proposal or an explicit lifecycle update to this
 - Multiple Question Nodes as a new synthesized task with explicit thread-reference semantics.
 - Handwritten sigils for capability, resource, Agent, or Skill selection.
 
-## 14. Code Entry Points
+## 14. Post-V1 Interaction Polish
+
+This amendment is planned after the V1 submission path and contains only local interaction changes. Online handwriting transcription remains deferred and is not part of this plan.
+
+### 14.1 Sequence and ownership
+
+| Phase | Scope                                                                                      | Dependency                                       | Review boundary                                       |
+| ----- | ------------------------------------------------------------------------------------------ | ------------------------------------------------ | ----------------------------------------------------- |
+| P0    | Characterize retained-selection dismissal, submission pending state, and touch hit-testing | Existing Ink submission and pointer-router tests | Tests only; no product behavior change                |
+| P1    | Empty-Canvas tap dismisses the complete retained Lasso result                              | P0                                               | Canvas interaction change                             |
+| P2    | Stable spinner feedback during pre-acceptance submission                                   | P0                                               | Toolbar presentation change                           |
+| P3    | Finger input does not select or drag Ink                                                   | P0                                               | Pointer-policy change; mouse and pen remain unchanged |
+| P4    | Retained Lasso loop renders in the topmost Canvas HUD                                      | P1                                               | Canvas presentation and hit-target change             |
+| P5    | Selected Ink strokes render an explicit semantic highlight                                 | P0                                               | Sketch paint-only change                              |
+| P6    | Ink toolbar anchors to the retained Lasso range                                            | P1                                               | Floating-toolbar placement change                     |
+| P7    | Frame-nested Ink and grounding metadata share one captured source tree                     | Existing source serializer and request schema    | Submission consistency fix                            |
+
+P1-P7 belong on `fix/ink-query-polish` and are independently reviewable after P0 characterizes the current behavior.
+
+### 14.2 Empty-Canvas dismissal
+
+After a Lasso gesture commits a retained result, a completed primary-pointer tap on genuinely empty Canvas or on empty space inside the retained Lasso region clears that complete result: `sketchStrokeSelection`, `sketchSelectionPolygon`, stroke-move preview state, and whole-node selection produced by the same Lasso. A retained-region press that crosses the pointer-specific move threshold remains a move rather than a dismissal. This is a transient UI dismissal and creates no Canvas command, persistence write, or undo entry.
+
+Canvas interaction also clears `sketchStrokeHighlight`, the separate transient channel used when a Chat history source chip points back to submitted Ink. Mouse leave remains the normal desktop cleanup, but empty Canvas taps, node taps, and new Lasso interaction are authoritative fallbacks for touch browsers whose synthetic hover may not emit a matching leave. This reference highlight is presentation-only and is never protected by the Ink submission reservation.
+
+The dismissal occurs only after the shared pointer policy classifies the gesture as a tap below the pointer-specific activation distance. A pan, pinch, new locked Lasso, node/edge/handle interaction, floating-toolbar interaction, or application-panel interaction does not trigger it. While an Ink submission is preparing and has no cancellation contract, empty-Canvas taps do not discard the captured operands; known rejection restores normal dismissal, while durable acceptance retires the matching selection through the existing acceptance callback.
+
+P1 should reuse the current pane/viewport-navigation selection-clear boundary and `gesturePreviewStore.clearSketchStrokeSelection()` rather than add a document-level click listener. Mouse, pen, and touch receive the same empty-Canvas dismissal once their gesture has resolved to an eligible tap.
+
+### 14.3 Pre-acceptance submission feedback
+
+The send control keeps its position and dimensions after activation, becomes disabled, and replaces the Send icon with the shared `Spinner` primitive at the icon-only button's `xs` indicator size. `Spinner` owns a fixed square layout box and rotates a centred Lucide indicator through the common loading animation, so business components do not hand-roll animation classes, the indicator shares the circular button's visual centre, and its intrinsic size cannot enlarge the button or toolbar. Its accessible name changes to `Sending ink request`, but the pending state exposes no tooltip or visible status text because the Spinner is sufficient feedback; source count and Agent target hint remain stable so the toolbar does not resize. Repeated activation is ignored by the same local preparation guard.
+
+The spinner begins synchronously when activation reserves the local attempt and ends at one of three boundaries: durable acceptance always releases the local preparation state, then clears the matching selection and removes its toolbar; a known pre-acceptance rejection restores the Send icon for retry; an unresolved transport outcome retains its acceptance observer and remains non-actionable for the same Canvas/thread, preventing a duplicate POST. The controller retains that observer after an unknown result; a later acceptance replayed by Chat stream reconnect or returned by Stop reconciles it, while a confirmed Stop with no acceptance rejects the observer and restores retry without clearing the Lasso or Question. Switching tools does not clear a reserved Lasso; after a definitive rejection, the normal tool-scoped cleanup may run. If the user creates a newer Lasso, its polygon/stroke identity supersedes the old local presentation immediately, so the newer toolbar returns to its normal Send state and an older acceptance/finally callback cannot clear or disable it. The older observer is not discarded: until reconciliation resolves it, the shared turn controller rejects another dispatch to the same Canvas/thread instead of replacing the observer, while submissions targeting another thread remain independent. The toolbar does not show Chat's square Stop control because capture, save, snapshot, and pre-turn preparation do not yet identify a durable Agent run that Stop can authoritatively cancel. Once accepted, the Lasso surface is finished: the Question Node owns `running` feedback, and ChatPanel owns the shared Stop action for that accepted turn.
+
+### 14.4 Finger input does not select Ink
+
+The policy is based on `pointerType === 'touch'`, not an iPad user-agent check. A finger touching a painted Sketch stroke must not select that Sketch node, make it eligible for whole-node drag, or move an already selected Sketch. Mouse behavior is unchanged, and pen/Apple Pencil behavior is unchanged. Lasso stroke selection remains the touch-first way to select and edit Ink deliberately.
+
+Touch hit-testing treats Sketch as transparent for direct selection and continues to the topmost eligible non-Sketch node underneath; if there is none, the gesture behaves as an empty-Canvas tap or navigation gesture. Note, PDF, Question, Image, and other ordinary nodes therefore remain touch-selectable even when Ink crosses them. Lasso and Sketch tools retain their existing pointer ownership: this rule applies to direct node selection/drag resolution, not to drawing, erasing, or Lasso capture.
+
+P3 must update both selection and selected-node drag gates. Filtering only the final tap would still let an already selected Sketch capture a finger drag, while disabling pointer events on all Sketch DOM would regress mouse selection and stroke-level hover behavior.
+
+### 14.5 Retained Lasso visibility
+
+The committed Lasso polygon is interaction chrome and must remain visible above every Canvas node regardless of Layer order, nesting, or node type. It renders as a screen-space HUD portalled into the React Flow root above the viewport renderer, not as a `ViewportPortal` child whose z-index competes with Frame, Image, or other node stacking contexts. Viewport pan/zoom and the live stroke-move delta are applied when deriving its screen-space bounds; its polygon interior keeps pointer ownership for retained-selection movement.
+
+The Lasso HUD uses the Canvas `z-999` interaction layer: it sits above selection outlines, nodes, edges, and node media, and its later mount order keeps it above same-layer multi-selection resize chrome. It is visual-only and does not become the DOM hit target; the pointer router resolves ordinary retained-region moves geometrically and yields when the real target is a native connection or resize control. It remains strictly below body-level `z-index: 1000` Canvas floating toolbars and below dialogs, tooltips, and toasts. Grounding capture continues to exclude it through `data-canvas-grounding-exclude`.
+
+### 14.6 Selected Ink highlight
+
+Every stroke named by `sketchStrokeSelection` renders with an explicit `--color-info` SVG outline beneath its original Ink path. The 2px centred outline leaves approximately a 1px visible edge after the original Ink covers its inner half, with the same subtle 2px `--color-info-light` glow used by selected edges. It uses `vector-effect="non-scaling-stroke"` so the restrained highlight remains stable at every Canvas zoom while preserving the authored stroke color and geometry. The core outline must not rely solely on CSS `filter` or `drop-shadow`, whose SVG behavior is inconsistent on iPad Safari. Chat-reference hover uses the same painter at lower opacity.
+
+The highlight outline is interaction chrome, not Canvas content: it has no pointer events and carries `data-canvas-grounding-exclude`, so visible-relationship capture and Agent input retain only the original Ink. Selection changes update only the affected stroke painters; unselected strokes render no extra path.
+
+### 14.7 Ink toolbar placement
+
+The stroke-selection toolbar anchors above the retained Lasso polygon's bounding box, horizontally centred on the gesture range. It follows the polygon's live move delta and continues to use the shared `CanvasFloatingPopover` flip/shift behavior near viewport edges. A selected Frame, Image, or other large source never expands this presentation anchor or moves the toolbar away from the gesture the user just completed.
+
+The Lasso polygon controls presentation only. Mixed-selection grounding, source capture, new Question placement, and Agent context continue to use the actual selected stroke and whole-node source bounds. If a legacy/transient state has selected strokes but no retained polygon, the toolbar falls back to the selected-stroke bounds rather than disappearing.
+
+### 14.8 Grounding source parity
+
+The final captured `AgentChatContext.selectedNodes` tree is the canonical operand set for both request submission and grounding metadata. When a selected Frame recursively contains a partial Sketch selection, that Sketch appears once inside `Frame.children` and is not appended again as a top-level source. The grounding `selectedNodeIds` and `strokeSubsets` are derived from this frozen tree using the same top-level ordinary-node and recursive partial-Ink semantics enforced by the shared request schema.
+
+The client captures this tree before asynchronous screenshotting or Question creation and reuses it for dispatch. A selected Question anchor remains excluded even when nested in a selected Frame. This prevents Frame expansion, duplicate nested Ink, or later selection changes from producing `Visible Canvas grounding does not match the selection` while preserving strict server rejection of genuinely inconsistent metadata.
+
+### 14.9 Validation and acceptance
+
+The polish work is complete when all of the following hold:
+
+- Mouse, pen, and touch empty-Canvas taps clear the retained Lasso polygon and its complete mixed selection, while drags, pinch, controls, nodes, and panels do not.
+- Empty-Canvas dismissal cannot invalidate an attempt during pre-acceptance preparation, and acceptance still clears only the captured matching selection.
+- Send changes to a stable disabled spinner immediately, cannot dispatch twice, restores retry feedback on known rejection, and never claims Stop semantics before durable acceptance.
+- Finger taps and drags never select or move Sketch nodes, can still reach ordinary nodes under Ink, and otherwise navigate or clear as empty Canvas; mouse, pen, drawing, erasing, and Lasso behavior do not regress.
+- The retained Lasso loop is portalled above the viewport renderer, remains aligned through pan/zoom and stroke movement, and cannot be obscured by Frames, Images, or manually reordered nodes.
+- Every selected Ink stroke visibly retains its authored color with a screen-stable semantic outline; unselected strokes have no outline, and grounding capture excludes the highlight path.
+- The Ink toolbar remains centred above the retained Lasso range even when the Lasso also selects a much larger Frame or Image; source and grounding bounds remain unchanged.
+- Frame-nested partial Ink appears once in the final source tree, grounding metadata is derived from that tree, nested Question anchors remain excluded, and the resulting request passes the shared schema without weakening mismatch validation.
+- Unit coverage exercises pointer type rather than device detection, and touch-emulated Playwright coverage verifies the iPad-shaped workflows.
+
+### 14.10 Suggested commits
+
+1. `fix(canvas): polish lasso interactions`
+2. `fix(canvas): polish ink query submission`
+
+The first commit owns empty-Canvas dismissal, finger-on-Ink routing, retained-Lasso stacking, selected-stroke paint, and their focused tests and architecture updates. The second owns submission preparation feedback and guards, Lasso-relative toolbar placement, Ink Query integration coverage, and this proposal update. Files that contain both concerns must be staged by hunk so each commit builds and its focused tests pass independently. Tailnet proxy, local development-server configuration, and environment-only changes remain uncommitted local workspace state.
+
+## 15. Code Entry Points
 
 | Concern                                   | File                                                                                                                                                                           |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Stroke selection state                    | [`apps/web/src/store/gesturePreviewStore.ts`](../../apps/web/src/store/gesturePreviewStore.ts)                                                                                 |
+| Retained Lasso HUD                        | [`apps/web/src/components/Panels/Canvas/StrokeSelectionRegion.tsx`](../../apps/web/src/components/Panels/Canvas/StrokeSelectionRegion.tsx)                                     |
+| Selected Ink painter                      | [`apps/web/src/components/Nodes/sketch/SketchStrokePath.tsx`](../../apps/web/src/components/Nodes/sketch/SketchStrokePath.tsx)                                                 |
 | Stroke selection toolbar                  | [`apps/web/src/components/Panels/Canvas/FloatingToolbars/StrokeSelectionToolbar.tsx`](../../apps/web/src/components/Panels/Canvas/FloatingToolbars/StrokeSelectionToolbar.tsx) |
 | Lasso and pointer routing                 | [`apps/web/src/components/Panels/Canvas/Canvas.tsx`](../../apps/web/src/components/Panels/Canvas/Canvas.tsx)                                                                   |
 | Partial-stroke hit testing                | [`apps/web/src/components/Nodes/sketch/sketchHitTest.ts`](../../apps/web/src/components/Nodes/sketch/sketchHitTest.ts)                                                         |

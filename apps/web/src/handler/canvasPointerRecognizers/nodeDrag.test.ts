@@ -36,6 +36,14 @@ const selectedNode = {
   data: {},
 } as Node;
 
+const selectedSketch = {
+  id: 'sketch-1',
+  type: 'sketch',
+  selected: true,
+  position: { x: 30, y: 40 },
+  data: {},
+} as Node;
+
 const context = {
   inputMode: 'pen',
   interactivityLocked: false,
@@ -48,6 +56,7 @@ function pointer(
   pointerId: number,
   clientX: number,
   clientY: number,
+  target?: Element,
 ): PointerEvent {
   return {
     pointerId,
@@ -55,7 +64,7 @@ function pointer(
     isPrimary: true,
     clientX,
     clientY,
-    target: document.createElement('div'),
+    target: target ?? document.createElement('div'),
     preventDefault: vi.fn(),
     stopPropagation: vi.fn(),
   } as unknown as PointerEvent;
@@ -84,6 +93,23 @@ describe('createNodeDragRecognizer', () => {
       }),
     ).toBe(false);
   });
+
+  it.each(['react-flow__handle', 'react-flow__resize-control'])(
+    'does not claim a touch on a Sketch %s over a selected node',
+    (controlClass) => {
+      const recognizer = createNodeDragRecognizer();
+      const sketch = document.createElement('div');
+      sketch.className = 'react-flow__node react-flow__node-sketch';
+      const control = document.createElement('div');
+      control.className = controlClass;
+      sketch.append(control);
+
+      expect(recognizer.canClaim(pointer(5, 0, 0, control), context)).toBe(
+        false,
+      );
+      expect(nodeIdAtScreenPoint).not.toHaveBeenCalled();
+    },
+  );
 
   it('cancels a locked drag without running drop resolution', () => {
     const recognizer = createNodeDragRecognizer();
@@ -126,5 +152,28 @@ describe('createNodeDragRecognizer', () => {
     expect(onNodeDragStart).toHaveBeenCalledTimes(1);
     expect(cancelActiveNodeDrag).toHaveBeenCalledTimes(1);
     expect(onNodeDragStop).not.toHaveBeenCalled();
+  });
+
+  it('does not carry selected Sketch nodes in a finger drag', () => {
+    getState.mockImplementation(() => ({
+      nodes: [selectedNode, selectedSketch],
+      cancelActiveNodeDrag,
+      onNodeDragStart,
+      onNodeDragStop,
+      onNodesChange,
+    }));
+    const recognizer = createNodeDragRecognizer();
+    const down = pointer(4, 0, 0);
+
+    expect(recognizer.onDown(down, context)).toBe('claim');
+    recognizer.onMove?.(pointer(4, 9, 0), context);
+
+    expect(onNodeDragStart).toHaveBeenCalledWith(
+      expect.anything(),
+      selectedNode,
+      [selectedNode],
+    );
+    const options = nodeIdAtScreenPoint.mock.calls[0]?.[2];
+    expect(options?.excludeNodeIds.has(selectedSketch.id)).toBe(true);
   });
 });

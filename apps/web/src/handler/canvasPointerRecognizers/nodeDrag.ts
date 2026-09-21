@@ -1,7 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { isPanelTarget } from '@/components/Panels/Canvas/canvasInputPolicy';
+import {
+  isNodeControlTarget,
+  isPanelTarget,
+} from '@/components/Panels/Canvas/canvasInputPolicy';
 import { getDragActivationDistance } from '@/handler/canvasGestureSession';
 import { nodeIdAtScreenPoint } from '@/handler/canvasNodeAtPoint';
 import useCanvasStore from '@/store/canvasStore';
@@ -69,7 +72,15 @@ export function createNodeDragRecognizer(): PointerRecognizer<
 
   /** Node id under the point iff it exists AND is currently selected. */
   const selectedNodeIdAt = (event: PointerEvent): string | null => {
-    const id = nodeIdAtScreenPoint(event.clientX, event.clientY);
+    const sketchNodeIds = new Set(
+      useCanvasStore
+        .getState()
+        .nodes.filter((node) => node.type === 'sketch')
+        .map((node) => node.id),
+    );
+    const id = nodeIdAtScreenPoint(event.clientX, event.clientY, {
+      excludeNodeIds: sketchNodeIds,
+    });
     if (!id) return null;
     const node = useCanvasStore.getState().nodes.find((n) => n.id === id);
     return node?.selected ? id : null;
@@ -120,6 +131,7 @@ export function createNodeDragRecognizer(): PointerRecognizer<
       ctx.inputMode === 'pen' &&
       event.isPrimary &&
       !isPanelTarget(event.target as Element | null) &&
+      !isNodeControlTarget(event.target as Element | null) &&
       selectedNodeIdAt(event) !== null,
     onDown: (event) => {
       const primaryId = selectedNodeIdAt(event);
@@ -128,7 +140,7 @@ export function createNodeDragRecognizer(): PointerRecognizer<
       // to be one of the selected set by `canClaim`.
       const selected = useCanvasStore
         .getState()
-        .nodes.filter((n) => n.selected) as Node[];
+        .nodes.filter((n) => n.selected && n.type !== 'sketch') as Node[];
       gestureIds = selected.map((n) => n.id);
       draggedNodes = selected;
       primaryNode =
