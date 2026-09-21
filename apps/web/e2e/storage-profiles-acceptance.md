@@ -52,6 +52,12 @@ Defaults are `postgres` / `azure`, since those are the profiles under test. Port
 
 **Isolation.** Each run gets its own temp data dir, and — on Disk only, where a Workspace is a folder — its own temp Workspace. Teardown removes both and stops the backend. It deliberately does **not** delete what a remote backend holds: give a run against a shared service its own database and its own `HUABU_AZURE_BLOB_PREFIX`, and clean those up yourself.
 
+## What CI runs
+
+`ci.yml` runs this suite on every pull request as `storage-profile-e2e`, in two matrix legs: `disk/disk`, which needs nothing, and `postgres/azure`, the pairing Phase 6 ships. Each leg is its own runner, which is what the next section asks for anyway. Postgres comes from a service container. Azurite is started by hand instead, because the `azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck` command is not optional against this Azure SDK and a `services:` container cannot express a command; the job pins the digest the Testcontainers suite pins, so the two paths cannot drift. The job also creates the blob container, because `AzureBlobStore.init` validates a container rather than creating one — provisioning it is the operator's job, and on CI the job is the operator.
+
+Both legs report **1 passed, 1 skipped**. The storage test runs; the Agent test skips, because CI has no provider credentials. So what a green CI run establishes is the storage half and the restart harness, on both profiles. The Agent recovery claim — the third of the three above, and the one that justifies the suite's cost — is established only by a by-hand run with credentials staged.
+
 ## Run one profile at a time
 
 Driving the matrix as five back-to-back runs in one shell produced one failure that had nothing to do with storage: on the fifth run the Vite dev server answered a lazy route import with `Failed to fetch dynamically imported module: .../CanvasPage.tsx`, and the canvas never mounted. The same profile passed on its own moments later. Five dev servers started and torn down in sequence is the cause; `retries` stays at `0`, as in every other config here, so a flake is visible rather than papered over. Give each profile its own invocation, and its own `E2E_SERVER_PORT` / `E2E_WEB_PORT` if they overlap in time.
@@ -60,4 +66,5 @@ Driving the matrix as five back-to-back runs in one shell produced one failure t
 
 - One Server process at a time. Nothing here exercises two Servers against one database.
 - The Agent test asserts that history came back and that the model could use it. It does not assert a particular transcript; a provider is free to word its answer differently, so the assertions are on the codeword and the string the first turn established, not on the model's phrasing.
+- A green CI run does not establish the Agent recovery claim. CI has no provider credentials, so that test skips there; see "What CI runs".
 - Blob cleanup on Space deletion is covered by the storage suites, not here.
