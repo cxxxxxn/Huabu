@@ -1166,8 +1166,8 @@ export function createAgenetesInstance(
           : undefined;
         const tailStartsGroup = tail !== undefined && tail.request !== null;
         const persistedLimit =
-          tailStartsGroup === true
-            ? Math.max(1, options.limit - 1)
+          tailStartsGroup && options.limit > 1
+            ? options.limit - 1
             : options.limit;
         const page = await turnStore.page(namespace, threadId, {
           limit: persistedLimit,

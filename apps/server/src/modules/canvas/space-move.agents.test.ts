@@ -403,10 +403,14 @@ forEachProductProfile((profile, label) => {
         if (reason === 'invalid-binding') {
           const spec = await runtime.record(canvasAcpNamespace(SOURCE), THREAD);
           assert.ok(spec);
-          conversationThreadStore.upsert(canvasAcpNamespace(SOURCE), THREAD, {
-            ...spec,
-            spec: { ...spec.spec, threadId: 'mismatched-test-thread' },
-          });
+          await conversationThreadStore.upsert(
+            canvasAcpNamespace(SOURCE),
+            THREAD,
+            {
+              ...spec,
+              spec: { ...spec.spec, threadId: 'mismatched-test-thread' },
+            },
+          );
         }
         try {
           await expect(move()).rejects.toMatchObject({
@@ -538,7 +542,7 @@ forEachProductProfile((profile, label) => {
       vi.spyOn(conversationThreadStore, 'upsert').mockImplementation(
         (namespace, threadId, record) => {
           if (namespace.name === DESTINATION) throw new Error(PRIVATE_ERROR);
-          upsert(namespace, threadId, record);
+          return upsert(namespace, threadId, record);
         },
       );
       await expect(move()).rejects.toMatchObject({
@@ -550,7 +554,7 @@ forEachProductProfile((profile, label) => {
 
     it('rejects missing canonical state on a Bound Agent without closing', async () => {
       await seed();
-      conversationThreadStore.delete(canvasAcpNamespace(SOURCE), THREAD);
+      await conversationThreadStore.delete(canvasAcpNamespace(SOURCE), THREAD);
       await expect(move()).rejects.toMatchObject({
         code: 'MOVE_AGENT_HISTORY_INVALID',
       });

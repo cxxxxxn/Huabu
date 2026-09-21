@@ -38,11 +38,32 @@ export function materializeHistory(
   persistedTurns: readonly PersistedTurn[],
   tailRecords: readonly EventLogRecord[],
 ): ObservedAgentTurn[] {
-  const covers = (seq: number): boolean =>
-    persistedTurns.some(
-      ({ seqStart, seqEnd }) => seq >= seqStart && seq <= seqEnd,
-    );
-  const uncovered = tailRecords.filter((record) => !covers(record.seq));
+  if (tailRecords.length === 0) return persistedTurns.map(({ turn }) => turn);
+
+  // An early interrupted turn makes the tail include later committed turns.
+  // Merge their coverage once, then walk the seq-ordered records and ranges
+  // together instead of searching every persisted turn for every record.
+  const ranges: Array<{ seqStart: number; seqEnd: number }> = [];
+  const sorted = persistedTurns
+    .map(({ seqStart, seqEnd }) => ({ seqStart, seqEnd }))
+    .filter(({ seqStart, seqEnd }) => seqStart <= seqEnd)
+    .sort((a, b) => a.seqStart - b.seqStart);
+  for (const range of sorted) {
+    const last = ranges.at(-1);
+    if (last && range.seqStart <= last.seqEnd + 1) {
+      last.seqEnd = Math.max(last.seqEnd, range.seqEnd);
+    } else {
+      ranges.push(range);
+    }
+  }
+  let rangeIndex = 0;
+  const uncovered = tailRecords.filter(({ seq }) => {
+    while (rangeIndex < ranges.length && ranges[rangeIndex]!.seqEnd < seq) {
+      rangeIndex += 1;
+    }
+    const range = ranges[rangeIndex];
+    return range === undefined || seq < range.seqStart;
+  });
   if (uncovered.length === 0) return persistedTurns.map(({ turn }) => turn);
 
   // One run per uncommitted turn: a `turn_start` opens a run, and records

@@ -246,6 +246,33 @@ describe('Agenetes two-tier conversation log (M5.6/C3)', () => {
     expect(completed.groups[1]!.isActive).toBeUndefined();
   });
 
+  it.each([0, -1, 0.5, 1.5, NaN, Infinity])(
+    'rejects invalid page limit %s with and without an active tail',
+    async (limit) => {
+      const inst = mount();
+      const handle = await inst.create(deployment);
+      raw!.scripts.push({ events: [text('live')], result: [] });
+      const gen = handle.run(
+        { type: 'user_text', content: 'question' } as never,
+        {} as never,
+      );
+      await gen.next();
+
+      try {
+        for (const withTail of [false, true]) {
+          await expect(
+            inst.historyPage(ns, threadId, { limit, withTail }),
+          ).rejects.toThrow('History page limit must be a positive integer');
+        }
+      } finally {
+        for await (const _ of gen) {
+          // Finish the fold even if an assertion fails.
+        }
+        await inst.close(threadId);
+      }
+    },
+  );
+
   it('attaches a null-request active tail without consuming another display slot', async () => {
     const inst = mount();
     const handle = await inst.create(deployment);

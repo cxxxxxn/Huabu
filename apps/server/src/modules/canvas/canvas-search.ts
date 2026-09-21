@@ -248,10 +248,10 @@ function buildThreadHaystack(
 
 /**
  * Emit all conversation matches for one threaded node. Reads the node's
- * chat thread synchronously (one `<threadId>.turns.jsonl` read), so the
- * caller must gate this on `fields.has('conversation')` and the global
- * limit before invoking. No-op when the node owns no thread or the
- * thread is empty.
+ * chat thread asynchronously through Agenetes and the configured storage
+ * backend. The caller must gate this on `fields.has('conversation')` and
+ * the global limit before invoking. No-op when the node owns no thread
+ * or the thread is empty.
  */
 async function scanNodeConversation(
   node: SearchableNode,

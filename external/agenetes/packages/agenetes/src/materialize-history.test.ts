@@ -137,6 +137,74 @@ describe('materializeHistory', () => {
     ]);
   });
 
+  it('handles overlapping, nested, and empty ranges without covering gaps', () => {
+    const persisted = [
+      { ...completed, seqStart: 7, seqEnd: 8 },
+      { ...completed, seqStart: 2, seqEnd: 5 },
+      { ...completed, seqStart: 3, seqEnd: 3 },
+      { ...completed, seqStart: 4, seqEnd: 5 },
+      { ...completed, seqStart: 6, seqEnd: 5 },
+    ];
+    const original = [...persisted];
+    const records: EventLogRecord[] = Array.from({ length: 9 }, (_, i) => ({
+      seq: i + 1,
+      ts: i + 1,
+      kind: 'turn_start',
+      request: { type: 'user_text', content: `request ${i + 1}` },
+    }));
+
+    const history = materializeHistory(persisted, records);
+
+    expect(history.filter((turn) => turn.isIncomplete)).toEqual(
+      [1, 6, 9].map((seq) => ({
+        request: { type: 'user_text', content: `request ${seq}` },
+        transcript: [],
+        isIncomplete: true,
+      })),
+    );
+    expect(history).toHaveLength(persisted.length + 3);
+    expect(persisted).toEqual(original);
+  });
+
+  it('does not rescan every persisted range for each record after an early gap', () => {
+    const count = 1_000;
+    let rangeReads = 0;
+    const persisted: PersistedTurn[] = Array.from(
+      { length: count },
+      (_, i) => ({
+        turn: completed.turn,
+        get seqStart() {
+          rangeReads += 1;
+          return i * 2 + 3;
+        },
+        get seqEnd() {
+          rangeReads += 1;
+          return i * 2 + 4;
+        },
+      }),
+    );
+    const records: EventLogRecord[] = Array.from(
+      { length: count * 2 + 2 },
+      (_, i) => ({
+        seq: i + 1,
+        ts: i + 1,
+        event: { type: 'text_delta', data: { content: 'text' } },
+      }),
+    );
+
+    const history = materializeHistory(persisted, records);
+
+    expect(history).toHaveLength(count + 1);
+    expect(history[0]).toEqual({
+      request: null,
+      transcript: [{ type: 'text', data: { content: 'texttext' } }],
+      isIncomplete: true,
+    });
+    // Count range access rather than wall-clock time to catch quadratic work
+    // without making the regression depend on machine speed.
+    expect(rangeReads).toBeLessThan(count * 20);
+  });
+
   it('reads only the suffix when every turn committed', () => {
     // The ordinary case must not start reading the whole log: with contiguous
     // ranges the first uncovered seq is simply the next one.
