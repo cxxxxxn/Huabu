@@ -97,7 +97,10 @@ describe('storage module tree', () => {
       'profile.test.ts',
       'profile.ts',
       'space-lifecycle-admission.ts',
+      'storage.delete-space.remote.test.ts',
+      'storage.lifecycle.remote.test.ts',
       'storage.ts',
+      'storage.workspaces.remote.test.ts',
       'testing.ts',
       'workspace-activation.test.ts',
     ]);
@@ -202,6 +205,36 @@ describe('storage dependency direction', () => {
       }
     }
     expect(violations).toEqual([]);
+  });
+
+  /**
+   * One process, one connection to each backend — decided in one file.
+   *
+   * The composition root does not merely pick an adapter, it holds the live
+   * connection every part of the process borrows, and for the SQL backends
+   * that is load-bearing rather than tidy. A context is also the scope that
+   * fences Space deletion against in-flight writes, so a second one opened
+   * against the same database would let one context delete what the other had
+   * just acknowledged; a second SQLite connection would be a second writer to
+   * one file. Opening a connection somewhere else is how that guarantee is
+   * lost, and it looks entirely reasonable at the call site — which is why the
+   * census is here rather than in a comment.
+   *
+   * Adapters are exempt where they construct their own context from a caller's
+   * configuration, and tests are exempt for the same reason they may name an
+   * adapter: exercising one means opening it.
+   */
+  it('opens a shared backend connection only in the composition root', () => {
+    const openers = sourceFiles
+      .filter((f) => !f.endsWith('.test.ts'))
+      .filter((f) => !f.startsWith('modules/storage/backends/'))
+      .filter((f) =>
+        /new (?:Postgres|Sqlite)StoreContext\b|\bAzureBlobStore\.fromEnvironment\b/.test(
+          read(f),
+        ),
+      );
+
+    expect(openers).toEqual(['modules/storage/storage.ts']);
   });
 
   /**
