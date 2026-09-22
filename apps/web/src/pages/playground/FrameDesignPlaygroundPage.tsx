@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 
 import {
   ACCENT_PALETTE,
@@ -9,20 +9,23 @@ import {
   type AccentToken,
   type SpaceInstructionFrameKind,
 } from '@huabu/shared';
+
+import { ColorPicker } from '@/components/Common/ColorPicker';
+import { Select } from '@/components/Common/Select';
 import {
   FRAME_DESIGN_CONFIG,
-  frameResponsiveMetricsForSize,
-  type FrameResponsiveMetrics,
-  type FrameResponsiveTier,
-} from '@huabu/shared/canvas-engine';
-
-import { Button } from '@/components/Common/Button';
-import { ColorPicker } from '@/components/Common/ColorPicker';
-import { RangeSlider } from '@/components/Common/RangeSlider';
-import { Select } from '@/components/Common/Select';
+  frameVisualMetricsForSize as frameResponsiveMetricsForSize,
+  type FrameVisualMetrics as FrameResponsiveMetrics,
+} from '@/components/Nodes/frame/frameDesign';
 import { FrameHeader } from '@/components/Nodes/frame/FrameHeader';
 import { getFrameHeaderMetrics } from '@/components/Nodes/frame/frameHeaderMetrics';
 import { FrameSurface } from '@/components/Nodes/frame/FrameSurface';
+
+import { NoteDesignDraft } from './NoteDesignDraft';
+import { SelectionFramePlayground } from './SelectionFramePlayground';
+import { ZoomReadabilityStudy } from './ZoomReadabilityStudy';
+
+import type { FrameResponsiveTier } from '@huabu/shared/canvas-engine';
 
 type PreviewLayout = 'free' | 'column' | 'row' | 'grid';
 type PreviewKind = 'plain' | SpaceInstructionFrameKind;
@@ -226,9 +229,9 @@ function FrameSpecimen({
   const resolvedAccent = resolveAccent(accent);
   const headerMetrics = getFrameHeaderMetrics(
     metrics.contentSpacing,
-    metrics.headerInset,
     width,
     metrics.titleFontSize,
+    metrics.headerInset,
   );
 
   return (
@@ -273,17 +276,6 @@ function FrameSpecimen({
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-24">
-      <dt className="text-fg-subtle text-xs">{label}</dt>
-      <dd className="text-fg-default mt-0.5 text-sm font-semibold tabular-nums">
-        {value}
-      </dd>
-    </div>
-  );
-}
-
 function Section({
   title,
   description,
@@ -305,31 +297,9 @@ function Section({
 }
 
 export default function FrameDesignPlaygroundPage() {
-  const [width, setWidth] = useState(1380);
-  const [height, setHeight] = useState(876);
   const [layout, setLayout] = useState<PreviewLayout>('grid');
   const [kind, setKind] = useState<PreviewKind>('plain');
   const [accent, setAccent] = useState<AccentToken>('purple');
-  const metrics = frameResponsiveMetricsForSize(width, height);
-  const tier = resolveTier(metrics);
-  const effectiveSize = useMemo(() => {
-    const shortSide = Math.min(width, height);
-    const longSide = Math.max(width, height);
-    return Math.round(
-      Math.sqrt(
-        shortSide *
-          Math.min(
-            longSide,
-            shortSide * FRAME_DESIGN_CONFIG.query.maxAspectRatioContribution,
-          ),
-      ),
-    );
-  }, [height, width]);
-
-  const applyPreset = (preset: FramePreset) => {
-    setWidth(preset.width);
-    setHeight(preset.height);
-  };
   const selectAccent = (token: string) => {
     const option = ACCENT_PALETTE.find(
       (candidate) => candidate.token === token,
@@ -346,128 +316,49 @@ export default function FrameDesignPlaygroundPage() {
               Canvas design playground
             </h1>
             <p className="text-fg-muted mt-1 text-xs">
-              Production references and proposal drafts for canvas nodes.
+              Production canvas surfaces and responsive design proposals.
             </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {FRAME_PRESETS.map((preset) => (
-              <Button
-                key={preset.id}
-                variant={tier === preset.id ? 'solid' : 'outline'}
-                size="sm"
-                onClick={() => applyPreset(preset)}
-              >
-                {TIER_LABELS[preset.id]}
-              </Button>
-            ))}
           </div>
         </div>
       </header>
 
       <main className="mx-auto flex max-w-7xl flex-col gap-8 px-6 py-8">
         <Section
-          title="Interactive Frame"
-          description="Resize the authored geometry and inspect the same deterministic tier resolution used by the canvas."
+          title="Frame"
+          description="Compact, Regular, and Large presets using production Frame surfaces and headers. Accent, layout, and header controls apply to all three."
         >
-          <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_18rem]">
-            <div className="bg-bg-default flex min-h-[430px] items-center justify-center overflow-auto rounded-lg p-6">
-              <FrameSpecimen
-                width={width}
-                height={height}
-                layout={layout}
-                accent={accent}
-                kind={kind}
+          <div className="mb-6 flex flex-wrap items-end gap-6">
+            <div>
+              <div className="text-fg-muted mb-2 text-xs font-medium">
+                Accent
+              </div>
+              <ColorPicker
+                colors={ACCENT_PALETTE}
+                activeToken={accent}
+                onSelect={selectAccent}
               />
             </div>
-
-            <aside className="flex flex-col gap-6">
-              <div className="space-y-4">
-                <div>
-                  <div className="text-fg-muted mb-2 text-xs font-medium">
-                    Width
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <RangeSlider
-                      value={width}
-                      min={480}
-                      max={2800}
-                      step={20}
-                      size="md"
-                      label="Frame width"
-                      onChange={setWidth}
-                    />
-                    <span className="text-fg-subtle text-xs">px</span>
-                  </div>
-                </div>
-                <div>
-                  <div className="text-fg-muted mb-2 text-xs font-medium">
-                    Height
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <RangeSlider
-                      value={height}
-                      min={320}
-                      max={2000}
-                      step={20}
-                      size="md"
-                      label="Frame height"
-                      onChange={setHeight}
-                    />
-                    <span className="text-fg-subtle text-xs">px</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="flex flex-col gap-1.5">
-                  <span className="text-fg-muted text-xs">Layout</span>
-                  <Select
-                    options={LAYOUT_OPTIONS}
-                    value={layout}
-                    onChange={setLayout}
-                    ariaLabel="Frame layout"
-                    className="w-full"
-                  />
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <span className="text-fg-muted text-xs">Header</span>
-                  <Select
-                    options={KIND_OPTIONS}
-                    value={kind}
-                    onChange={setKind}
-                    ariaLabel="Frame header kind"
-                    className="w-full"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <div className="text-fg-muted mb-2 text-xs font-medium">
-                  Accent
-                </div>
-                <ColorPicker
-                  colors={ACCENT_PALETTE}
-                  activeToken={accent}
-                  onSelect={selectAccent}
-                />
-              </div>
-
-              <dl className="border-edge-default grid grid-cols-2 gap-4 border-t pt-5">
-                <Metric label="Tier" value={TIER_LABELS[tier]} />
-                <Metric label="Effective size" value={`${effectiveSize}px`} />
-                <Metric label="Title" value={`${metrics.titleFontSize}px`} />
-                <Metric label="Header" value={`${metrics.headerInset}px`} />
-                <Metric label="Radius" value={`${metrics.borderRadius}px`} />
-                <Metric label="Spacing" value={`${metrics.contentSpacing}px`} />
-              </dl>
-            </aside>
+            <div className="flex min-w-32 flex-col gap-1.5">
+              <span className="text-fg-muted text-xs">Layout</span>
+              <Select
+                options={LAYOUT_OPTIONS}
+                value={layout}
+                onChange={setLayout}
+                ariaLabel="Frame layout"
+                className="w-full"
+              />
+            </div>
+            <div className="flex min-w-32 flex-col gap-1.5">
+              <span className="text-fg-muted text-xs">Header</span>
+              <Select
+                options={KIND_OPTIONS}
+                value={kind}
+                onChange={setKind}
+                ariaLabel="Frame header kind"
+                className="w-full"
+              />
+            </div>
           </div>
-        </Section>
-
-        <Section
-          title="Responsive scale"
-          description="The three production tiers shown with representative authored dimensions and their exact configured tokens."
-        >
           <div className="grid gap-5 lg:grid-cols-3">
             {FRAME_PRESETS.map((preset) => {
               const presetMetrics = frameResponsiveMetricsForSize(
@@ -483,9 +374,9 @@ export default function FrameDesignPlaygroundPage() {
                     <FrameSpecimen
                       width={preset.width}
                       height={preset.height}
-                      layout="grid"
-                      accent="white"
-                      kind="plain"
+                      layout={layout}
+                      accent={accent}
+                      kind={kind}
                       maxPreviewWidth={300}
                       maxPreviewHeight={210}
                     />
@@ -513,32 +404,24 @@ export default function FrameDesignPlaygroundPage() {
         </Section>
 
         <Section
-          title="Layout modes"
-          description="The same Regular Frame tokens applied across the four supported child-placement contracts."
+          title="Note"
+          description="Compact, Regular, and Large presets using production Note rendering, typography, and card surfaces."
         >
-          <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-            {LAYOUT_OPTIONS.map((option) => (
-              <article
-                key={option.value}
-                className="border-edge-default bg-bg-default overflow-hidden rounded-lg border"
-              >
-                <div className="flex min-h-56 items-center justify-center overflow-auto p-4">
-                  <FrameSpecimen
-                    width={1200}
-                    height={900}
-                    layout={option.value}
-                    accent="teal"
-                    kind="plain"
-                    maxPreviewWidth={250}
-                    maxPreviewHeight={180}
-                  />
-                </div>
-                <h3 className="border-edge-default bg-surface text-fg-default border-t px-4 py-3 text-sm font-semibold">
-                  {option.label}
-                </h3>
-              </article>
-            ))}
-          </div>
+          <NoteDesignDraft />
+        </Section>
+
+        <Section
+          title="Zoom readability"
+          description="Original scaling versus progressive titles, starting with 400px nodes at 50% zoom. Compare independent nodes, a Frame, and dense groups at the same scale. Playground proposal only."
+        >
+          <ZoomReadabilityStudy />
+        </Section>
+
+        <Section
+          title="Selection frame"
+          description="Interactive proposal: a stable external connector, image corner scaling, and text width controls. Production selection behavior is unchanged."
+        >
+          <SelectionFramePlayground />
         </Section>
       </main>
     </div>
