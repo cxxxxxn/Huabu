@@ -42,7 +42,7 @@ describe('responsive Frame geometry', () => {
       const result = applyStructuredFrameRelayout(initial, ['f']).nodes;
       expect(result[0].style).toEqual(initial[0].style);
       expect(Math.min(...result.slice(1).map((node) => node.position.y))).toBe(
-        128,
+        152,
       );
       expect(Math.min(...result.slice(1).map((node) => node.position.x))).toBe(
         40,

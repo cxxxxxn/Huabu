@@ -2,15 +2,13 @@
 // Licensed under the MIT license.
 
 export interface FrameResponsiveMetrics {
-  titleFontSize: number;
   headerInset: number;
-  borderRadius: number;
   contentSpacing: number;
 }
 
 export type FrameResponsiveTier = 'compact' | 'regular' | 'large';
 
-interface FrameDesignConfig {
+interface FrameLayoutConfig {
   query: {
     fallbackWidth: number;
     fallbackHeight: number;
@@ -22,35 +20,12 @@ interface FrameDesignConfig {
       maxEffectiveSize: number;
     }
   >;
-  header: {
-    fallbackInsetX: number;
-    fallbackInsetY: number;
-    minFontSize: number;
-    minWidth: number;
-    lineHeight: number;
-    verticalPadding: number;
-    edgeInset: number;
-    gapRatio: number;
-    minGap: number;
-    markerSizeRatio: number;
-  };
-  instructionBadge: {
-    fontRatio: number;
-    minFontSize: number;
-    maxFontSize: number;
-    heightRatio: number;
-    paddingInlineRatio: number;
-  };
 }
 
 /**
- * Canonical Frame layout and visual scale.
- *
- * Other node types may reuse individual ratios or tier values as references,
- * but should not import Frame semantics such as the title inset unless they
- * are also containers with an internal header.
+ * Frame geometry shared by browser gestures and server-side commands.
  */
-export const FRAME_DESIGN_CONFIG = {
+export const FRAME_LAYOUT_CONFIG = {
   query: {
     fallbackWidth: 1200,
     fallbackHeight: 900,
@@ -60,48 +35,30 @@ export const FRAME_DESIGN_CONFIG = {
     {
       id: 'compact',
       maxEffectiveSize: 900,
-      titleFontSize: 24,
-      headerInset: 56,
-      borderRadius: 16,
+      headerInset: 64,
       contentSpacing: 20,
     },
     {
       id: 'regular',
       maxEffectiveSize: 1800,
-      titleFontSize: 36,
-      headerInset: 80,
-      borderRadius: 24,
+      headerInset: 96,
       contentSpacing: 28,
     },
     {
       id: 'large',
       maxEffectiveSize: Number.POSITIVE_INFINITY,
-      titleFontSize: 64,
-      headerInset: 128,
-      borderRadius: 32,
+      headerInset: 152,
       contentSpacing: 40,
     },
   ],
-  header: {
-    fallbackInsetX: 16,
-    fallbackInsetY: 64,
-    minFontSize: 12,
-    minWidth: 48,
-    lineHeight: 1.2,
-    verticalPadding: 8,
-    edgeInset: 8,
-    gapRatio: 0.4,
-    minGap: 4,
-    markerSizeRatio: 0.42,
-  },
-  instructionBadge: {
-    fontRatio: 0.42,
-    minFontSize: 12,
-    maxFontSize: 20,
-    heightRatio: 1.8,
-    paddingInlineRatio: 0.65,
-  },
-} as const satisfies FrameDesignConfig;
+} as const satisfies FrameLayoutConfig;
+
+// Persisted creation default, also used when rendering legacy missing accents.
+export const FRAME_DEFAULT_ACCENT = 'white';
+
+export function frameAccentToken(accent: string | null | undefined): string {
+  return accent || FRAME_DEFAULT_ACCENT;
+}
 
 /**
  * Select Frame visual tokens from its own bounded geometric mean. The longer
@@ -109,11 +66,8 @@ export const FRAME_DESIGN_CONFIG = {
  * larger container can advance while an extreme strip cannot inflate the
  * visual hierarchy indefinitely.
  */
-export function frameResponsiveMetricsForSize(
-  frameWidth: number,
-  frameHeight: number,
-): FrameResponsiveMetrics {
-  const { query, tiers } = FRAME_DESIGN_CONFIG;
+function frameLayoutTierForSize(frameWidth: number, frameHeight: number) {
+  const { query, tiers } = FRAME_LAYOUT_CONFIG;
   const safeWidth =
     Number.isFinite(frameWidth) && frameWidth > 0
       ? frameWidth
@@ -132,10 +86,23 @@ export function frameResponsiveMetricsForSize(
     tiers.find(({ maxEffectiveSize }) => effectiveSize < maxEffectiveSize) ??
     tiers[tiers.length - 1];
 
+  return tier;
+}
+
+export function frameResponsiveTierForSize(
+  width: number,
+  height: number,
+): FrameResponsiveTier {
+  return frameLayoutTierForSize(width, height).id;
+}
+
+export function frameResponsiveMetricsForSize(
+  width: number,
+  height: number,
+): FrameResponsiveMetrics {
+  const tier = frameLayoutTierForSize(width, height);
   return {
-    titleFontSize: tier.titleFontSize,
     headerInset: tier.headerInset,
-    borderRadius: tier.borderRadius,
     contentSpacing: tier.contentSpacing,
   };
 }
@@ -172,22 +139,18 @@ export function resolveFrameResponsiveLayout<
   T extends { frameSize: { width: number; height: number } },
 >(layout: (metrics: FrameResponsiveMetrics) => T): T {
   let result: T | undefined;
-  for (const metrics of FRAME_DESIGN_CONFIG.tiers) {
+  for (const metrics of FRAME_LAYOUT_CONFIG.tiers) {
     result = layout({
-      titleFontSize: metrics.titleFontSize,
       headerInset: metrics.headerInset,
       contentSpacing: metrics.contentSpacing,
-      borderRadius: metrics.borderRadius,
     });
     const actual = frameResponsiveMetricsForSize(
       result.frameSize.width,
       result.frameSize.height,
     );
     if (
-      actual.titleFontSize === metrics.titleFontSize &&
       actual.headerInset === metrics.headerInset &&
-      actual.contentSpacing === metrics.contentSpacing &&
-      actual.borderRadius === metrics.borderRadius
+      actual.contentSpacing === metrics.contentSpacing
     )
       return result;
   }

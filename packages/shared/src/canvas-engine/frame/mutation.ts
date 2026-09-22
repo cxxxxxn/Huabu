@@ -11,7 +11,10 @@
  * All functions are pure: input arrays are never mutated.
  */
 
-import { frameResponsiveMetricsForContentSize } from './design.js';
+import {
+  FRAME_DEFAULT_ACCENT,
+  frameResponsiveMetricsForContentSize,
+} from './design.js';
 import {
   checkShouldUnframe,
   createRectGetter,
@@ -265,6 +268,7 @@ export function frameNodes(
     position: groupPos,
     data: {
       label: options.label ?? 'Frame',
+      style: { accent: FRAME_DEFAULT_ACCENT },
     },
     style: { width, height },
     zIndex: -1,
@@ -334,7 +338,11 @@ export function frameNodesInRect(
     id: frameId,
     type: 'frame',
     position: { x, y },
-    data: { type: 'frame', label: 'Frame' },
+    data: {
+      type: 'frame',
+      label: 'Frame',
+      style: { accent: FRAME_DEFAULT_ACCENT },
+    },
     style: {
       width,
       height,

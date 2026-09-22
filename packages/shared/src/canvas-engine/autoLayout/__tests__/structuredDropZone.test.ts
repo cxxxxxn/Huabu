@@ -211,7 +211,7 @@ describe('describeStructuredDropZone context', () => {
     const zone = describeStructuredDropZone(
       nodes,
       'frame',
-      { x: 152, y: 136 },
+      { x: 152, y: 144 },
       'grid',
       2,
       movedDragged,
@@ -254,7 +254,7 @@ describe('describeStructuredDropZone context', () => {
     const zone = describeStructuredDropZone(
       nodes,
       'frame',
-      { x: 152, y: 136 },
+      { x: 152, y: 144 },
       'grid',
       2,
       movedDragged,
@@ -354,7 +354,7 @@ describe('describeStructuredDropZone context', () => {
     const zone = describeStructuredDropZone(
       nodes,
       'frame',
-      { x: 152, y: 136 },
+      { x: 152, y: 144 },
       'grid',
       2,
       { ...dragged, x: 112, y: 72 },
@@ -362,7 +362,7 @@ describe('describeStructuredDropZone context', () => {
 
     // The swap is expressed by the reflow itself — the occupant slides
     // into the cell the dragged node vacated.
-    expect(zone?.reflow).toContainEqual({ id: 'occupant', x: 20, y: 56 });
+    expect(zone?.reflow).toContainEqual({ id: 'occupant', x: 20, y: 64 });
   });
 });
 
@@ -379,7 +379,7 @@ describe('describeStructuredDropZone reflow', () => {
     const zone = describeStructuredDropZone(
       nodes,
       'frame',
-      { x: 152, y: 136 },
+      { x: 152, y: 144 },
       'grid',
       2,
       movedDragged,

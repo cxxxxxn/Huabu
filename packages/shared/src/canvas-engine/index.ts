@@ -120,7 +120,10 @@ export {
   medianOfChildExtents,
 } from './utils/constants.js';
 export {
-  FRAME_DESIGN_CONFIG,
+  FRAME_LAYOUT_CONFIG,
+  FRAME_DEFAULT_ACCENT,
+  frameResponsiveTierForSize,
+  frameAccentToken,
   frameResponsiveMetricsForContentSize,
   frameResponsiveMetricsForSize,
   resolveFrameResponsiveLayout,
@@ -140,6 +143,7 @@ export {
   HEIGHT_QUANTIZATION_STEP,
   NODE_SHELL_INSET,
   autoHeightKey,
+  autoHeightContentWidth,
   contentScaleFor,
   getHeightPolicy,
   getHeightRefWidth,

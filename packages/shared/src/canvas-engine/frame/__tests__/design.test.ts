@@ -4,18 +4,27 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  FRAME_DESIGN_CONFIG,
+  FRAME_LAYOUT_CONFIG,
+  FRAME_DEFAULT_ACCENT,
+  frameAccentToken,
   frameResponsiveMetricsForContentSize,
   frameResponsiveMetricsForSize,
 } from '../design.js';
 
 describe('Frame design config', () => {
   it('keeps the public scale explicit and configurable', () => {
-    expect(FRAME_DESIGN_CONFIG.tiers).toMatchObject([
+    expect(FRAME_LAYOUT_CONFIG.tiers).toMatchObject([
       { id: 'compact', maxEffectiveSize: 900 },
       { id: 'regular', maxEffectiveSize: 1800 },
       { id: 'large', maxEffectiveSize: Number.POSITIVE_INFINITY },
     ]);
+  });
+
+  it('normalizes missing legacy accents to the canonical white default', () => {
+    expect(FRAME_DEFAULT_ACCENT).toBe('white');
+    expect(frameAccentToken(null)).toBe('white');
+    expect(frameAccentToken(undefined)).toBe('white');
+    expect(frameAccentToken('purple')).toBe('purple');
   });
 
   it.each([
@@ -23,9 +32,7 @@ describe('Frame design config', () => {
       600,
       1800,
       {
-        titleFontSize: 24,
-        headerInset: 56,
-        borderRadius: 16,
+        headerInset: 64,
         contentSpacing: 20,
       },
     ],
@@ -33,9 +40,7 @@ describe('Frame design config', () => {
       1380,
       876,
       {
-        titleFontSize: 36,
-        headerInset: 80,
-        borderRadius: 24,
+        headerInset: 96,
         contentSpacing: 28,
       },
     ],
@@ -43,9 +48,7 @@ describe('Frame design config', () => {
       2400,
       1800,
       {
-        titleFontSize: 64,
-        headerInset: 128,
-        borderRadius: 32,
+        headerInset: 152,
         contentSpacing: 40,
       },
     ],
@@ -58,27 +61,21 @@ describe('Frame design config', () => {
 
   it('uses the regular configuration when dimensions are unavailable', () => {
     expect(frameResponsiveMetricsForSize(0, 0)).toEqual({
-      titleFontSize: 36,
-      headerInset: 80,
-      borderRadius: 24,
+      headerInset: 96,
       contentSpacing: 28,
     });
   });
 
   it('resolves a Hug Frame tier from its final content-driven box', () => {
     expect(frameResponsiveMetricsForContentSize(1000, 650)).toEqual({
-      titleFontSize: 24,
-      headerInset: 56,
-      borderRadius: 16,
+      headerInset: 64,
       contentSpacing: 20,
     });
   });
 
   it('caps the contribution of an extreme aspect ratio', () => {
     expect(frameResponsiveMetricsForSize(5000, 600)).toEqual({
-      titleFontSize: 24,
-      headerInset: 56,
-      borderRadius: 16,
+      headerInset: 64,
       contentSpacing: 20,
     });
   });

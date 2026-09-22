@@ -115,16 +115,16 @@ describe('Container fit', () => {
     const fit = computeContainerFit(nodes, 'frame');
     expect(fit).toEqual({
       containerId: 'frame',
-      position: { x: 100, y: 74 },
+      position: { x: 100, y: 66 },
       width: 80,
-      height: 96,
+      height: 104,
     });
     if (!fit) throw new Error('Expected Container fit');
 
     const applied = applyContainerFit(nodes, fit);
     expect(
       applied.find((candidate) => candidate.id === 'child')?.position,
-    ).toEqual({ x: 20, y: 56 });
+    ).toEqual({ x: 20, y: 64 });
   });
 
   it('supports asymmetric insets and preserves child absolute position', () => {
