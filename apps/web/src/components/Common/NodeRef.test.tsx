@@ -25,6 +25,7 @@ describe('NodeRef canvas navigation', () => {
   const initialState = useCanvasStore.getState();
 
   beforeEach(() => {
+    vi.useFakeTimers();
     container = document.createElement('div');
     wrapper = document.createElement('div');
     Object.defineProperties(wrapper, {
@@ -42,6 +43,8 @@ describe('NodeRef canvas navigation', () => {
     container.remove();
     wrapper.remove();
     useCanvasStore.setState(initialState);
+    vi.clearAllTimers();
+    vi.useRealTimers();
   });
 
   it.each([
@@ -80,6 +83,7 @@ describe('NodeRef canvas navigation', () => {
         container.querySelector<HTMLElement>('[role="button"]')?.click(),
       );
       expect(selectNodes).toHaveBeenCalledWith(['target']);
+      act(() => vi.advanceTimersToNextFrame());
       if (expectedX === null) {
         expect(setViewport).not.toHaveBeenCalled();
       } else {

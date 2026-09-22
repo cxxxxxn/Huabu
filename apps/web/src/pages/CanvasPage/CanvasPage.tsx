@@ -200,7 +200,7 @@ export default function CanvasPage() {
     canvas.selectNodes([node.id], false);
     if (node.type === 'question') {
       if (typeof node.data.threadId === 'string' && node.data.threadId) {
-        const tabId = openPreviewNode(node.id);
+        const tabId = openPreviewNode(node.id, { transient: false });
         if (tabId) {
           usePreviewWorkspaceStore.getState().requestChatOpen(tabId, 'bottom');
         }
@@ -208,7 +208,7 @@ export default function CanvasPage() {
         toast(t('canvasPage.nodeFocusedNoPreview'), { tone: 'info' });
       }
     } else if (hasNodePreview(node.type ?? '')) {
-      openPreviewNode(node.id);
+      openPreviewNode(node.id, { transient: false });
     } else {
       toast(t('canvasPage.nodeFocusedNoPreview'), { tone: 'info' });
     }

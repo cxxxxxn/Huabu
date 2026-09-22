@@ -850,6 +850,30 @@ export const CanvasLayerTree = ({
       snapshot.selectNodes([id], false);
       selectionAnchorRef.current = id;
 
+      if (structural) {
+        if ((childrenByParent.get(id)?.length ?? 0) === 0) {
+          toast(t('layers.emptyFrame'), { tone: 'info' });
+        }
+      } else if (!previewVisibleIdSet.has(id)) {
+        if (node.type === 'question') {
+          const threadId = node.data.threadId;
+          if (typeof threadId === 'string' && threadId) {
+            const tabId = openPreviewNode(id, { transient: true });
+            if (tabId) {
+              usePreviewWorkspaceStore
+                .getState()
+                .requestChatOpen(tabId, 'bottom');
+            }
+          } else {
+            toast(t('layers.nodeFocusedNoPreview'), { tone: 'info' });
+          }
+        } else if (hasNodePreview(node.type ?? '')) {
+          openPreviewNode(id, { transient: true });
+        } else {
+          toast(t('layers.nodeFocusedNoPreview'), { tone: 'info' });
+        }
+      }
+
       if (snapshot.rfInstance && snapshot.canvasWrapper) {
         revealNodesOnCanvas(
           snapshot.rfInstance,
@@ -857,34 +881,6 @@ export const CanvasLayerTree = ({
           [id],
           400,
         );
-      }
-
-      if (structural) {
-        if ((childrenByParent.get(id)?.length ?? 0) === 0) {
-          toast(t('layers.emptyFrame'), { tone: 'info' });
-        }
-        return;
-      }
-
-      if (previewVisibleIdSet.has(id)) return;
-      if (node.type === 'question') {
-        const threadId = node.data.threadId;
-        if (typeof threadId === 'string' && threadId) {
-          const tabId = openPreviewNode(id);
-          if (tabId) {
-            usePreviewWorkspaceStore
-              .getState()
-              .requestChatOpen(tabId, 'bottom');
-          }
-        } else {
-          toast(t('layers.nodeFocusedNoPreview'), { tone: 'info' });
-        }
-        return;
-      }
-      if (hasNodePreview(node.type ?? '')) {
-        openPreviewNode(id);
-      } else {
-        toast(t('layers.nodeFocusedNoPreview'), { tone: 'info' });
       }
     },
     [

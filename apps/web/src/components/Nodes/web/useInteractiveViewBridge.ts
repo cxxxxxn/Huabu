@@ -365,6 +365,9 @@ export function useInteractiveViewBridge(input: {
         }
 
         canvas.selectNodes([targetNode.id], false);
+        if (grant.kind === 'navigation.open-thread') {
+          openPreviewNode(targetNode.id);
+        }
         if (canvas.rfInstance && canvas.canvasWrapper) {
           revealNodesOnCanvas(
             canvas.rfInstance,
@@ -372,9 +375,6 @@ export function useInteractiveViewBridge(input: {
             [targetNode.id],
             400,
           );
-        }
-        if (grant.kind === 'navigation.open-thread') {
-          openPreviewNode(targetNode.id);
         }
         postOutcome(port, {
           type: 'huabu.view.outcome',

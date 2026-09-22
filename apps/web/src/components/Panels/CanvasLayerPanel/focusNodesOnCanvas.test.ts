@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   anchorViewportCentre,
@@ -12,6 +12,13 @@ import {
 } from './focusNodesOnCanvas';
 
 import type { ReactFlowInstance } from '@xyflow/react';
+
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => {
+  vi.clearAllTimers();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 const createInstance = () => {
   const internalNodes = {
@@ -108,9 +115,15 @@ describe('reliable canvas node bounds', () => {
 
   it('minimally reveals clipped nodes without changing zoom', () => {
     const { instance, setViewport } = createInstance();
-    const wrapper = { clientWidth: 600, clientHeight: 500 } as HTMLElement;
+    const wrapper = {
+      clientWidth: 600,
+      clientHeight: 500,
+      isConnected: true,
+    } as HTMLElement;
 
-    expect(revealNodesOnCanvas(instance, wrapper, ['first'], 250)).toBe(true);
+    revealNodesOnCanvas(instance, wrapper, ['first'], 250);
+    expect(setViewport).not.toHaveBeenCalled();
+    vi.advanceTimersToNextFrame();
     expect(setViewport).toHaveBeenCalledWith(
       { x: -624, y: -144, zoom: 1 },
       { duration: 250, interpolate: 'linear', ease: expect.any(Function) },
@@ -149,7 +162,8 @@ describe('reliable canvas node bounds', () => {
       wrapper.style.setProperty('--canvas-inset-right', '420px');
       document.body.appendChild(wrapper);
       try {
-        expect(revealNodesOnCanvas(instance, wrapper, ['first'])).toBe(true);
+        revealNodesOnCanvas(instance, wrapper, ['first']);
+        vi.advanceTimersToNextFrame();
         expect(setViewport).toHaveBeenCalledWith(
           { x: expectedX, y: 0, zoom: 2 },
           expect.objectContaining({ duration: 400, interpolate: 'linear' }),
@@ -162,9 +176,62 @@ describe('reliable canvas node bounds', () => {
 
   it('does not take over the viewport when nodes are already visible', () => {
     const { instance, setViewport } = createInstance();
-    const wrapper = { clientWidth: 1600, clientHeight: 1000 } as HTMLElement;
+    const wrapper = {
+      clientWidth: 1600,
+      clientHeight: 1000,
+      isConnected: true,
+    } as HTMLElement;
 
-    expect(revealNodesOnCanvas(instance, wrapper, ['first'])).toBe(false);
+    revealNodesOnCanvas(instance, wrapper, ['first']);
+    vi.advanceTimersToNextFrame();
+    expect(setViewport).not.toHaveBeenCalled();
+  });
+
+  it('reads panel insets after the pending layout has committed', () => {
+    const { instance, setViewport } = createInstance();
+    const wrapper = document.createElement('div');
+    Object.defineProperties(wrapper, {
+      clientWidth: { value: 1600 },
+      clientHeight: { value: 1000 },
+    });
+    document.body.appendChild(wrapper);
+    try {
+      revealNodesOnCanvas(instance, wrapper, ['first']);
+      expect(setViewport).not.toHaveBeenCalled();
+      wrapper.style.setProperty('--canvas-inset-right', '420px');
+      vi.advanceTimersToNextFrame();
+      expect(setViewport).toHaveBeenCalledWith(
+        { x: -44, y: 0, zoom: 1 },
+        expect.any(Object),
+      );
+    } finally {
+      wrapper.remove();
+    }
+  });
+
+  it('only executes the latest reveal request for a canvas', () => {
+    const { instance, setViewport } = createInstance();
+    const wrapper = {
+      clientWidth: 600,
+      clientHeight: 500,
+      isConnected: true,
+    } as HTMLElement;
+    revealNodesOnCanvas(instance, wrapper, ['first']);
+    revealNodesOnCanvas(instance, wrapper, ['second']);
+    vi.advanceTimersToNextFrame();
+    expect(setViewport).toHaveBeenCalledExactlyOnceWith(
+      { x: -904, y: -384, zoom: 1 },
+      expect.any(Object),
+    );
+  });
+
+  it('discards a reveal when its canvas unmounts before the frame', () => {
+    const { instance, setViewport } = createInstance();
+    const wrapper = document.createElement('div');
+    document.body.appendChild(wrapper);
+    revealNodesOnCanvas(instance, wrapper, ['first']);
+    wrapper.remove();
+    vi.advanceTimersToNextFrame();
     expect(setViewport).not.toHaveBeenCalled();
   });
 });

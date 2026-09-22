@@ -174,7 +174,9 @@ describe('CanvasPage node deep-link navigation', () => {
     );
 
     expect(selectNodes).toHaveBeenCalledWith(['node-1'], false);
-    expect(mocks.openPreviewNode).toHaveBeenCalledWith('node-1');
+    expect(mocks.openPreviewNode).toHaveBeenCalledWith('node-1', {
+      transient: false,
+    });
     expect(mocks.revealNodesOnCanvas).toHaveBeenCalledWith(
       useCanvasStore.getState().rfInstance,
       useCanvasStore.getState().canvasWrapper,
@@ -220,7 +222,9 @@ describe('CanvasPage node deep-link navigation', () => {
       node('question', { threadId: 'thread-1' }),
     );
 
-    expect(mocks.openPreviewNode).toHaveBeenCalledWith('node-1');
+    expect(mocks.openPreviewNode).toHaveBeenCalledWith('node-1', {
+      transient: false,
+    });
     expect(mocks.requestChatOpen).toHaveBeenCalledWith('tab-1', 'bottom');
     expect(usePanelStore.getState().focusChatInputRequest).toBeNull();
   });

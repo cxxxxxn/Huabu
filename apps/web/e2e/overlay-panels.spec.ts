@@ -194,6 +194,69 @@ test('node preview never moves Canvas even when the target is obstructed', async
   expect(await geometry(page)).toEqual(initial);
 });
 
+for (const navigation of ['layer', 'deep-link'] as const) {
+  test(`first ${navigation} navigation reveals after Preview opens`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1200, height: 800 });
+    await openNewCanvas(page);
+    const canvasId = page.url().split('/canvas/')[1];
+    const response = await page.request.post(
+      `/api/canvas/${canvasId}/execute`,
+      {
+        data: {
+          commands: [
+            {
+              type: 'CREATE_NODES',
+              nodes: [
+                {
+                  nodeType: 'note',
+                  data: { label: 'Reveal target', content: 'Reveal target' },
+                  position: { x: 900, y: 180 },
+                  size: { width: 200, height: 'auto' },
+                },
+              ],
+            },
+          ],
+          originator: { source: 'agent', threadId: 'overlay-reveal-test' },
+        },
+      },
+    );
+    expect(response.ok(), await response.text()).toBe(true);
+    await page.evaluate((id) => {
+      localStorage.setItem(
+        `huabu.viewport.${id}`,
+        JSON.stringify({ x: 0, y: 0, zoom: 1 }),
+      );
+    }, canvasId);
+    await page.reload();
+    const node = page.locator('.react-flow__node-note');
+    await expect(node).toBeVisible();
+    const nodeId = await node.getAttribute('data-id');
+    if (!nodeId) throw new Error('Expected target node ID');
+    const panel = page.locator('[data-canvas-panel="right"]');
+    await expect(panel).toBeHidden();
+    if (navigation === 'layer') {
+      await page.getByRole('button', { name: /show layers panel/i }).click();
+      await settlePanels(page);
+      await page.locator(`[data-layer-id="${nodeId}"]`).click();
+    } else {
+      await page.goto(`/canvas/${canvasId}?node=${encodeURIComponent(nodeId)}`);
+    }
+    await expect(panel).toBeVisible();
+    await settlePanels(page);
+    await expect
+      .poll(async () => {
+        const target = await node.boundingBox();
+        const overlay = await panel.boundingBox();
+        if (!target || !overlay) return -1;
+        return overlay.x - target.x - target.width;
+      })
+      .toBeGreaterThanOrEqual(23);
+    await expect.poll(() => readViewportTransform(page)).toContain('scale(1)');
+  });
+}
+
 test('toolbar stays visible without overlap and updates while a panel remains focused', async ({
   page,
 }, testInfo) => {

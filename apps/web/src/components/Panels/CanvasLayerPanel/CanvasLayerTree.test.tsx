@@ -180,14 +180,19 @@ afterEach(() => {
 });
 
 describe('CanvasLayerTree activation', () => {
-  it('selects, minimally reveals, and opens a preview-capable node', async () => {
+  it('selects, minimally reveals, and transiently opens a preview-capable node', async () => {
     const { selectNodes } = await renderTree([item('note-1', 'note')]);
 
     act(() => row('note-1').click());
 
     expect(selectNodes).toHaveBeenCalledWith(['note-1'], false);
     expect(mocks.revealNodesOnCanvas).toHaveBeenCalledOnce();
-    expect(mocks.openPreviewNode).toHaveBeenCalledWith('note-1');
+    expect(mocks.openPreviewNode).toHaveBeenCalledWith('note-1', {
+      transient: true,
+    });
+    expect(mocks.openPreviewNode.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.revealNodesOnCanvas.mock.invocationCallOrder[0],
+    );
   });
 
   it('opens Preview when Canvas is not mounted', async () => {
@@ -199,7 +204,9 @@ describe('CanvasLayerTree activation', () => {
     act(() => row('note-1').click());
 
     expect(mocks.revealNodesOnCanvas).not.toHaveBeenCalled();
-    expect(mocks.openPreviewNode).toHaveBeenCalledWith('note-1');
+    expect(mocks.openPreviewNode).toHaveBeenCalledWith('note-1', {
+      transient: true,
+    });
   });
 
   it('does not reopen a node already visible in Preview', async () => {
@@ -270,7 +277,9 @@ describe('CanvasLayerTree activation', () => {
     ]);
 
     act(() => row('question-1').click());
-    expect(mocks.openPreviewNode).toHaveBeenCalledWith('question-1');
+    expect(mocks.openPreviewNode).toHaveBeenCalledWith('question-1', {
+      transient: true,
+    });
     expect(mocks.requestChatOpen).toHaveBeenCalledWith('tab-1', 'bottom');
 
     mocks.openPreviewNode.mockClear();
@@ -300,7 +309,9 @@ describe('CanvasLayerTree activation', () => {
     act(() => row('note-1').click());
 
     expect(useCanvasStore.getState().collapsedFrameIds.size).toBe(0);
-    expect(mocks.openPreviewNode).toHaveBeenCalledWith('note-1');
+    expect(mocks.openPreviewNode).toHaveBeenCalledWith('note-1', {
+      transient: true,
+    });
   });
 
   it('does not announce a filtered Frame as empty when live children exist', async () => {
@@ -370,7 +381,9 @@ describe('CanvasLayerTree keyboard semantics', () => {
         new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
       ),
     );
-    expect(mocks.openPreviewNode).toHaveBeenCalledWith('note-1');
+    expect(mocks.openPreviewNode).toHaveBeenCalledWith('note-1', {
+      transient: true,
+    });
 
     mocks.openPreviewNode.mockClear();
     act(() =>
@@ -378,7 +391,9 @@ describe('CanvasLayerTree keyboard semantics', () => {
         new KeyboardEvent('keydown', { key: ' ', bubbles: true }),
       ),
     );
-    expect(mocks.openPreviewNode).toHaveBeenCalledWith('note-1');
+    expect(mocks.openPreviewNode).toHaveBeenCalledWith('note-1', {
+      transient: true,
+    });
 
     act(() =>
       row('note-1').dispatchEvent(

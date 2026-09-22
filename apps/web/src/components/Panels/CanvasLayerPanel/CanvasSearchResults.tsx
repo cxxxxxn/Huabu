@@ -279,7 +279,6 @@ export const CanvasSearchResults = (): React.JSX.Element => {
         });
         return;
       }
-      focusNodeOnCanvas(nodeId);
       // Conversation matches live in the question node's chat thread.
       // Open that thread in the right panel (instead of an expanded
       // preview); the dedicated effect below highlights + scrolls to
@@ -300,6 +299,7 @@ export const CanvasSearchResults = (): React.JSX.Element => {
             },
           );
         }
+        focusNodeOnCanvas(nodeId);
         return;
       }
       // Only open when the node type renders real preview content. Types
@@ -308,6 +308,7 @@ export const CanvasSearchResults = (): React.JSX.Element => {
         // Browsing results reuses the group's inspection slot (§9.2).
         openPreviewNode(nodeId, { transient: true });
       }
+      focusNodeOnCanvas(nodeId);
     },
     [focusNodeOnCanvas, focusGroupOnCanvas, openConversationForNode, query],
   );

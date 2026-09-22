@@ -163,27 +163,33 @@ export const fitNodesOnCanvas = (
   return rfInstance.fitBounds(bounds, { padding });
 };
 
-/** Reveal nodes with the smallest pan needed, preserving the current zoom. */
+const pendingReveals = new WeakMap<HTMLElement, object>();
+
+/** Reveal after layout commits, preserving zoom and only the latest request. */
 export const revealNodesOnCanvas = (
   rfInstance: ReactFlowInstance,
   canvasWrapper: HTMLElement,
   nodeIds: string[],
   duration = 400,
-): boolean => {
-  const bounds = getReliableNodeBounds(rfInstance, nodeIds);
-  if (!bounds) return false;
-
-  const currentViewport = rfInstance.getViewport();
-  const nextViewport = revealBoundsInViewport(
-    currentViewport,
-    getCanvasVisibleArea(canvasWrapper),
-    bounds,
-  );
-  if (nextViewport === currentViewport) return false;
-  void rfInstance.setViewport(nextViewport, {
-    duration,
-    interpolate: 'linear',
-    ease: (progress) => (1 - Math.cos(Math.PI * progress)) / 2,
+): void => {
+  const request = {};
+  const targets = [...nodeIds];
+  pendingReveals.set(canvasWrapper, request);
+  requestAnimationFrame(() => {
+    if (pendingReveals.get(canvasWrapper) !== request) return;
+    pendingReveals.delete(canvasWrapper);
+    if (!canvasWrapper.isConnected) return;
+    const bounds = getReliableNodeBounds(rfInstance, targets);
+    if (!bounds) return;
+    const area = getCanvasVisibleArea(canvasWrapper);
+    if (area.width <= 0 || area.height <= 0) return;
+    const currentViewport = rfInstance.getViewport();
+    const nextViewport = revealBoundsInViewport(currentViewport, area, bounds);
+    if (nextViewport === currentViewport) return;
+    void rfInstance.setViewport(nextViewport, {
+      duration,
+      interpolate: 'linear',
+      ease: (progress) => (1 - Math.cos(Math.PI * progress)) / 2,
+    });
   });
-  return true;
 };
