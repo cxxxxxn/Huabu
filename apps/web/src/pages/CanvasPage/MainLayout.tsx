@@ -48,6 +48,33 @@ export const MainLayout = ({
 
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [focusedPanel, setFocusedPanel] = useState<string | null>(null);
+  useLayoutEffect(
+    () =>
+      usePanelStore.subscribe((state, previous) => {
+        const layout = contentRef.current;
+        const active = document.activeElement;
+        if (!layout || !(active instanceof HTMLElement)) return;
+        const panel = active.closest<HTMLElement>('[data-canvas-panel]');
+        if (!panel || !layout.contains(panel)) return;
+        const hidesLeft =
+          panel.dataset.canvasPanel === 'left' &&
+          !previous.isLeftCollapsed &&
+          state.isLeftCollapsed;
+        const hidesRight =
+          panel.dataset.canvasPanel === 'right' &&
+          (!previous.isRightCollapsed || previous.isPreviewFullscreen) &&
+          state.isRightCollapsed &&
+          !state.isPreviewFullscreen;
+        if (!hidesLeft && !hidesRight) return;
+        const destination =
+          layout.querySelector<HTMLElement>('[data-center-editor]') ??
+          (hidesLeft && (!state.isRightCollapsed || state.isPreviewFullscreen)
+            ? layout.querySelector<HTMLElement>('[data-canvas-panel="right"]')
+            : null);
+        (destination ?? layout).focus({ preventScroll: true });
+      }),
+    [],
+  );
   useEffect(() => {
     const updateOwner = (event: Event) => {
       const target = event.target;
@@ -283,6 +310,7 @@ export const MainLayout = ({
       ref={contentRef}
       className="relative flex h-full w-full overflow-clip"
       data-overlay-layout
+      tabIndex={-1}
       style={
         {
           '--canvas-inset-left': `${effectiveLeftWidthPx}px`,

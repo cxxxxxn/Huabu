@@ -104,6 +104,110 @@ afterEach(() => {
 });
 
 describe('MainLayout Chat motion', () => {
+  it.each(['left', 'right'] as const)(
+    'moves focus out of the %s panel before collapse makes it inert',
+    (side) => {
+      usePanelStore.setState({
+        isLeftCollapsed: false,
+        isRightCollapsed: false,
+      });
+      act(() =>
+        root?.render(
+          <MainLayout
+            header={<InspectableHeader />}
+            leftPanel={<LayoutChild />}
+            rightPanel={<InspectableHeader />}
+          >
+            <MountedCanvas />
+          </MainLayout>,
+        ),
+      );
+      const panel = container?.querySelector<HTMLElement>(
+        `[data-canvas-panel="${side}"]`,
+      );
+      const control = panel?.querySelector('button');
+      const center = container?.querySelector<HTMLElement>(
+        '[data-center-editor]',
+      );
+      if (!panel || !control || !center)
+        throw new Error('Expected layout controls');
+      const onFocus = vi.fn(() => {
+        expect(panel.querySelector('[inert]')).toBeNull();
+      });
+      center.addEventListener('focus', onFocus);
+      act(() => control.focus());
+      act(() => control.click());
+      expect(document.activeElement).toBe(center);
+      expect(onFocus).toHaveBeenCalledOnce();
+      expect(panel.querySelector('[inert]')).not.toBeNull();
+    },
+  );
+
+  it.each(['left', 'right'] as const)(
+    'restores focus when %s collapses in fullscreen',
+    (side) => {
+      usePanelStore.setState({
+        isLeftCollapsed: false,
+        isRightCollapsed: false,
+        isPreviewFullscreen: true,
+      });
+      act(() =>
+        root?.render(
+          <MainLayout
+            header={<InspectableHeader />}
+            leftPanel={<LayoutChild />}
+            rightPanel={<InspectableHeader />}
+          >
+            <MountedCanvas />
+          </MainLayout>,
+        ),
+      );
+      const control = container?.querySelector<HTMLButtonElement>(
+        `[data-canvas-panel="${side}"] button`,
+      );
+      const destination = container?.querySelector(
+        side === 'left'
+          ? '[data-canvas-panel="right"]'
+          : '[data-overlay-layout]',
+      );
+      if (!control || !destination)
+        throw new Error('Expected fullscreen panels');
+      act(() => control.focus());
+      act(() => {
+        if (side === 'left') usePanelStore.getState().toggleLeftPanel();
+        else usePanelStore.getState().toggleRightPanel();
+      });
+      expect(document.activeElement).toBe(destination);
+    },
+  );
+
+  it('does not steal outside focus when a panel collapses', () => {
+    usePanelStore.setState({ isLeftCollapsed: false, isRightCollapsed: false });
+    act(() =>
+      root?.render(
+        <MainLayout
+          header={<InspectableHeader />}
+          leftPanel={<LayoutChild />}
+          rightPanel={<InspectableHeader />}
+        >
+          <MountedCanvas />
+        </MainLayout>,
+      ),
+    );
+    const center = container?.querySelector<HTMLElement>(
+      '[data-center-editor]',
+    );
+    if (!center) throw new Error('Expected Canvas focus target');
+    act(() => center.focus());
+    const focus = vi.spyOn(center, 'focus');
+    act(() => {
+      usePanelStore.getState().toggleLeftPanel();
+      usePanelStore.getState().toggleRightPanel();
+    });
+    expect(document.activeElement).toBe(center);
+    expect(focus).not.toHaveBeenCalled();
+  });
+
   it.each([
     { width: 1600, leftHidden: false, rightHidden: false },
     { width: 1200, leftHidden: false, rightHidden: true },

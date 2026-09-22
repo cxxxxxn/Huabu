@@ -87,8 +87,12 @@ test('overlays never resize or pan Canvas and isolate mouse, wheel, touch and ke
   expect((await panel.boundingBox())!.width).toBeGreaterThan(bounds.width + 90);
   expect(await geometry(page)).toEqual(before);
   await page.screenshot({ path: testInfo.outputPath('overlays-desktop.png') });
-  await page.getByTestId('collapse-preview').click();
-  await page.getByRole('button', { name: /collapse layers panel/i }).click();
+  await page.getByTestId('collapse-preview').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('[data-center-editor]')).toBeFocused();
+  await page.getByRole('button', { name: /collapse layers panel/i }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('[data-center-editor]')).toBeFocused();
   await settlePanels(page);
   expect(await geometry(page)).toEqual(before);
   await expect(panel).toBeHidden();
