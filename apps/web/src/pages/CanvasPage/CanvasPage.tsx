@@ -16,7 +16,7 @@ import { Loading } from '../../components/Common/Loading';
 import { toast } from '../../components/Common/Toast';
 import { hasNodePreview } from '../../components/Nodes/previews';
 import { CanvasLayerPanel } from '../../components/Panels/CanvasLayerPanel';
-import { focusNodesOnCanvas } from '../../components/Panels/CanvasLayerPanel/focusNodesOnCanvas';
+import { revealNodesOnCanvas } from '../../components/Panels/CanvasLayerPanel/focusNodesOnCanvas';
 import { CanvasHeader } from '../../components/Panels/Header/CanvasHeader.tsx';
 import { PreviewWorkspacePanel } from '../../components/Panels/PreviewWorkspace/PreviewWorkspacePanel';
 import { useGlobalSearchHotkey } from '../../hooks/useGlobalSearchHotkey';
@@ -212,7 +212,9 @@ export default function CanvasPage() {
     } else {
       toast(t('canvasPage.nodeFocusedNoPreview'), { tone: 'info' });
     }
-    focusNodesOnCanvas(rfInstance, [node.id], 400);
+    if (canvas.canvasWrapper) {
+      revealNodesOnCanvas(rfInstance, canvas.canvasWrapper, [node.id], 400);
+    }
   }, [
     canvasId,
     isLoading,

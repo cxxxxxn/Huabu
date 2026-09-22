@@ -26,6 +26,7 @@ import {
 import { listCanvases } from '@/api/canvas';
 import { matchesShortcut } from '@/config/shortcuts';
 import { isEditableTarget } from '@/hooks/shortcuts';
+import { isOutsideCanvasInteraction } from '@/hooks/shortcuts/isEditableTarget';
 import { useIsNotMouse } from '@/hooks/useInputMode';
 import { useToolStore } from '@/store/toolStore';
 import { useWorkspaceStore } from '@/store/workspaceStore';
@@ -134,6 +135,7 @@ export const NodeToolbar = ({ activeTool, onToolChange }: NodeToolbarProps) => {
   // an editable target so the keys remain usable inside notes/text nodes.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || isOutsideCanvasInteraction(e.target)) return;
       if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
       if (isEditableTarget(e.target)) return;
       // Don't fire while a modal is open (file upload / add links).

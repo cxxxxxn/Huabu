@@ -36,7 +36,6 @@ function resetStore() {
   });
   usePanelStore.setState({
     isRightCollapsed: true,
-    rightPanelAnchorNodeId: null,
     focusChatInputRequest: null,
   });
 }
@@ -106,7 +105,6 @@ describe('post-create editing', () => {
     expect(expandedNodeId()).toBe('node-note');
     expect(usePanelStore.getState()).toMatchObject({
       isRightCollapsed: false,
-      rightPanelAnchorNodeId: 'node-note',
     });
   });
 

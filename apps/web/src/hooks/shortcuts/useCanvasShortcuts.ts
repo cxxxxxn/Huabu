@@ -11,7 +11,10 @@ import {
 
 import { EDIT_EDGE_LABEL_EVENT } from '@/components/Panels/Canvas/edges/LabelledEdge';
 
-import { isEditableTarget } from './isEditableTarget';
+import {
+  isEditableTarget,
+  isOutsideCanvasInteraction,
+} from './isEditableTarget';
 import {
   uploadFileToNodeInput,
   urlToNodeInput,
@@ -124,6 +127,7 @@ export function useCanvasShortcuts(
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== ' ' || e.repeat) return;
+      if (e.defaultPrevented || isOutsideCanvasInteraction(e.target)) return;
       if (isEditableTarget(e.target)) return;
       // While a node drag is in flight, Space is reinterpreted as
       // "opt out of auto-reparent" by the snap session (it owns the
@@ -149,6 +153,7 @@ export function useCanvasShortcuts(
       }
     };
     const onPointerDown = (e: PointerEvent) => {
+      if (isOutsideCanvasInteraction(e.target)) return;
       if (!temporaryPanRef.current || e.button !== 0 || !e.isPrimary) return;
       temporaryPanPointerRef.current = e.pointerId;
     };
@@ -292,6 +297,7 @@ export function useCanvasShortcuts(
     if (disabled) return;
 
     const onKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || isOutsideCanvasInteraction(e.target)) return;
       const key = e.key;
       const mod = e.metaKey || e.ctrlKey;
       const editable = isEditableTarget(e.target);
@@ -485,6 +491,7 @@ export function useCanvasShortcuts(
     if (disabled) return;
 
     const onPaste = (e: ClipboardEvent) => {
+      if (e.defaultPrevented || isOutsideCanvasInteraction(e.target)) return;
       if (isEditableTarget(e.target)) return;
 
       const dt = e.clipboardData;

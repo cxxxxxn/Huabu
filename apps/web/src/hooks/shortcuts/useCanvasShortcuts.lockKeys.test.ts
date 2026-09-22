@@ -118,6 +118,51 @@ describe('useCanvasShortcuts catalog key lock', () => {
     expect(canvasActions.sendSelectedToOrder).toHaveBeenLastCalledWith('top');
   });
 
+  it.each(['panel', 'menu', 'dialog', 'listbox'])(
+    'leaves keyboard and paste ownership with %s',
+    (kind) => {
+      const surface = document.createElement('div');
+      if (kind === 'panel') surface.dataset.canvasPanel = 'right';
+      else surface.setAttribute('role', kind);
+      const child = document.createElement('div');
+      surface.appendChild(child);
+      container.appendChild(surface);
+      canvasActions.nodes = [{ id: 'selected', selected: true }];
+      act(() => {
+        for (const key of ['Delete', 'Backspace', ' ', 'Enter', '[', ']']) {
+          const event = new KeyboardEvent('keydown', {
+            key,
+            bubbles: true,
+            cancelable: true,
+          });
+          child.dispatchEvent(event);
+          expect(event.defaultPrevented).toBe(false);
+        }
+        for (const key of ['c', 'v', 'z', 'g']) {
+          child.dispatchEvent(
+            new KeyboardEvent('keydown', {
+              key,
+              metaKey: true,
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
+        }
+        child.dispatchEvent(
+          new ClipboardEvent('paste', { bubbles: true, cancelable: true }),
+        );
+      });
+      expect(canvasActions.deleteNodes).not.toHaveBeenCalled();
+      expect(canvasActions.copySelectedNodes).not.toHaveBeenCalled();
+      expect(canvasActions.undo).not.toHaveBeenCalled();
+      expect(canvasActions.frameSelectedNodes).not.toHaveBeenCalled();
+      expect(canvasActions.sendSelectedToOrder).not.toHaveBeenCalled();
+      expect(canvasActions.pasteNodes).not.toHaveBeenCalled();
+      expect(container.querySelector('[data-tool="select"]')).not.toBeNull();
+      canvasActions.nodes = [];
+    },
+  );
+
   it('copies selected nodes when an editor retains focus without selected text', () => {
     const editor = document.createElement('textarea');
     editor.value = 'Note text';

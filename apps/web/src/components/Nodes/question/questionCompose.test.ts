@@ -62,7 +62,6 @@ beforeEach(() => {
   useChatStore.setState({ threadsById: {}, bindingMap: {} });
   usePanelStore.setState({
     isRightCollapsed: true,
-    rightPanelAnchorNodeId: null,
     focusChatInputRequest: null,
   });
 });

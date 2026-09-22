@@ -13,7 +13,7 @@
  *     row per group with the canonical node icon (Spline for edges),
  *     and indent match rows beneath their header.
  *   - ↑ / ↓ navigates the flat (header + visible match) list, live-
- *     follows on the canvas (`fitView` + a preview open when the
+ *     follows on the canvas (minimal reveal + a preview open when the
  *     target has a real preview).
  *   - Enter on a header toggles collapse; Enter on a match opens the
  *     owning node without injecting search state into its preview.
@@ -37,7 +37,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 
 import { shouldCanvasSearchOwnKeyboard } from './canvasSearchKeyboard';
-import { focusNodesOnCanvas } from './focusNodesOnCanvas';
+import { revealNodesOnCanvas } from './focusNodesOnCanvas';
 import { getNodeIcon } from '../../../config/nodeIcons';
 import { scheduleScrollToMatch } from '../../../hooks/searchDom';
 import { useTextHighlight } from '../../../hooks/useTextHighlight';
@@ -71,6 +71,7 @@ export const CanvasSearchResults = (): React.JSX.Element => {
   const selectNodes = useCanvasStore((s) => s.selectNodes);
   const expandedNodeId = usePreviewWorkspaceStore(selectActiveNodeId);
   const rfInstance = useCanvasStore((s) => s.rfInstance);
+  const canvasWrapper = useCanvasStore((s) => s.canvasWrapper);
 
   // Conversation-tier results open the owning question node's chat
   // thread in the right panel (instead of an expanded preview), then
@@ -155,8 +156,8 @@ export const CanvasSearchResults = (): React.JSX.Element => {
         nodeType: row.match.nodeType,
         label: row.match.label ?? '',
         rows: [row],
-        // Edge groups carry the endpoint ids so `focusOnCanvas` can
-        // `fitView` on both ends of the edge instead of selecting a
+        // Edge groups carry the endpoint ids so navigation can
+        // reveal both ends of the edge instead of selecting a
         // non-existent "edge node". `kind` defaults to `'node'` for
         // back-compat with older server payloads.
         edgeEndpoints:
@@ -207,16 +208,16 @@ export const CanvasSearchResults = (): React.JSX.Element => {
   const focusNodeOnCanvas = useCallback(
     (nodeId: string) => {
       selectNodes([nodeId], false);
-      if (rfInstance) {
-        focusNodesOnCanvas(rfInstance, [nodeId], 400);
+      if (rfInstance && canvasWrapper) {
+        revealNodesOnCanvas(rfInstance, canvasWrapper, [nodeId], 400);
       }
     },
-    [selectNodes, rfInstance],
+    [selectNodes, rfInstance, canvasWrapper],
   );
 
   /**
-   * Re-anchor the canvas viewport on a result group. Node groups
-   * select + fit on the single node; edge groups fit on both
+   * Reveal a result group without changing zoom. Node groups
+   * select + reveal the single node; edge groups reveal both
    * endpoints together (no selection — the edge itself is selected
    * by React Flow only via direct click, and we don't want to steal
    * keyboard focus to it from the search input).
@@ -224,9 +225,10 @@ export const CanvasSearchResults = (): React.JSX.Element => {
   const focusGroupOnCanvas = useCallback(
     (group: NodeGroup) => {
       if (group.edgeEndpoints) {
-        if (rfInstance) {
-          focusNodesOnCanvas(
+        if (rfInstance && canvasWrapper) {
+          revealNodesOnCanvas(
             rfInstance,
+            canvasWrapper,
             [group.edgeEndpoints.source, group.edgeEndpoints.target],
             400,
           );
@@ -235,7 +237,7 @@ export const CanvasSearchResults = (): React.JSX.Element => {
       }
       focusNodeOnCanvas(group.nodeId);
     },
-    [focusNodeOnCanvas, rfInstance],
+    [focusNodeOnCanvas, rfInstance, canvasWrapper],
   );
 
   /**
@@ -495,8 +497,8 @@ interface NodeGroup {
   rows: SearchResultRow[];
   /**
    * Edge-only: source + target node ids for an edge label match.
-   * Lets the focus logic `fitView` on both endpoints (since the
-   * "edge" itself isn't a node React Flow can recenter on).
+   * Lets navigation reveal the endpoint bounds without treating
+   * the edge itself as a node.
    */
   edgeEndpoints?: { source: string; target: string };
 }

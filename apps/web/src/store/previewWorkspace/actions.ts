@@ -26,7 +26,7 @@ export function openPreviewNode(
     }
   }
 
-  usePanelStore.getState().requestOpenRightPanel(nodeId);
+  usePanelStore.getState().requestOpenRightPanel();
   const tabId = usePreviewWorkspaceStore
     .getState()
     .openPreviewTarget(
