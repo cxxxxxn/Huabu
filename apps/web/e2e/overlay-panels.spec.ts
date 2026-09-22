@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT license.
+
 import { expect, test, type Page } from '@playwright/test';
 
 import { openNewCanvas, readViewportTransform, oneFingerDrag } from './helpers';

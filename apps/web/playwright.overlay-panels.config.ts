@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT license.
+
 import { defineConfig } from '@playwright/test';
 
 import isolated from './playwright.unified-links.config';
