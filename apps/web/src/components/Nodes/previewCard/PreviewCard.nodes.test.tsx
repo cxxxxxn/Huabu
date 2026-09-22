@@ -5,6 +5,7 @@ import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { OfficeNode, type OfficeNodeType } from '../office/OfficeNode';
 import { PDFNode, type PDFNodeType } from '../pdf/PDFNode';
 import { WebNode, type WebNodeType } from '../web/WebNode';
 
@@ -139,6 +140,34 @@ async function renderPdf(data: Record<string, unknown> = {}) {
 }
 
 describe('PDF and Web PreviewCard integration', () => {
+  it.each([undefined, 'teal', 'white'])(
+    'shares PDF surface colors with Office for accent %s',
+    async (accent) => {
+      await renderPdf({ style: { accent } });
+      const pdf = container.querySelector<HTMLElement>('.preview-card');
+      if (!pdf) throw new Error('Expected PDF card');
+      const surface = pdf.style.getPropertyValue('--note-surface-background');
+      const background = pdf.style.backgroundColor;
+      const props = {
+        id: 'office-1',
+        data: { src: 'document.docx', format: 'docx', style: { accent } },
+      } as NodeProps<OfficeNodeType>;
+      await act(async () => root.render(<OfficeNode {...props} />));
+      const office = container.querySelector<HTMLElement>(
+        '[data-office-content] > div',
+      );
+      if (!office) throw new Error('Expected Office card');
+      expect(office.classList.contains('bg-surface')).toBe(true);
+      expect(office.style.getPropertyValue('--note-surface-background')).toBe(
+        surface,
+      );
+      expect(office.style.backgroundColor).toBe(background);
+      for (const section of Array.from(office.children)) {
+        expect((section as HTMLElement).style.background).toBe('');
+      }
+    },
+  );
+
   it('fills Web and PDF covers but keeps generated PDF pages complete', async () => {
     await renderWeb();
     expect(

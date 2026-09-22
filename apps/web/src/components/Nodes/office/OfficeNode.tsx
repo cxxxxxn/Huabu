@@ -16,6 +16,7 @@ import { getAccentTokens } from '../design/accentTokens';
 import { resolveNodeAccent } from '../design/nodeAccentPolicy';
 import { getMissingFileKind, MissingFileBanner } from '../MissingFileBanner';
 import { NodeWrapper } from '../NodeWrapper';
+import { noteSurfaceStyle } from '../note/noteDesign';
 
 import type { CanvasOfficeNodeData } from '../types';
 import type { OfficeFormat } from '@huabu/shared';
@@ -102,7 +103,6 @@ export const OfficeNode = memo(
     const accentTokens = resolvedAccent
       ? getAccentTokens(resolvedAccent)
       : null;
-    const coverBg = accentTokens?.softBg ?? 'var(--surface)';
     const iconColor = accentTokens?.fg ?? 'var(--fg-muted)';
     const borderColor = accentTokens?.divider ?? 'var(--edge-default)';
 
@@ -162,15 +162,19 @@ export const OfficeNode = memo(
           <div className="relative flex h-full w-full flex-col overflow-hidden rounded-[inherit]">
             <div className="h-full w-full" data-office-content="">
               {src ? (
-                <div className="bg-surface relative flex h-full w-full flex-col overflow-hidden">
+                <div
+                  className="bg-surface relative flex h-full w-full flex-col overflow-hidden"
+                  style={
+                    resolvedAccent
+                      ? noteSurfaceStyle(resolvedAccent)
+                      : undefined
+                  }
+                >
                   {/* Cover area: large centered format icon over an
                     accent-tinted background. Acts as the visual
                     counterpart to PreviewCard's image slot for nodes
                     that don't have a render-time thumbnail. */}
-                  <div
-                    className="flex min-h-0 flex-1 items-center justify-center"
-                    style={{ background: coverBg }}
-                  >
+                  <div className="flex min-h-0 flex-1 items-center justify-center">
                     <div
                       className="flex flex-col items-center gap-2"
                       style={{ color: iconColor }}
@@ -191,7 +195,6 @@ export const OfficeNode = memo(
                     className="flex flex-col px-4 pt-2 pb-2"
                     style={{
                       borderTop: `2px solid ${borderColor}`,
-                      background: accentTokens?.softBg ?? 'transparent',
                     }}
                   >
                     <div className="min-w-0 shrink-0">
