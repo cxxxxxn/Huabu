@@ -3,18 +3,32 @@
 
 import {
   ACCENT_PALETTE,
+  ACCENT_NONE_TOKEN,
   ACCENT_PICKER_OPTIONS_WITH_TRANSPARENT,
   type ColorPickerOption,
 } from '@huabu/shared';
 
+import {
+  nodeAccentToken,
+  nodeSupportsNoAccent,
+} from '@/components/Nodes/design/nodeAccentPolicy';
+
 /**
- * Frames always render a structural surface, so a transparent swatch would
+ * Only freeform content can remove its surface entirely. Structural and
+ * document nodes always retain a surface, so a transparent swatch would
  * promise a result the renderer deliberately does not produce.
  */
 export function nodeAccentPickerOptions(
   nodeTypes: readonly (string | undefined)[],
 ): readonly ColorPickerOption[] {
-  return nodeTypes.includes('frame')
-    ? ACCENT_PALETTE
-    : ACCENT_PICKER_OPTIONS_WITH_TRANSPARENT;
+  return nodeTypes.length > 0 && nodeTypes.every(nodeSupportsNoAccent)
+    ? ACCENT_PICKER_OPTIONS_WITH_TRANSPARENT
+    : ACCENT_PALETTE;
+}
+
+export function nodeAccentPickerValue(
+  nodeType: string | undefined,
+  accent: string | null | undefined,
+): string {
+  return nodeAccentToken(nodeType, accent) ?? ACCENT_NONE_TOKEN;
 }

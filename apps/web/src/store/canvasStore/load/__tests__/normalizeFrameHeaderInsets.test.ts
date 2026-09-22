@@ -41,9 +41,9 @@ describe('normalizeFrameHeaderInsets', () => {
       { ...child(), position: { x: 20, y: 20 } },
     ];
     const result = normalizeFrameHeaderInsets(nodes);
-    expect(result[0].style?.height).toBe(860);
-    expect(result[0].position.y).toBe(40);
-    expect(result[1].position.y).toBe(80);
+    expect(result[0].style?.height).toBe(876);
+    expect(result[0].position.y).toBe(24);
+    expect(result[1].position.y).toBe(96);
     expect(normalizeFrameHeaderInsets(result)).toBe(result);
   });
 
@@ -76,10 +76,10 @@ describe('normalizeFrameHeaderInsets', () => {
     const nextChild = result.find((node) => node.id === 'child');
 
     expect(nextFrame).toMatchObject({
-      position: { x: 100, y: 84 },
-      style: { width: 500, height: 316 },
+      position: { x: 100, y: 76 },
+      style: { width: 500, height: 324 },
     });
-    expect(nextChild?.position).toEqual({ x: 40, y: 56 });
+    expect(nextChild?.position).toEqual({ x: 40, y: 64 });
     if (!nextFrame || !nextChild) throw new Error('Expected normalized nodes');
     expect(nextFrame.position.y + nextChild.position.y).toBe(140);
   });

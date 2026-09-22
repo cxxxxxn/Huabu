@@ -4,7 +4,7 @@
 import clsx from 'clsx';
 import { useTranslation } from 'react-i18next';
 
-import { FRAME_DESIGN_CONFIG } from '@huabu/shared/canvas-engine';
+import { FRAME_DESIGN_CONFIG } from './frameDesign';
 
 import type { SpaceInstructionFrameKind } from '@huabu/shared';
 

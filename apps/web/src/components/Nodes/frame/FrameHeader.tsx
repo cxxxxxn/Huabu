@@ -1,8 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { FRAME_DESIGN_CONFIG } from '@huabu/shared/canvas-engine';
-
+import { FRAME_DESIGN_CONFIG } from './frameDesign';
 import { getFrameAccentMarkerColor } from './frameHeaderMetrics';
 import { InstructionFrameBadge } from './InstructionFrameBadge';
 

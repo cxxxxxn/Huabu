@@ -1,9 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { FRAME_DESIGN_CONFIG } from '@huabu/shared/canvas-engine';
-
-import { getAccentTokens } from '../accentTokens';
+import { FRAME_DESIGN_CONFIG } from './frameDesign';
+import { isWhiteAccent } from '../design/accentTokens';
 
 export interface FrameHeaderMetrics {
   left: number;
@@ -14,25 +13,20 @@ export interface FrameHeaderMetrics {
 }
 
 export function getFrameAccentMarkerColor(accent: string | null): string {
-  return accent ? getAccentTokens(accent).fg : 'var(--fg-muted)';
+  return !accent || isWhiteAccent(accent) ? 'var(--fg-muted)' : accent;
 }
 
 /**
- * Positions the title row within the padding above the first child without
- * changing its responsive font size. A Manual Frame may therefore expose
- * insufficient authored padding as overlap instead of silently shrinking type.
+ * Positions the title row within the current responsive header region without
+ * changing its responsive font size or following child movement.
  */
 export function getFrameHeaderMetrics(
   contentInsetX: number | null,
-  contentInsetY: number | null,
   frameWidth: number,
   desiredFontSize: number,
+  responsiveHeaderInset: number,
 ): FrameHeaderMetrics {
   const config = FRAME_DESIGN_CONFIG.header;
-  const availableTop =
-    contentInsetY !== null && Number.isFinite(contentInsetY)
-      ? Math.max(0, contentInsetY)
-      : config.fallbackInsetY;
   const desiredLeft =
     contentInsetX !== null && Number.isFinite(contentInsetX)
       ? Math.max(0, contentInsetX)
@@ -47,7 +41,7 @@ export function getFrameHeaderMetrics(
   return {
     left,
     top: Math.round(
-      Math.max(config.verticalPadding, (availableTop - height) / 2),
+      Math.max(config.verticalPadding, (responsiveHeaderInset - height) / 2),
     ),
     height,
     fontSize,

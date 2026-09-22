@@ -28,6 +28,7 @@ import {
 } from '@huabu/shared';
 import {
   COMMAND_META,
+  autoHeightContentWidth,
   preserveAgentNodeOwnedData,
   projectAgentNodeEditableData,
   stripTransientNodeFields,
@@ -38,6 +39,7 @@ import {
   FRAME_POINTER_CAPTURE_MARGIN,
   getAbsolutePosition as getFrameAbsolutePosition,
   getFrameSizing,
+  isAlwaysAutoHeightNodeType,
   wouldUnframe,
   wouldStickToStructuredFrame,
   wouldAutoFrame,
@@ -3421,6 +3423,23 @@ const useCanvasStore = create<RFState>()(
 
       let nextNodes = applyNodeChanges(snappedChanges, get().nodes) as Node[];
 
+      // Frame boxes are engine-owned, not content measurements. During CSS
+      // size transitions (notably undo/redo), ResizeObserver reports interim
+      // pixels that must not become inputs to ancestor layout or the next drag.
+      const measuredFrameIds = new Set(
+        snappedChanges.flatMap((change) =>
+          change.type === 'dimensions' && !change.resizing ? [change.id] : [],
+        ),
+      );
+      nextNodes = nextNodes.map((node) => {
+        if (node.type !== 'frame' || !measuredFrameIds.has(node.id))
+          return node;
+        const { width, height } = node.style ?? {};
+        if (typeof width !== 'number' || typeof height !== 'number')
+          return node;
+        return { ...node, measured: { ...node.measured, width, height } };
+      });
+
       // ── Live-resize style sync ─────────────────────────────────────
       // RF's `applyChange` writes a `dimensions` change to
       // `node.measured.{width,height}` only — and the `setAttributes`
@@ -3438,6 +3457,22 @@ const useCanvasStore = create<RFState>()(
       const resizeCtx = getResizeContext();
       const snappedRect = resizeCtx ? getResizeSnappedRect() : null;
       if (resizeCtx && snappedRect) {
+        const resizingNode = nextNodes.find(
+          (node) => node.id === resizeCtx.nodeId,
+        );
+        const parentOrigin = resizingNode?.parentId
+          ? getFrameAbsolutePosition(nextNodes, resizingNode.parentId)
+          : undefined;
+        const localPosition = {
+          x:
+            snappedRect.local.x +
+            resizeCtx.parentOffset.x -
+            (parentOrigin?.x ?? 0),
+          y:
+            snappedRect.local.y +
+            resizeCtx.parentOffset.y -
+            (parentOrigin?.y ?? 0),
+        };
         // Per-axis pass-through. The snap session's authoritative
         // post-snap rect is mirrored directly onto the resized node's
         // `position` + `style`. This matches what `flushScale`
@@ -3448,30 +3483,31 @@ const useCanvasStore = create<RFState>()(
         // frame size = `oldSize × axisScale` exactly on that axis, so
         // mirroring the pointer-driven rect here can't put the frame
         // body smaller than the children's still-old-size snapshot.
-        nextNodes = nextNodes.map((n) =>
-          n.id === resizeCtx.nodeId
-            ? {
-                ...n,
-                position: { x: snappedRect.local.x, y: snappedRect.local.y },
-                style: {
-                  ...n.style,
-                  width: snappedRect.size.width,
-                  height: snappedRect.size.height,
-                },
-                // `getNodeSize` resolves `measured` before `style`, and the
-                // ResizeObserver only refreshes it a frame or two after the
-                // DOM has already resized. Leaving it behind would let every
-                // geometry consumer (selection outline, snap engine, frame
-                // rects) trail the live gesture, so keep the pair in lockstep
-                // exactly like `materializeAutoHeight` does.
-                measured: {
-                  ...n.measured,
-                  width: snappedRect.size.width,
-                  height: snappedRect.size.height,
-                },
-              }
-            : n,
-        );
+        nextNodes = nextNodes.map((n) => {
+          if (n.id !== resizeCtx.nodeId) return n;
+          const contentOwnsHeight =
+            (resizeCtx.mode === 'width' || resizeCtx.mode === 'scale') &&
+            isAlwaysAutoHeightNodeType(n.type ?? '');
+          const { height: _staleHeight, ...styleWithoutHeight } = n.style ?? {};
+          return {
+            ...n,
+            position: localPosition,
+            style: {
+              ...(contentOwnsHeight ? styleWithoutHeight : n.style),
+              width: snappedRect.size.width,
+              ...(!contentOwnsHeight && { height: snappedRect.size.height }),
+            },
+            // `getNodeSize` resolves `measured` before `style`, and the
+            // ResizeObserver only refreshes it a frame or two after the DOM
+            // has already resized. Keep authored axes in lockstep, but let
+            // Text/Question report their reflowed renderer-owned height.
+            measured: {
+              ...n.measured,
+              width: snappedRect.size.width,
+              ...(!contentOwnsHeight && { height: snappedRect.size.height }),
+            },
+          };
+        });
       }
 
       // Internal RF changes (position mid-drag, select, dimensions /
@@ -3498,6 +3534,7 @@ const useCanvasStore = create<RFState>()(
           if (c.type !== 'dimensions') continue;
           if (c.resizing) continue; // live tick of a resize session
           const child = nextNodes.find((n) => n.id === c.id);
+          if (child?.type === 'frame') continue;
           if (!child?.parentId) continue;
           const parent = nextNodes.find((n) => n.id === child.parentId);
           if (!parent || parent.type !== 'frame') continue;
@@ -3697,7 +3734,7 @@ const useCanvasStore = create<RFState>()(
     setNoteHeightMode: (nodeIds, mode) => {
       if (nodeIds.length === 0) return;
       const idSet = new Set(nodeIds);
-      const { nodes } = get();
+      const { nodes, canvasId } = get();
       const items: Array<{
         nodeId: string;
         size: { width: number; height?: number | 'auto' };
@@ -3753,6 +3790,22 @@ const useCanvasStore = create<RFState>()(
           get,
         );
 
+        // Never replay captured geometry after an async measurement if a
+        // resize or navigation superseded the toggle. The measurement key
+        // also guards APPLY_MEASURED_HEIGHT, but cannot undo a stale resize.
+        const live = get();
+        if (live.canvasId !== canvasId) return;
+        const currentItems = items.filter((item) => {
+          const before = nodes.find((node) => node.id === item.nodeId);
+          const after = live.nodes.find((node) => node.id === item.nodeId);
+          return (
+            before &&
+            after?.type === 'note' &&
+            autoHeightContentWidth(before) === autoHeightContentWidth(after)
+          );
+        });
+        if (currentItems.length === 0) return;
+
         // SET_NODE_GEOMETRY uses snapshot:'caller'; open a gesture so the
         // batch is captured as one undo entry without warnings. The
         // measurement rides the same batch, so undo restores the pinned
@@ -3762,7 +3815,7 @@ const useCanvasStore = create<RFState>()(
           [
             {
               type: 'SET_NODE_GEOMETRY',
-              items: items.map((item) => ({
+              items: currentItems.map((item) => ({
                 nodeId: item.nodeId as CanvasNodeId,
                 size: item.size,
               })),

@@ -5,8 +5,11 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { FrameHeader } from './FrameHeader';
-import { FrameSurface } from './FrameSurface';
+import { FRAME_DESIGN_CONFIG } from './frameDesign';
+import { FrameHeader } from './FrameHeader.tsx';
+import { FrameRegionLabel } from './FrameRegionLabel';
+import { FrameSurface } from './FrameSurface.tsx';
+import { farFrameRegionPresentation } from './frameZoom';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -14,7 +17,9 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe('Frame visual primitives', () => {
   let container: HTMLDivElement | undefined;
@@ -26,6 +31,57 @@ describe('Frame visual primitives', () => {
     root = undefined;
     container = undefined;
   });
+
+  it.each([1, 12, 120])(
+    'keeps the %s child count outside the clamped title',
+    (childCount) => {
+      container = document.createElement('div');
+      document.body.appendChild(container);
+      root = createRoot(container);
+      act(() =>
+        root?.render(
+          <FrameRegionLabel
+            title="Agent task orchestration IDE"
+            childCount={childCount}
+            accent={null}
+            zoom={0.1}
+            layout={farFrameRegionPresentation(44, 81.6, 0.1, true)}
+            headerMetrics={{
+              left: 20,
+              top: 18,
+              height: 29,
+              fontSize: 24,
+              maxWidth: 412,
+            }}
+          />,
+        ),
+      );
+      const title = container.querySelector<HTMLElement>(
+        '[data-frame-region-title]',
+      );
+      const count = container.querySelector<HTMLElement>(
+        '[data-frame-region-label] > div:not([aria-hidden]) [data-frame-region-count]',
+      );
+      expect(count?.textContent).toBe(String(childCount));
+      expect(count?.style.fontSize).toBe('7px');
+      expect(count?.style.height).toBe('10px');
+      expect(count?.style.minWidth).toBe('10px');
+      expect(count?.style.marginBlock).toBe('3px');
+      expect(
+        container.querySelector<HTMLElement>(
+          '[data-frame-region-label] > div:not([aria-hidden])',
+        )?.style.columnGap,
+      ).toBe('6px');
+      expect(title?.contains(count)).toBe(false);
+      expect(title?.style.maxHeight).toBe('48px');
+      expect(container.querySelector('[data-frame-region-marker]')).toBeNull();
+      expect(
+        container.querySelector(
+          '[data-frame-region-label] > div:not([aria-hidden])',
+        )?.textContent,
+      ).toBe(`Agent task orchestration IDE ${childCount}`);
+    },
+  );
 
   it('renders the production surface independently of canvas state', () => {
     container = document.createElement('div');
@@ -42,7 +98,12 @@ describe('Frame visual primitives', () => {
 
     const surface = container.firstElementChild as HTMLElement | null;
     expect(surface?.classList.contains('bg-surface')).toBe(true);
-    expect(surface?.classList.contains('border-3')).toBe(true);
+    expect(surface?.style.borderWidth).toBe(
+      `${FRAME_DESIGN_CONFIG.appearance.borderWidth}px`,
+    );
+    expect(surface?.style.borderStyle).toBe(
+      FRAME_DESIGN_CONFIG.appearance.borderStyle,
+    );
     expect(surface?.style.borderRadius).toBe('32px');
   });
 

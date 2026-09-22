@@ -3,19 +3,17 @@
 
 import { clsx } from 'clsx';
 import { Download, Fullscreen } from 'lucide-react';
-import { memo, useCallback } from 'react';
+import { memo, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-
-import { resolveAccent } from '@huabu/shared';
 
 import { resolveArtifactUrl } from '@/api/artifact';
 import { FloatingToolbar } from '@/components/Common/FloatingToolbar';
 import { OFFICE_FORMAT_ICON } from '@/config/nodeIcons';
-import { useNodeScale } from '@/hooks/useNodeScale';
 import useCanvasStore from '@/store/canvasStore';
 import { openPreviewNode } from '@/store/previewWorkspace/actions';
 
-import { getAccentTokens } from '../accentTokens';
+import { getAccentTokens } from '../design/accentTokens';
+import { resolveNodeAccent } from '../design/nodeAccentPolicy';
 import { getMissingFileKind, MissingFileBanner } from '../MissingFileBanner';
 import { NodeWrapper } from '../NodeWrapper';
 
@@ -78,7 +76,6 @@ function getFormatMeta(format: OfficeFormat | undefined): FormatMeta {
 export const OfficeNode = memo(
   ({ id, data, selected }: NodeProps<OfficeNodeType>) => {
     const { t } = useTranslation();
-    const scale = useNodeScale(id, 'office');
     const canvasId = useCanvasStore((s) => s.canvasId);
 
     const src = typeof data.src === 'string' ? data.src : '';
@@ -91,10 +88,17 @@ export const OfficeNode = memo(
     const format = (data.format as OfficeFormat | undefined) ?? 'docx';
     const meta = getFormatMeta(format);
     const FormatIcon = meta.icon;
+    const title =
+      (data.label as string) ||
+      t('node.untitledTypedDocument', { label: meta.label });
+    const farLabel = useMemo(
+      () => ({ title, description: summary }),
+      [title, summary],
+    );
 
     // Accent tokens — mirror PreviewCard so the office card sits
     // visually consistent next to the rest of the node types.
-    const resolvedAccent = resolveAccent(data.style?.accent ?? null);
+    const resolvedAccent = resolveNodeAccent('office', data.style?.accent);
     const accentTokens = resolvedAccent
       ? getAccentTokens(resolvedAccent)
       : null;
@@ -143,6 +147,7 @@ export const OfficeNode = memo(
         data={data}
         type={'office'}
         selected={selected}
+        farLabel={farLabel}
         actions={missingFileKind ? undefined : OfficeActions}
         resizable
         keepAspectRatio={false}
@@ -154,15 +159,8 @@ export const OfficeNode = memo(
         {missingFileKind ? (
           <MissingFileBanner nodeId={id} />
         ) : (
-          <div className="relative flex h-full w-full flex-col overflow-hidden rounded-lg">
-            <div
-              style={{
-                transform: `scale(${scale})`,
-                transformOrigin: 'top left',
-                width: `${100 / scale}%`,
-                height: `${100 / scale}%`,
-              }}
-            >
+          <div className="relative flex h-full w-full flex-col overflow-hidden rounded-[inherit]">
+            <div className="h-full w-full" data-office-content="">
               {src ? (
                 <div className="bg-surface relative flex h-full w-full flex-col overflow-hidden">
                   {/* Cover area: large centered format icon over an
@@ -207,10 +205,7 @@ export const OfficeNode = memo(
                         className="min-w-0 text-lg font-medium wrap-break-word"
                         style={{ color: iconColor }}
                       >
-                        {(data.label as string) ||
-                          t('node.untitledTypedDocument', {
-                            label: meta.label,
-                          })}
+                        {title}
                       </span>
                     </div>
                     {summary ? (

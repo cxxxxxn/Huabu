@@ -16,11 +16,7 @@ import {
   resolveAccent,
   type FrameLayoutMode,
 } from '@huabu/shared';
-import {
-  FRAME_DESIGN_CONFIG,
-  clampGridCount,
-  frameResponsiveMetricsForSize,
-} from '@huabu/shared/canvas-engine';
+import { clampGridCount, frameAccentToken } from '@huabu/shared/canvas-engine';
 
 import { FloatingToolbar } from '@/components/Common/FloatingToolbar.tsx';
 import { Input } from '@/components/Common/Input.tsx';
@@ -28,8 +24,10 @@ import { MissingFileBanner } from '@/components/Nodes/MissingFileBanner.tsx';
 import { NodeWrapper } from '@/components/Nodes/NodeWrapper.tsx';
 import useCanvasStore from '@/store/canvasStore.ts';
 
+import { FRAME_DESIGN_CONFIG, frameVisualMetricsForSize } from './frameDesign';
 import { FrameHeader } from './FrameHeader.tsx';
 import { getFrameHeaderMetrics } from './frameHeaderMetrics.ts';
+import { FrameRegionOverlay, FrameZoomHeader } from './FrameRegionLabel';
 import { shouldPreserveFrameAspectRatio } from './frameResizePolicy.ts';
 
 import type { CanvasFrameNodeData } from '@/components/Nodes/types.ts';
@@ -78,34 +76,30 @@ export const FrameNode = memo(
     const flushFrameResizeScale = useCanvasStore(
       (state) => state.flushFrameResizeScale,
     );
-    const { childCount, hasMediaChild, contentInsetX, contentInsetY } =
-      useCanvasStore(
-        useShallow((state) => {
-          let childCount = 0;
-          let hasMediaChild = false;
-          let contentInsetX = Number.POSITIVE_INFINITY;
-          let contentInsetY = Number.POSITIVE_INFINITY;
+    const { childCount, hasMediaChild, contentInsetX } = useCanvasStore(
+      useShallow((state) => {
+        let childCount = 0;
+        let hasMediaChild = false;
+        let contentInsetX = Number.POSITIVE_INFINITY;
 
-          for (const node of state.nodes) {
-            if (node.parentId !== id) continue;
-            childCount += 1;
-            hasMediaChild ||= node.type === 'image' || node.type === 'video';
-            contentInsetX = Math.min(contentInsetX, node.position.x);
-            contentInsetY = Math.min(contentInsetY, node.position.y);
-          }
+        for (const node of state.nodes) {
+          if (node.parentId !== id) continue;
+          childCount += 1;
+          hasMediaChild ||=
+            node.type === 'image' ||
+            node.type === 'video' ||
+            node.type === 'text' ||
+            node.type === 'question';
+          contentInsetX = Math.min(contentInsetX, node.position.x);
+        }
 
-          return {
-            childCount,
-            hasMediaChild,
-            contentInsetX: Number.isFinite(contentInsetX)
-              ? contentInsetX
-              : null,
-            contentInsetY: Number.isFinite(contentInsetY)
-              ? contentInsetY
-              : null,
-          };
-        }),
-      );
+        return {
+          childCount,
+          hasMediaChild,
+          contentInsetX: Number.isFinite(contentInsetX) ? contentInsetX : null,
+        };
+      }),
+    );
     const instructionFrameKind = classifySpaceInstructionFrame(
       data.label,
       data.labelSource,
@@ -187,15 +181,12 @@ export const FrameNode = memo(
       (typeof styleHeight === 'number' ? styleHeight : undefined) ??
       internalNode?.measured?.height ??
       FRAME_DESIGN_CONFIG.header.minWidth;
-    const responsiveMetrics = frameResponsiveMetricsForSize(
-      nodeWidth,
-      nodeHeight,
-    );
+    const responsiveMetrics = frameVisualMetricsForSize(nodeWidth, nodeHeight);
     const headerMetrics = getFrameHeaderMetrics(
       contentInsetX,
-      contentInsetY,
       nodeWidth,
       responsiveMetrics.titleFontSize,
+      responsiveMetrics.headerInset,
     );
 
     const commitCount = () => {
@@ -411,8 +402,8 @@ export const FrameNode = memo(
     // to the final layout at gesture end. All layout modes share the
     // same content-driven path:
     //
-    //  - At resize-start we snapshot every direct child's pre-gesture
-    //    position + size.
+    //  - At resize-start we snapshot the complete descendant subtree's
+    //    pre-gesture position + size, grouped by immediate parent.
     //  - On every tick we scale the children proportionally (both
     //    axes) to the frame's new dimensions and dispatch them in a
     //    single batch via `applyFrameResizeScale`, together with the
@@ -458,7 +449,7 @@ export const FrameNode = memo(
       clearFrameResizeSnapshot();
     }, [flushFrameResizeScale, clearFrameResizeSnapshot]);
 
-    const frameAccent = resolveAccent(data.style?.accent);
+    const frameAccent = resolveAccent(frameAccentToken(data.style?.accent));
     const frameHeader = (
       <FrameHeader
         metrics={headerMetrics}
@@ -546,7 +537,16 @@ export const FrameNode = memo(
         {isContentMissing ? (
           <MissingFileBanner nodeId={id} />
         ) : (
-          <div className="relative h-full w-full">{frameHeader}</div>
+          <div className="relative h-full w-full">
+            <FrameZoomHeader id={id}>{frameHeader}</FrameZoomHeader>
+            <FrameRegionOverlay
+              id={id}
+              title={label}
+              childCount={childCount}
+              accent={frameAccent}
+              headerMetrics={headerMetrics}
+            />
+          </div>
         )}
       </NodeWrapper>
     );

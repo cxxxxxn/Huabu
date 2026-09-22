@@ -137,7 +137,7 @@ describe('legacy topology load boundary', () => {
     expect(
       saved.state.nodes.find((node: Node) => node.id === 'note'),
     ).toMatchObject({
-      position: { y: 56 },
+      position: { y: 64 },
     });
     expect(
       saved.state.nodes.find((node: Node) => node.id === 'note').data,
@@ -147,10 +147,10 @@ describe('legacy topology load boundary', () => {
     await vi.advanceTimersByTimeAsync(2000);
     const loaded = useCanvasStore.getState();
     expect(loaded.nodes.find((node) => node.id === 'note')?.position.y).toBe(
-      56,
+      64,
     );
     expect(loaded.nodes.find((node) => node.id === 'frame')?.position.y).toBe(
-      188,
+      180,
     );
     expect(loaded.version).toBe(10);
     expect(loaded.isLoading).toBe(false);

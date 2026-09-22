@@ -14,7 +14,9 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe('InstructionFrameBadge', () => {
   let container: HTMLDivElement | undefined;

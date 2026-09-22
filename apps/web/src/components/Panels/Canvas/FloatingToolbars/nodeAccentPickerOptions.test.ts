@@ -5,26 +5,35 @@ import { describe, expect, it } from 'vitest';
 
 import { ACCENT_NONE_TOKEN } from '@huabu/shared';
 
-import { nodeAccentPickerOptions } from './nodeAccentPickerOptions';
+import {
+  nodeAccentPickerOptions,
+  nodeAccentPickerValue,
+} from './nodeAccentPickerOptions';
 
 describe('nodeAccentPickerOptions', () => {
-  it('omits the transparent sentinel for a Frame', () => {
-    const options = nodeAccentPickerOptions(['frame']);
+  it.each(['image', 'video', 'text'])(
+    'preserves the transparent sentinel for %s',
+    (type) => {
+      expect(nodeAccentPickerOptions([type])).toContainEqual(
+        expect.objectContaining({ token: ACCENT_NONE_TOKEN }),
+      );
+      expect(nodeAccentPickerValue(type, null)).toBe(ACCENT_NONE_TOKEN);
+    },
+  );
 
-    expect(options).not.toContainEqual(
-      expect.objectContaining({ token: ACCENT_NONE_TOKEN }),
-    );
-    expect(options).toContainEqual(expect.objectContaining({ token: 'white' }));
-  });
+  it.each(['audio', 'frame', 'note', 'office', 'pdf', 'spacePreview', 'web'])(
+    'omits the transparent sentinel and defaults %s to white',
+    (type) => {
+      expect(nodeAccentPickerOptions([type])).not.toContainEqual(
+        expect.objectContaining({ token: ACCENT_NONE_TOKEN }),
+      );
+      expect(nodeAccentPickerValue(type, null)).toBe('white');
+      expect(nodeAccentPickerValue(type, undefined)).toBe('white');
+    },
+  );
 
-  it('omits the transparent sentinel from selections containing a Frame', () => {
-    expect(nodeAccentPickerOptions(['frame', 'note'])).not.toContainEqual(
-      expect.objectContaining({ token: ACCENT_NONE_TOKEN }),
-    );
-  });
-
-  it('preserves the transparent sentinel for supported node types', () => {
-    expect(nodeAccentPickerOptions(['text'])).toContainEqual(
+  it('omits the transparent sentinel from mixed surface selections', () => {
+    expect(nodeAccentPickerOptions(['image', 'note'])).not.toContainEqual(
       expect.objectContaining({ token: ACCENT_NONE_TOKEN }),
     );
   });
