@@ -301,23 +301,25 @@ test.describe(`storage profile ${PROFILE}`, () => {
     page,
   }, testInfo) => {
     const canvasId = await openNewSpace(page);
-    // The chat panel opens over the pane; collapsing it needs `force` for the
-    // same reason the rest of the suite uses it there.
-    await page
-      .getByRole('button', { name: 'Collapse previews' })
-      .click({ force: true });
+    const previewPanel = page.locator('[data-canvas-panel="right"]');
+    await expect(previewPanel).toBeAttached();
+    if ((await previewPanel.getAttribute('data-collapsed')) !== 'true') {
+      await page.getByRole('button', { name: 'Collapse previews' }).click();
+    }
+    await expect(previewPanel).toBeHidden();
 
     const paneBox = await page.locator('.react-flow__pane').boundingBox();
     if (!paneBox) throw new Error('React Flow pane was not laid out');
-    await page
-      .locator('.react-flow__panel.bottom.center')
-      .getByRole('button', { name: /^Note/ })
-      .click();
+    await expect(page.locator('[data-canvas-root]')).toHaveClass(
+      /canvas-pending-note/,
+    );
+    await expect(page.locator('.react-flow__node-note')).toHaveCount(0);
     await page.mouse.click(
       paneBox.x + paneBox.width / 2,
       paneBox.y + paneBox.height / 2,
     );
-    const note = page.locator('.react-flow__node-note').first();
+    const note = page.locator('.react-flow__node-note');
+    await expect(note).toHaveCount(1);
     await expect(note).toBeVisible();
     const noteId = await note.getAttribute('data-id');
     if (!noteId) throw new Error('The created Note exposed no stable id');
@@ -358,6 +360,8 @@ test.describe(`storage profile ${PROFILE}`, () => {
 
     await page.goto(`/canvas/${canvasId}`);
     await page.waitForSelector('.react-flow__viewport');
+    await expect(note).toHaveCount(1);
+    await expect(note).toHaveAttribute('data-id', noteId);
     await expect(noteOnCanvas(page)).toBeVisible();
     // Non-zero decoded width is the byte-level claim: the blob backend served
     // the image again, from wherever this profile put it.
