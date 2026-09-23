@@ -3385,9 +3385,24 @@ const useCanvasStore = create<RFState>()(
       // Only process RF-internal change types (position, selection, dimensions).
       // Deletions must go through dispatch({ type: 'DELETE_NODES' }).
       // Additions must go through dispatch({ type: 'ADD_NODES' }).
-      const internalChanges = changes.filter(
-        (c) => c.type !== 'remove' && c.type !== 'add',
-      );
+      const currentById = new Map(get().nodes.map((node) => [node.id, node]));
+      const internalChanges = changes.filter((change) => {
+        if (change.type === 'remove' || change.type === 'add') return false;
+        if (
+          change.type !== 'dimensions' ||
+          change.resizing !== undefined ||
+          isSnapSessionActive()
+        )
+          return true;
+        const node = currentById.get(change.id);
+        return (
+          node?.type !== 'frame' ||
+          typeof node.style?.width !== 'number' ||
+          typeof node.style?.height !== 'number' ||
+          node.measured?.width !== node.style.width ||
+          node.measured?.height !== node.style.height
+        );
+      });
       if (internalChanges.length === 0) return;
 
       // Strip `setAttributes` from dimension changes so that

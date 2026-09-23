@@ -19,6 +19,72 @@ afterEach(() => {
 });
 
 describe('Frame resize React Flow measurement boundary', () => {
+  it('does not publish rounded Frame measurements when authored dimensions are already recorded', () => {
+    const frame: Node = {
+      id: 'frame',
+      type: 'frame',
+      position: { x: 0, y: 0 },
+      data: {},
+      style: { width: 579.38, height: 722.34 },
+      measured: { width: 579.38, height: 722.34 },
+    };
+    useCanvasStore
+      .getState()
+      ._setStateNoAutosave({ nodes: [frame], edges: [] });
+    const before = useCanvasStore.getState();
+    before.onNodesChange([
+      {
+        type: 'dimensions',
+        id: 'frame',
+        dimensions: { width: 579, height: 722 },
+      },
+    ]);
+    expect(useCanvasStore.getState()).toBe(before);
+    before.onNodesChange([
+      {
+        type: 'dimensions',
+        id: 'frame',
+        dimensions: { width: 579, height: 722 },
+        resizing: true,
+      },
+    ]);
+    expect(useCanvasStore.getState().nodes[0].resizing).toBe(true);
+    before.onNodesChange([
+      {
+        type: 'dimensions',
+        id: 'frame',
+        dimensions: { width: 579, height: 722 },
+        resizing: false,
+      },
+    ]);
+    expect(useCanvasStore.getState().nodes[0].resizing).toBe(false);
+    expect(useCanvasStore.getState().nodes[0].measured).toEqual(frame.measured);
+    const note: Node = {
+      id: 'note',
+      type: 'note',
+      position: { x: 0, y: 0 },
+      data: {},
+    };
+    before._setStateNoAutosave({ nodes: [frame, note], edges: [] });
+    before.onNodesChange([
+      {
+        type: 'dimensions',
+        id: 'frame',
+        dimensions: { width: 579, height: 722 },
+      },
+      {
+        type: 'dimensions',
+        id: 'note',
+        dimensions: { width: 400, height: 200 },
+      },
+    ]);
+    expect(useCanvasStore.getState().nodes[0]).toBe(frame);
+    expect(useCanvasStore.getState().nodes[1].measured).toEqual({
+      width: 400,
+      height: 200,
+    });
+  });
+
   it('leaves Text and Question height renderer-owned during width resize', () => {
     const nodes: Node[] = ['text', 'question'].map((type) => ({
       id: type,

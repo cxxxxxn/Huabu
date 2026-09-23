@@ -132,6 +132,10 @@ Unit tests cannot cover this class: the failures live in CSS layout, and happy-d
 - **Late-decoding media.** A note whose image has not decoded cannot reach its final height; it commits provisionally and re-measures on the next load.
 - **Hug frame geometry** is stored as authored geometry but is in practice derived from its children. See [derived-frame-geometry.md](../backlog/derived-frame-geometry.md).
 
+## Frame Measurement Notifications
+
+Frame dimensions remain engine-owned: idle React Flow measurements normalize to numeric authored `style.width` and `style.height`, including fractional values. When both measured dimensions already equal those authored values, `onNodesChange` discards the idle Frame notification before allocating or broadcasting a new nodes array. Browser integer rounding and intermediate CSS-transition measurements therefore cannot repeatedly invalidate the canvas and Layers tree during viewport navigation. Explicit resize-state notifications, active snap sessions, initial measurements, and non-Frame measurements retain their existing processing.
+
 ## Code entry points
 
 | File                                                                                                                          | Responsibility                                                                                           |
