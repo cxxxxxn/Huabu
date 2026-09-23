@@ -15,6 +15,7 @@ import {
 import {
   connectionPortOffset,
   NodeConnectionHandles,
+  scheduleHandleRefresh,
   shouldExposeConnectionPorts,
   SIDE_POSITION,
 } from './NodeConnectAffordance';
@@ -42,6 +43,7 @@ vi.mock('@xyflow/react', async (importOriginal) => ({
   useStore: (select: (state: typeof mocks.flow) => unknown) =>
     select(mocks.flow),
   useInternalNode: () => mocks.node,
+  useStoreApi: () => mocks.flow,
   useConnection: (select: (state: typeof mocks.connection) => unknown) =>
     select(mocks.connection),
   useUpdateNodeInternals: () => mocks.updateNodeInternals,
@@ -92,6 +94,49 @@ vi.mock('react-i18next', async (importOriginal) => ({
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
+
+describe('scheduleHandleRefresh', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  it('deduplicates a large commit into one update per flow instance', async () => {
+    const scope = {};
+    const update = vi.fn();
+    for (let index = 0; index < 665; index++) {
+      scheduleHandleRefresh(scope, `node-${index}`, update);
+      scheduleHandleRefresh(scope, `node-${index}`, update);
+    }
+    expect(update).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(20);
+    expect(update).toHaveBeenCalledOnce();
+    expect(update.mock.calls[0][0]).toHaveLength(665);
+    scheduleHandleRefresh(scope, 'node-next', update);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(update).toHaveBeenLastCalledWith(['node-next']);
+  });
+
+  it('isolates canvases and cancels only the matching pending request', async () => {
+    const scope = {};
+    const update = vi.fn();
+    const otherUpdate = vi.fn();
+    const cancelOld = scheduleHandleRefresh(scope, 'node', update);
+    scheduleHandleRefresh(scope, 'node', update);
+    cancelOld();
+    const cancelRemoved = scheduleHandleRefresh(scope, 'removed', update);
+    cancelRemoved();
+    scheduleHandleRefresh({}, 'node', otherUpdate);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(update).toHaveBeenCalledExactlyOnceWith(['node']);
+    expect(otherUpdate).toHaveBeenCalledExactlyOnceWith(['node']);
+  });
+
+  it('does not update an unmounted batch', async () => {
+    const update = vi.fn();
+    const cancel = scheduleHandleRefresh({}, 'node', update);
+    cancel();
+    await vi.advanceTimersByTimeAsync(20);
+    expect(update).not.toHaveBeenCalled();
+  });
+});
 
 describe('connectionPortOffset', () => {
   it.each([0.05, 0.25, 1, 2, 5])(
@@ -355,6 +400,41 @@ describe('NodeConnectionHandles contract', () => {
     expect(hud.children).toHaveLength(0);
   });
 
+  it.each([0.5, 0.1, 2])(
+    'does not measure hidden ports or refresh their internals during navigation at %s zoom',
+    async (zoom) => {
+      const query = vi.spyOn(hud, 'querySelectorAll');
+      render({ selected: false });
+      await act(async () => {
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => resolve()),
+        );
+      });
+      mocks.updateNodeInternals.mockClear();
+      mocks.flow.transform = [210, 320, zoom];
+      render({ selected: false, hovered: true });
+      await act(async () => {
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => resolve()),
+        );
+      });
+      expect(query).not.toHaveBeenCalled();
+      expect(mocks.updateNodeInternals).not.toHaveBeenCalled();
+      expect(container.querySelectorAll('[data-handleid]')).toHaveLength(8);
+      query.mockRestore();
+      render({ selected: true });
+      await act(async () => {
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => resolve()),
+        );
+      });
+      expect(mocks.updateNodeInternals).toHaveBeenCalledWith(['node']);
+      expect(translation(hit('top'))).toEqual(
+        connectionPortOffset(Position.Top, zoom, 22),
+      );
+    },
+  );
+
   it.each(['pdf', 'web'])(
     'tracks the rendered %s border through reading-mode changes',
     async (type) => {
@@ -397,6 +477,11 @@ describe('NodeConnectionHandles contract', () => {
       expect(useConnectPortStore.getState().pending?.anchor).toEqual({
         x: 300,
         y: 200,
+      });
+      await act(async () => {
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => resolve()),
+        );
       });
       expect(mocks.updateNodeInternals).toHaveBeenCalled();
     },

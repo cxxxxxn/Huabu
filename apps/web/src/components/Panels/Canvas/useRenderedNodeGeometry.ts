@@ -48,12 +48,14 @@ export function useRenderedNodeGeometry(
     viewportY: number;
     zoom: number;
   },
+  enabled = true,
 ): RenderedNodeGeometryState {
   const [geometry, setGeometry] = useState<RenderedNodeGeometry | null>(null);
   const [gestureResizing, setGestureResizing] = useState(false);
   const measureRef = useRef<((flush: boolean) => void) | null>(null);
 
   useEffect(() => {
+    if (!enabled) return;
     const body = document.body;
     const update = () =>
       setGestureResizing(body.classList.contains('node-resize-active'));
@@ -61,10 +63,10 @@ export function useRenderedNodeGeometry(
     const observer = new MutationObserver(update);
     observer.observe(body, { attributeFilter: ['class'] });
     return () => observer.disconnect();
-  }, []);
+  }, [enabled]);
 
   useLayoutEffect(() => {
-    if (!domNode || typeof ResizeObserver === 'undefined') {
+    if (!enabled || !domNode || typeof ResizeObserver === 'undefined') {
       setGeometry(null);
       return;
     }
@@ -115,7 +117,7 @@ export function useRenderedNodeGeometry(
       observer.disconnect();
       mutationObserver.disconnect();
     };
-  }, [domNode, nodeId]);
+  }, [domNode, nodeId, enabled]);
 
   useLayoutEffect(() => {
     measureRef.current?.(false);
@@ -130,7 +132,7 @@ export function useRenderedNodeGeometry(
   ]);
 
   useLayoutEffect(() => {
-    if (!activelyResizing && !gestureResizing) return;
+    if (!enabled || (!activelyResizing && !gestureResizing)) return;
     let frame = 0;
     const update = () => {
       measureRef.current?.(true);
@@ -138,7 +140,7 @@ export function useRenderedNodeGeometry(
     };
     frame = requestAnimationFrame(update);
     return () => cancelAnimationFrame(frame);
-  }, [activelyResizing, gestureResizing]);
+  }, [activelyResizing, gestureResizing, enabled]);
 
-  return { geometry, gestureResizing };
+  return { geometry: enabled ? geometry : null, gestureResizing };
 }

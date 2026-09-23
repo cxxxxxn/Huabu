@@ -11,10 +11,11 @@ import {
   useConnection,
   useInternalNode,
   useStore,
+  useStoreApi,
   useUpdateNodeInternals,
 } from '@xyflow/react';
 import { Plus } from 'lucide-react';
-import { memo, useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useCallback, useLayoutEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -82,6 +83,31 @@ const PORT_HIT_SIZE = NODE_CONNECTION_CHROME.hitSize;
 
 /** Painted port centres sit this far outside the boundary, in screen px. */
 const PORT_OUTWARD_OFFSET = NODE_CONNECTION_CHROME.outwardOffset;
+
+const pendingHandleRefreshes = new WeakMap<object, Map<string, object>>();
+
+export function scheduleHandleRefresh(
+  scope: object,
+  nodeId: string,
+  update: (nodeIds: string[]) => void,
+): () => void {
+  let pending = pendingHandleRefreshes.get(scope);
+  if (!pending) {
+    pending = new Map();
+    pendingHandleRefreshes.set(scope, pending);
+    const batch = pending;
+    requestAnimationFrame(() => {
+      pendingHandleRefreshes.delete(scope);
+      if (batch.size > 0) update([...batch.keys()]);
+    });
+  }
+  const ticket = {};
+  pending.set(nodeId, ticket);
+  const batch = pending;
+  return () => {
+    if (batch.get(nodeId) === ticket) batch.delete(nodeId);
+  };
+}
 
 /** Visual/hit offset only; never apply this to React Flow's handle bounds. */
 export function connectionPortOffset(
@@ -417,7 +443,15 @@ export const NodeConnectionHandles = memo(
     const { t } = useTranslation();
     const node = useInternalNode(nodeId);
     const domNode = useStore((state) => state.domNode);
-    const [tx, ty, zoom] = useStore((state) => state.transform);
+    const pinnedSide = useConnectPortStore((s) =>
+      s.pending?.sourceId === nodeId ? s.pending.side : null,
+    );
+    const connecting = useConnection((c) => c.inProgress);
+    const measurePorts =
+      selected || (connecting && hovered) || pinnedSide !== null;
+    const tx = useStore((state) => (measurePorts ? state.transform[0] : 0));
+    const ty = useStore((state) => (measurePorts ? state.transform[1] : 0));
+    const zoom = useStore((state) => (measurePorts ? state.transform[2] : 1));
     const x = node?.internals.positionAbsolute.x ?? 0;
     const y = node?.internals.positionAbsolute.y ?? 0;
     const width =
@@ -437,6 +471,7 @@ export const NodeConnectionHandles = memo(
         viewportY: ty,
         zoom,
       },
+      measurePorts,
     );
     // Match the shell's layout inset, not its painted overlay width.
     // Frame retains its separate surface policy.
@@ -449,17 +484,9 @@ export const NodeConnectionHandles = memo(
     // Only the pinned *side* matters here, and only when the pending
     // gesture belongs to this node — selecting that narrowly keeps a
     // gesture on one node from re-rendering every other node's ports.
-    const pinnedSide = useConnectPortStore((s) =>
-      s.pending?.sourceId === nodeId ? s.pending.side : null,
-    );
     const mark = useNodeCollapseStore((s) => s.marks[nodeId]);
+    const flow = useStoreApi();
     const updateNodeInternals = useUpdateNodeInternals();
-    const hadMark = useRef(false);
-    useLayoutEffect(() => {
-      if (!renderedGeometry && !mark && !hadMark.current) return;
-      hadMark.current = mark !== undefined;
-      updateNodeInternals(nodeId);
-    }, [mark, renderedGeometry, nodeId, updateNodeInternals]);
 
     const baseHandleSize =
       NODE_CONNECTION_CHROME.dotSize[isNotMouse ? 'touch' : 'mouse'];
@@ -472,7 +499,6 @@ export const NodeConnectionHandles = memo(
     const dotSize = baseHandleSize * inverseZoom;
     // A connection drag temporarily exposes the hovered target node's dots;
     // the source port remains pinned separately below.
-    const connecting = useConnection((c) => c.inProgress);
     const fromHandle = useConnection((c) => c.fromHandle);
 
     // Ports are the single control for both "connect" and "create": drag
@@ -537,6 +563,26 @@ export const NodeConnectionHandles = memo(
       mark || renderedGeometry
         ? { ...boundaryRect, x: boundaryRect.x - x, y: boundaryRect.y - y }
         : null;
+
+    const handleX = mark ? localRect?.x : 0;
+    const handleY = mark ? localRect?.y : 0;
+    const handleWidth = localRect?.width ?? width;
+    const handleHeight = localRect?.height ?? height;
+    useLayoutEffect(
+      () => scheduleHandleRefresh(flow, nodeId, updateNodeInternals),
+      [
+        flow,
+        nodeId,
+        updateNodeInternals,
+        handleX,
+        handleY,
+        handleWidth,
+        handleHeight,
+        borderLeft,
+        borderTop,
+        dotSize,
+      ],
+    );
 
     return (
       <>
