@@ -9,14 +9,21 @@ import { autoHeightKey } from '@huabu/shared/canvas-engine';
 
 import { NoteNode, type NoteNodeType } from './NoteNode';
 
+import type * as CanvasEngine from '@huabu/shared/canvas-engine';
 import type { Node, NodeProps } from '@xyflow/react';
 
 const mocks = vi.hoisted(() => ({
   nodes: [] as Node[],
   zoom: 1,
+  mode: 'overview' as 'minimal' | 'overview' | 'reading',
   callbacks: [] as Array<() => void>,
+  disconnect: vi.fn(),
   propose: vi.fn(),
 }));
+vi.mock('@huabu/shared/canvas-engine', async (importOriginal) => {
+  const actual = await importOriginal<typeof CanvasEngine>();
+  return { ...actual, autoHeightKey: vi.fn(actual.autoHeightKey) };
+});
 vi.mock('@xyflow/react', () => ({
   useStore: (select: (state: unknown) => unknown) =>
     select({ transform: [0, 0, mocks.zoom] }),
@@ -39,7 +46,7 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 vi.mock('@/hooks/useNodePresentation', () => ({
-  useNodePresentation: () => ({ mode: 'overview', isVisible: true }),
+  useNodePresentation: () => ({ mode: mocks.mode, isVisible: true }),
 }));
 vi.mock('../shared/nodeHydrationScheduler', () => ({
   useDeferredHydration: () => true,
@@ -103,7 +110,10 @@ beforeEach(() => {
     },
   ];
   mocks.zoom = 1;
+  mocks.mode = 'overview';
   mocks.callbacks = [];
+  mocks.disconnect.mockReset();
+  vi.mocked(autoHeightKey).mockClear();
   mocks.propose.mockReset();
   vi.stubGlobal(
     'ResizeObserver',
@@ -113,14 +123,18 @@ beforeEach(() => {
       }
       observe() {}
       unobserve() {}
-      disconnect() {}
+      disconnect() {
+        mocks.disconnect('resize');
+      }
     },
   );
   vi.stubGlobal(
     'MutationObserver',
     class {
       observe() {}
-      disconnect() {}
+      disconnect() {
+        mocks.disconnect('mutation');
+      }
     },
   );
   vi.stubGlobal(
@@ -139,6 +153,67 @@ afterEach(() => {
 });
 
 describe('mounted Note actual-width measurement', () => {
+  it.each(['overview', 'reading'] as const)(
+    'skips fixed minimal keys and resumes measurement in %s',
+    (mode) => {
+      mocks.nodes[0].data.heightMode = 'fixed';
+      mocks.mode = 'minimal';
+      render();
+      mocks.nodes[0].data.content = 'Updated while hidden';
+      render();
+      expect(autoHeightKey).not.toHaveBeenCalled();
+      expect(mocks.callbacks).toHaveLength(0);
+
+      const host = required(
+        container.querySelector<HTMLElement>('[data-note-content-host]'),
+      );
+      Object.defineProperty(host, 'clientWidth', { value: 394 });
+      Object.defineProperty(
+        host.querySelector('.ProseMirror'),
+        'scrollHeight',
+        {
+          value: 500,
+        },
+      );
+      mocks.mode = mode;
+      render();
+      expect(autoHeightKey).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ content: 'Updated while hidden' }),
+        }),
+      );
+      expect(mocks.callbacks).toHaveLength(1);
+      expect(mocks.propose).not.toHaveBeenCalled();
+
+      mocks.mode = 'minimal';
+      vi.mocked(autoHeightKey).mockClear();
+      render();
+      expect(autoHeightKey).not.toHaveBeenCalled();
+      expect(mocks.disconnect).toHaveBeenCalledWith('resize');
+      expect(mocks.disconnect).toHaveBeenCalledWith('mutation');
+      expect(mocks.nodes[0].style).toEqual({ width: 400, height: 300 });
+    },
+  );
+
+  it('resumes auto measurement while remaining minimal', () => {
+    mocks.nodes[0].data.heightMode = 'fixed';
+    mocks.mode = 'minimal';
+    render();
+    const host = required(
+      container.querySelector<HTMLElement>('[data-note-content-host]'),
+    );
+    Object.defineProperty(host, 'clientWidth', { value: 394 });
+    Object.defineProperty(host.querySelector('.ProseMirror'), 'scrollHeight', {
+      value: 500,
+    });
+    mocks.nodes[0].data.heightMode = 'auto';
+    render();
+    expect(mocks.callbacks).toHaveLength(1);
+    expect(mocks.propose).toHaveBeenLastCalledWith(
+      expect.objectContaining({ measuredFor: autoHeightKey(mocks.nodes[0]) }),
+    );
+  });
+
   it('captures the measured width, rejects lagging DOM and old callbacks, and ignores zoom', () => {
     render();
     const host = required(

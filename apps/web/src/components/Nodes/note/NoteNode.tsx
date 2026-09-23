@@ -152,6 +152,7 @@ export const NoteNode = memo(
     // the engine. Starting at 0 is safe precisely because of that: the
     // store already holds a usable height before this component mounts.
     const measurementKey = useCanvasStore((state) => {
+      if (isFixedHeight && isMinimalLOD) return null;
       const node = state.nodes.find((candidate) => candidate.id === id);
       return autoHeightKey(
         node ? { ...node, data } : ({ type: 'note', data } as unknown as Node),
@@ -223,7 +224,7 @@ export const NoteNode = memo(
       // to measure; skip entirely so we never report the placeholder's
       // height as the note's content height. The node keeps the footprint
       // already stored in `style.height` until the real editor mounts.
-      if (!hydrated) return;
+      if (!hydrated || measurementKey === null) return;
 
       const measure = () => {
         const node = useCanvasStore
