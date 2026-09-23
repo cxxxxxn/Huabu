@@ -29,9 +29,9 @@ export const FONT_FAMILY_CSS: Record<NodeFontFamily, string> = {
 };
 
 /** Base horizontal TextNode padding (px per side), scaled by fontSize / 16. */
-export const TEXT_NODE_PADDING_X = 12;
+export const TEXT_NODE_PADDING_X = 8;
 /** Base vertical TextNode padding (px per side), scaled by fontSize / 16. */
-export const TEXT_NODE_PADDING_Y = 4;
+export const TEXT_NODE_PADDING_Y = 3;
 
 export const QUESTION_NODE_DEFAULT_FONT_SIZE = 24;
 
