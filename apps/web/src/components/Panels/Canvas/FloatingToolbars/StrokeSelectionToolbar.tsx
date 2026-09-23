@@ -40,6 +40,7 @@ import {
   dispatchAgentTurn,
   prepareAgentTurn,
 } from '@/hooks/agentTurnController';
+import { isOutsideCanvasInteraction } from '@/hooks/shortcuts/isEditableTarget';
 import { useIsNotMouse } from '@/hooks/useInputMode';
 import { useAcpProfilesStore } from '@/store/acpProfilesStore';
 import useCanvasStore from '@/store/canvasStore';
@@ -463,6 +464,7 @@ export const StrokeSelectionToolbar = () => {
   useEffect(() => {
     if (!hasSelection) return;
     const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || isOutsideCanvasInteraction(e.target)) return;
       if (e.key !== 'Delete' && e.key !== 'Backspace') return;
       const el = document.activeElement as HTMLElement | null;
       if (

@@ -16,7 +16,7 @@ import { Loading } from '../../components/Common/Loading';
 import { toast } from '../../components/Common/Toast';
 import { hasNodePreview } from '../../components/Nodes/previews';
 import { CanvasLayerPanel } from '../../components/Panels/CanvasLayerPanel';
-import { focusNodesOnCanvas } from '../../components/Panels/CanvasLayerPanel/focusNodesOnCanvas';
+import { revealNodesOnCanvas } from '../../components/Panels/CanvasLayerPanel/focusNodesOnCanvas';
 import { CanvasHeader } from '../../components/Panels/Header/CanvasHeader.tsx';
 import { PreviewWorkspacePanel } from '../../components/Panels/PreviewWorkspace/PreviewWorkspacePanel';
 import { useGlobalSearchHotkey } from '../../hooks/useGlobalSearchHotkey';
@@ -200,7 +200,7 @@ export default function CanvasPage() {
     canvas.selectNodes([node.id], false);
     if (node.type === 'question') {
       if (typeof node.data.threadId === 'string' && node.data.threadId) {
-        const tabId = openPreviewNode(node.id);
+        const tabId = openPreviewNode(node.id, { transient: false });
         if (tabId) {
           usePreviewWorkspaceStore.getState().requestChatOpen(tabId, 'bottom');
         }
@@ -208,11 +208,13 @@ export default function CanvasPage() {
         toast(t('canvasPage.nodeFocusedNoPreview'), { tone: 'info' });
       }
     } else if (hasNodePreview(node.type ?? '')) {
-      openPreviewNode(node.id);
+      openPreviewNode(node.id, { transient: false });
     } else {
       toast(t('canvasPage.nodeFocusedNoPreview'), { tone: 'info' });
     }
-    focusNodesOnCanvas(rfInstance, [node.id], 400);
+    if (canvas.canvasWrapper) {
+      revealNodesOnCanvas(rfInstance, canvas.canvasWrapper, [node.id], 400);
+    }
   }, [
     canvasId,
     isLoading,

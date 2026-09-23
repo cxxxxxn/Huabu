@@ -17,6 +17,7 @@ import {
   Panel,
 } from '@xyflow/react';
 import clsx from 'clsx';
+import { Maximize } from 'lucide-react';
 import React, {
   useCallback,
   useEffect,
@@ -24,6 +25,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import '@xyflow/react/dist/style.css';
 
@@ -36,6 +38,7 @@ import {
 } from '@huabu/shared/canvas-engine';
 
 import { resolveArtifactUrl } from '@/api/artifact';
+import { Button } from '@/components/Common/Button';
 import { cn } from '@/components/Common/cn';
 import { Loading } from '@/components/Common/Loading';
 import { AudioNode } from '@/components/Nodes/audio/AudioNode';
@@ -68,6 +71,7 @@ import { getDragActivationDistance } from '@/handler/canvasGestureSession';
 import { createHandlerOwnerRecognizer } from '@/handler/canvasPointerRecognizers/handlerOwner';
 import { createPlacementRecognizer } from '@/handler/canvasPointerRecognizers/placement';
 import { useCanvasShortcuts } from '@/hooks/shortcuts';
+import { isOutsideCanvasInteraction } from '@/hooks/shortcuts/isEditableTarget';
 import { useAutoPanDuringSelection } from '@/hooks/useAutoPanDuringSelection';
 import { useCanvasGestures } from '@/hooks/useCanvasGestures';
 import { useCanvasLasso } from '@/hooks/useCanvasLasso';
@@ -115,11 +119,6 @@ import { GRID_SIZE, MAX_ZOOM, MIN_ZOOM } from '../../../config/canvas.ts';
 import useCanvasStore from '../../../store/canvasStore.ts';
 import { useConnectPortStore } from '../../../store/connectPortStore.ts';
 import { useGesturePreviewStore } from '../../../store/gesturePreviewStore.ts';
-import { usePanelStore } from '../../../store/panelStore.ts';
-import {
-  selectActiveNodeId,
-  usePreviewWorkspaceStore,
-} from '../../../store/previewWorkspace/store.ts';
 import { useToolStore } from '../../../store/toolStore.ts';
 import {
   canMoveHuabuPayload,
@@ -144,8 +143,7 @@ import { VideoNode } from '../../Nodes/video/VideoNode.tsx';
 import { WebNode } from '../../Nodes/web/WebNode.tsx';
 import {
   anchorViewportCentre,
-  getReliableNodeBounds,
-  revealBoundsInViewport,
+  fitNodesOnCanvas,
 } from '../CanvasLayerPanel/focusNodesOnCanvas.ts';
 
 import type { CanvasNode } from '@/components/Nodes/types';
@@ -241,13 +239,6 @@ const EXPANDABLE_TYPES = new Set([
   'office',
   'note',
 ]);
-
-/**
- * How long a Chat open keeps its node anchor. Long enough to outlive the
- * 220ms panel width transition (see `index.css`), short enough that the
- * anchor cannot survive into the user's next interaction.
- */
-const RIGHT_PANEL_ANCHOR_TTL_MS = 400;
 
 /**
  * Viewport corrections below this many screen pixels are dropped. Integer
@@ -395,6 +386,29 @@ type CanvasProps = {
   shortcutsDisabled?: boolean;
 };
 
+function CanvasFitControl() {
+  const instance = useReactFlow();
+  const label = useStore(
+    (state) => state.ariaLabelConfig['controls.fitView.ariaLabel'],
+  );
+  return (
+    <Button
+      variant="ghost"
+      iconOnly
+      title={label}
+      className="react-flow__controls-fitview !h-[26px] !w-[26px] !rounded-none !p-1"
+      onClick={() => {
+        void fitNodesOnCanvas(
+          instance,
+          instance.getNodes().map((node) => node.id),
+        );
+      }}
+    >
+      <Maximize />
+    </Button>
+  );
+}
+
 export const Canvas: React.FC<CanvasProps> = ({
   shortcutsDisabled = false,
 }) => {
@@ -406,7 +420,6 @@ export const Canvas: React.FC<CanvasProps> = ({
   // action refs, which dominated initial commit work on canvas open.
   const nodes = useCanvasStore((state) => state.nodes);
   const edges = useCanvasStore((state) => state.edges);
-  const expandedNodeId = usePreviewWorkspaceStore(selectActiveNodeId);
   const canvasId = useCanvasStore((state) => state.canvasId);
   const minimapEnabled = useCanvasStore((state) => state.minimapEnabled);
   const pendingNodeType = useToolStore((state) => state.pendingNodeType);
@@ -462,15 +475,6 @@ export const Canvas: React.FC<CanvasProps> = ({
   const { setPendingNodeType } = useToolStore.getState();
 
   const [isBoxSelecting, setIsBoxSelecting] = useState(false);
-  const rightPanelAnchorNodeId = usePanelStore(
-    (state) => state.rightPanelAnchorNodeId,
-  );
-  const clearRightPanelAnchor = usePanelStore(
-    (state) => state.clearRightPanelAnchor,
-  );
-  const layoutAnchorNodeId = expandedNodeId ?? rightPanelAnchorNodeId;
-  const layoutAnchorNodeIdRef = useRef(layoutAnchorNodeId);
-  layoutAnchorNodeIdRef.current = layoutAnchorNodeId;
 
   const selectedNodeIds = useMemo(
     () => new Set(nodes.filter((node) => node.selected).map((node) => node.id)),
@@ -485,6 +489,14 @@ export const Canvas: React.FC<CanvasProps> = ({
   );
 
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const [toolbarHost, setToolbarHost] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setToolbarHost(
+      wrapperRef.current
+        ?.closest('[data-overlay-layout]')
+        ?.querySelector<HTMLElement>('[data-canvas-toolbar-layer]') ?? null,
+    );
+  }, []);
   const suppressNextPaneClickRef = useRef(false);
   const rfInstanceRef = useRef<ReactFlowInstance | null>(null);
   const lastDropRef = useRef<{ key: string; at: number } | null>(null);
@@ -1006,6 +1018,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   useEffect(() => {
     if (!pendingNodeType || pendingNodeType === 'frame') return;
     const onKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || isOutsideCanvasInteraction(e.target)) return;
       if (e.key === 'Escape') exitPendingNodeType();
     };
     window.addEventListener('keydown', onKeyDown);
@@ -1186,12 +1199,6 @@ export const Canvas: React.FC<CanvasProps> = ({
     [pendingNodeType, placePendingNode, selectNodes],
   );
 
-  // Keep layout-driven canvas resizes spatially stable. Side panels and split
-  // previews change the wrapper size without changing React Flow's transform;
-  // compensating by half the size delta keeps the same flow point centred.
-  // An expanded split node is a stronger anchor, so reveal it with the minimum
-  // additional pan after the centre compensation. Replace mode reports a zero
-  // width and is deliberately ignored, freezing the hidden canvas viewport.
   useEffect(() => {
     const wrapper = wrapperRef.current;
     if (!wrapper || typeof ResizeObserver === 'undefined') return;
@@ -1214,20 +1221,12 @@ export const Canvas: React.FC<CanvasProps> = ({
       }
 
       const currentViewport = instance.getViewport();
-      let nextViewport = anchorViewportCentre(
+      const nextViewport = anchorViewportCentre(
         currentViewport,
         previousSize,
         nextSize,
       );
       previousSize = nextSize;
-
-      const anchorNodeId = layoutAnchorNodeIdRef.current;
-      if (anchorNodeId) {
-        const bounds = getReliableNodeBounds(instance, [anchorNodeId]);
-        if (bounds) {
-          nextViewport = revealBoundsInViewport(nextViewport, nextSize, bounds);
-        }
-      }
 
       if (
         Math.abs(nextViewport.x - currentViewport.x) <
@@ -1242,17 +1241,6 @@ export const Canvas: React.FC<CanvasProps> = ({
     observer.observe(wrapper);
     return () => observer.disconnect();
   }, []);
-
-  // The Chat anchor is one-shot and must expire on its own clock. Opening
-  // Chat from a node while the panel is already open changes no layout, so
-  // an anchor consumed only by a resize would linger and let a later,
-  // unrelated resize (Layers toggle, window resize) pan the canvas back to
-  // a node the user has long since left.
-  useEffect(() => {
-    if (!rightPanelAnchorNodeId) return;
-    const timer = setTimeout(clearRightPanelAnchor, RIGHT_PANEL_ANCHOR_TTL_MS);
-    return () => clearTimeout(timer);
-  }, [rightPanelAnchorNodeId, clearRightPanelAnchor]);
 
   useEffect(() => {
     const cancelHeightCommits = () => cancelHeightCommitSuspensions();
@@ -1640,9 +1628,27 @@ export const Canvas: React.FC<CanvasProps> = ({
           wrapperRef={wrapperRef}
           onPan={shiftLassoScreenPoints}
         />
-        <Panel position="bottom-center" className="mb-6">
-          <NodeToolbar activeTool={tool} onToolChange={setTool} />
-        </Panel>
+        {toolbarHost ? (
+          createPortal(
+            <div
+              data-canvas-main-toolbar
+              className="react-flow__panel nodrag nopan pointer-events-auto absolute !bottom-6 !left-1/2 !m-0 max-w-[calc(100%-24px)] -translate-x-1/2"
+              onPointerDown={(event) => event.stopPropagation()}
+              onDoubleClick={(event) => event.stopPropagation()}
+              onContextMenu={(event) => event.stopPropagation()}
+              onWheel={(event) => event.stopPropagation()}
+              onDragOver={(event) => event.stopPropagation()}
+              onDrop={(event) => event.stopPropagation()}
+            >
+              <NodeToolbar activeTool={tool} onToolChange={setTool} />
+            </div>,
+            toolbarHost,
+          )
+        ) : (
+          <Panel position="bottom-center" className="mb-6">
+            <NodeToolbar activeTool={tool} onToolChange={setTool} />
+          </Panel>
+        )}
         {!isBoxSelecting && <MultiSelectResizer />}
         {!isBoxSelecting && <SelectionOutlines />}
         {!isBoxSelecting && !hasStrokeSelection && <MultiSelectToolbar />}
@@ -1666,7 +1672,12 @@ export const Canvas: React.FC<CanvasProps> = ({
         />
         <Background color="var(--canvas-grid)" gap={GRID_SIZE} />
 
-        <Controls position="bottom-left" showInteractive={false}>
+        <Controls
+          position="bottom-left"
+          showInteractive={false}
+          showFitView={false}
+        >
+          <CanvasFitControl />
           <CanvasZoomLevel />
           <CanvasInteractivityControl
             locked={interactivityLocked}
