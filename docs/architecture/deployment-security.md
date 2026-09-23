@@ -4,19 +4,19 @@
 
 ## Security model
 
-Huabu is a single-owner application. By default it distinguishes the authenticated owner from unauthenticated callers and does not define viewer, administrator, or multi-user roles. An explicit no-login deployment treats all callers as the owner; its operator must restrict access through a trusted network or an authenticated proxy.
+Huabu is a single-owner application. A Huabu-owned `IdentityService` resolves the caller before routes execute. By default it distinguishes the authenticated owner from unauthenticated callers and does not define viewer, administrator, or multi-user roles. An explicit no-login deployment treats all callers as the owner; its operator must restrict access through a trusted network or an authenticated proxy.
 
-The owner may perform Settings, OAuth, credential, External Agent Profile and harness-discovery operations when any condition holds:
+The default `local` provider needs no directory or identity server. It supplies a stable synthetic `local-owner` principal. The owner may perform Settings, OAuth, credential, External Agent Profile and harness-discovery operations when any condition holds:
 
-- the request's direct TCP peer is loopback;
+- Basic Auth is unconfigured and the credential-free request's direct TCP peer is loopback;
 - the request passed Huabu's configured HTTP Basic Auth gate.
 - login was explicitly disabled for this deployment.
 
-The connection token is a separate high-privilege machine credential shared by the complete read/write RFS surface and the embedded or remote Agentlet control and relay transports. Its generation and injection are independent of browser owner authentication; possession grants both Agentlet attachment and Space data access.
+The connection token is a separate high-privilege machine credential shared by the complete read/write RFS surface and the embedded or remote Agentlet control and relay transports. Its generation and injection are independent of browser owner authentication; possession grants both Agentlet attachment and Space data access. It resolves to the `huabu-agentlet` bot, without owner authority even when its TCP peer is loopback. The existing machine reachback surface remains available in both identity modes; public credential-free root Skill bootstrap and CORS preflights remain exempt from authentication.
 
 There is no connection-token Settings API or hot-switch. Before attachment the Server fixes its token from non-empty `HUABU_CONNECTION_TOKEN` or an automatically generated SecretStore-backed managed token that survives restarts, ignoring but retaining historical Settings overrides. Owner-only `POST /api/acp/connection-command` is the deliberate reveal boundary: it validates the requested shell/format and derives the public origin from the effective canonical deployment origin, using the validated browser origin only as an unconfigured loopback-development fallback. It returns a source `pnpm start:daemon` command or private connection dotenv data with no-store headers for direct clipboard use. Copying makes the token available to the clipboard and later shell history/private env file, never Agentlet argv. HTTP derives insecure WS inside the launcher and is appropriate only on a trusted network; loopback commands remain available for same-host, Windows/WSL, container, virtual-machine, or forwarded setups and carry a warning. Explicitly resetting the managed token via setup requires restart and fresh commands; ordinary restart does not. Embedded attachment receives the active token automatically.
 
-The global Agent Change Review configuration follows the same owner boundary. `GET` and `PUT /api/agent-change-review/config` are available only to loopback or Basic-authenticated owner requests; possession of the RFS connection token does not authorize reading or changing the automatic-acceptance policy.
+The global Agent Change Review configuration follows the same owner boundary. `GET` and `PUT /api/agent-change-review/config` are available only to requests resolved as owners by the selected identity provider; possession of the RFS connection token does not authorize reading or changing the automatic-acceptance policy.
 
 The Utility Agent (external Profile or explicit Built-In Pi) and external functional-model preference follow the owner boundary through `GET` and `PUT /api/agent/defaults`. The recent conversational Agent is browser-local UI state, not a Server credential or authorization setting. Neither preference grants new tool permissions or changes native harness approval policy.
 
@@ -62,7 +62,29 @@ Explicit deployment environment values override setup choices, including values 
 
 `pnpm dev` keeps zero-configuration access for loopback clients. Vite listens on all interfaces for development flexibility, but a non-loopback client must pass complete Basic Auth before receiving assets or reaching the API proxy unless login was explicitly disabled. The Authorization header reaches Fastify, so owner authorization does not depend on Vite's loopback backend connection. Vite resolves the same saved and environment-managed login mode as the Server.
 
-`pnpm start:web` serves the compiled SPA and API from Fastify. On a non-loopback bind, startup validation requires Basic Auth unless the operator explicitly disables login.
+`pnpm start:web` serves the compiled SPA and API from Fastify. On a non-loopback bind, startup validation requires Basic Auth or Bubble identity unless the operator explicitly disables login.
+
+## Bubble identity: first integration
+
+Set `HUABU_IDENTITY_PROVIDER=bubble` and `HUABU_BUBBLE_URL` to the Bubble base URL, including its mount prefix when present. Do not set the Basic Auth pair in this mode. The URL must use HTTPS, except for HTTP on `localhost`, `127.0.0.1`, or `[::1]`, and cannot contain credentials, a query, or a fragment. A network bind still needs `HUABU_PUBLIC_ORIGIN`.
+
+The HTTP adapter forwards only the caller's Bearer authorization to `GET <base>/v1/auth/whoami`. Bubble owns credential validation, its durable principal directory, issuer/subject mapping, and account status. Huabu preserves the returned principal ID and projects only kind, display name, email, and avatar. No second directory, credential cache, or cross-provider account merge is created. Each request revalidates with Bubble; requests time out after five seconds, redirects are refused, and upstream failures return a redacted 503. Selecting Bubble never falls back to local identity, including for loopback requests.
+
+This stage keeps Huabu's shared Workspace private by requiring a Bubble `owner` grant on the `system` target for ordinary application access. A thread or principal owner grant does not qualify. An authenticated non-owner can inspect only `GET /api/identity`. This is an explicit initial Huabu admission policy, not Workspace/Space authorization and not a replacement for future per-resource permissions. Configure Bubble with `autoGrantFirstUserSystemOwner: false` and provision administrators explicitly before serving Huabu users.
+
+`GET /api/identity` works before Workspace activation and returns `{ provider, principal, owner }` with `Cache-Control: no-store`. No token, external subject, issuer, or grant list is returned. Readiness reports `owner.policy: "bubble-system-owner"` in Bubble mode and retains `"loopback-or-basic-auth"` in local mode. Owner-only routes consume the resolved request identity; a loopback address does not override Bubble denial.
+
+Long-lived Bubble-authenticated HTTP responses, including existing SSE streams, revalidate every 30 seconds. Revocation, lost owner authority, changed principal, or provider failure closes the response. Stream revalidation is released when the response ends, and outstanding responses are closed during server shutdown. This does not cancel an already-running agent job.
+
+This identity-only integration connects to an existing Bubble server; it does not yet embed Bubble, share its database, or mount its conversation routes. This work builds on the Node 24 prerequisite in PR #236; local deployments install no Bubble runtime. An embedded adapter can later implement the same `IdentityService` contract. Use a Bubble deployment containing the September 23 identity/revocation changes (umbrella `48b7d727` or a later release).
+
+Browser login/session handling is a subsequent phase. For now, Bubble mode is usable by clients supplying an existing Bubble Bearer token; Huabu's SPA and Desktop Basic Auth prompt do not acquire or refresh it. Vite's remote Basic Auth gate remains local-mode tooling. Use the built server API for this first integration. Example with a token already held in the caller's environment:
+
+```sh
+curl -H "Authorization: Bearer $BUBBLE_TOKEN" https://huabu.example/api/identity
+```
+
+Changing providers does not migrate or link `local-owner` to a Bubble principal. Existing conversation records remain untouched.
 
 `pnpm start:desktop --server <URL>` is a native client for the same remote deployment boundary. It accepts a root HTTP or HTTPS origin but does not weaken the Server's Host, Origin, CORS, or Basic Auth policy and does not inject allowed hosts. A `401` challenge from the selected exact origin opens a sandboxed Electron credential prompt; credentials remain in Chromium's current network session and are not placed in the command line, exposed to the renderer, or persisted by Huabu Desktop.
 

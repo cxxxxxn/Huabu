@@ -8,6 +8,7 @@ import {
   getDeploymentEnvironment,
   resolveAuthenticationMode,
 } from '../../security/deployment-settings.js';
+import { resolveIdentityConfig } from '../identity/config.js';
 
 export interface DeploymentConfig {
   allowedHostsConfigured: boolean;
@@ -36,22 +37,23 @@ export function isLoopbackHost(host: string): boolean {
 export function resolveDeploymentConfig(
   env: NodeJS.ProcessEnv = getDeploymentEnvironment(),
 ): DeploymentConfig {
+  const identity = resolveIdentityConfig(env);
   const bindHost = env.HUABU_BIND_HOST ?? '127.0.0.1';
   const authenticationDisabled = resolveAuthenticationMode(env) === 'none';
   const userConfigured = Boolean(env.HUABU_BASIC_AUTH_USER);
-  const passConfigured = Boolean(env.HUABU_BASIC_AUTH_PASS);
-  if (userConfigured !== passConfigured) {
-    throw new Error(
-      'HUABU_BASIC_AUTH_USER and HUABU_BASIC_AUTH_PASS must be configured together',
-    );
-  }
 
   const publicOrigin = resolveConfiguredPublicOrigin(env);
   const allowedHostsConfigured = Boolean(
     publicOrigin || env.HUABU_ALLOWED_HOSTS?.trim(),
   );
   const bindScope = isLoopbackHost(bindHost) ? 'loopback' : 'network';
-  if (bindScope === 'network' && !userConfigured && !authenticationDisabled) {
+  // Bubble identity replaces Basic Auth as the network login.
+  if (
+    bindScope === 'network' &&
+    !userConfigured &&
+    !authenticationDisabled &&
+    identity.provider === 'local'
+  ) {
     throw new Error(
       'HUABU_BASIC_AUTH_USER and HUABU_BASIC_AUTH_PASS are required when HUABU_BIND_HOST is not loopback',
     );
