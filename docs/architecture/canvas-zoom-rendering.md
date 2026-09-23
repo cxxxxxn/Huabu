@@ -1,3 +1,7 @@
+### Frame Width Tiers
+
+Frame layout and visual metrics share one width-only tier: compact below 900 canvas units, regular from 900 to below 1800, and large from 1800 upward. Height does not affect the tier; invalid or missing widths use 1200. Title font sizes remain 24 / 36 / 52, corner radii remain 16 / 24 / 32, header insets are 64 / 96 / 152, and content padding and gaps are 20 / 28 / 40. The shared canvas engine owns tier selection and spacing for both browser and server layouts; the frontend adds typography and corner radii from that same tier. Hug sizing resolves the smallest self-consistent tier from the final outer width. Existing manually positioned children are not repositioned merely by rendering a Frame, and the title's horizontal alignment still follows the existing child inset. Far-zoom typography remains screen-space based.
+
 ### Far-Zoom Text Labels
 
 Note, Web, PDF, Office and Video minimal labels reuse `SemanticPlaceholder`, `FarZoomLabel` and `farLabelContentBox`. The shared content-box calculation subtracts the existing insets and allocates every complete title line that fits, without a fixed three-line cap. Descriptions use remaining complete lines only after the title fits in full. Existing fonts, node geometry, insets and presentation thresholds remain unchanged.

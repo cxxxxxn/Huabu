@@ -15,6 +15,11 @@ import { getFrameHeaderMetrics } from './frameHeaderMetrics';
 import { getAccentTokens } from '../design/accentTokens';
 
 describe('Frame visual design', () => {
+  it.each([600, 900, 1800])('uses one visual tier for width %s', (width) => {
+    expect(frameVisualMetricsForSize(width, 100)).toEqual(
+      frameVisualMetricsForSize(width, 5000),
+    );
+  });
   it.each([
     [600, 500, 64],
     [1380, 876, 96],
@@ -65,7 +70,7 @@ describe('Frame visual design', () => {
     [1380, 876, 36, 24],
     [2400, 1800, 52, 32],
     [0, 0, 36, 24],
-    [5000, 600, 24, 16],
+    [5000, 600, 52, 32],
   ])(
     'adds appearance without changing layout for %s × %s',
     (width, height, titleFontSize, borderRadius) => {

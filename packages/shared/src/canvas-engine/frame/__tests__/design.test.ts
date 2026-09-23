@@ -14,9 +14,9 @@ import {
 describe('Frame design config', () => {
   it('keeps the public scale explicit and configurable', () => {
     expect(FRAME_LAYOUT_CONFIG.tiers).toMatchObject([
-      { id: 'compact', maxEffectiveSize: 900 },
-      { id: 'regular', maxEffectiveSize: 1800 },
-      { id: 'large', maxEffectiveSize: Number.POSITIVE_INFINITY },
+      { id: 'compact', maxWidth: 900 },
+      { id: 'regular', maxWidth: 1800 },
+      { id: 'large', maxWidth: Number.POSITIVE_INFINITY },
     ]);
   });
 
@@ -68,15 +68,31 @@ describe('Frame design config', () => {
 
   it('resolves a Hug Frame tier from its final content-driven box', () => {
     expect(frameResponsiveMetricsForContentSize(1000, 650)).toEqual({
-      headerInset: 64,
-      contentSpacing: 20,
+      headerInset: 96,
+      contentSpacing: 28,
     });
   });
 
-  it('caps the contribution of an extreme aspect ratio', () => {
-    expect(frameResponsiveMetricsForSize(5000, 600)).toEqual({
-      headerInset: 64,
-      contentSpacing: 20,
+  it.each([600, 899, 900, 1799, 1800, 5000])(
+    'keeps metrics independent of height at width %s',
+    (width) => {
+      for (const height of [40, 600, 1800, 10000]) {
+        expect(frameResponsiveMetricsForSize(width, height)).toEqual(
+          frameResponsiveMetricsForSize(width, 900),
+        );
+      }
+    },
+  );
+
+  it.each([
+    [899, 64, 20],
+    [900, 96, 28],
+    [1799, 96, 28],
+    [1800, 152, 40],
+  ])('uses width boundaries at %s', (width, headerInset, contentSpacing) => {
+    expect(frameResponsiveMetricsForSize(width, 600)).toEqual({
+      headerInset,
+      contentSpacing,
     });
   });
 });
