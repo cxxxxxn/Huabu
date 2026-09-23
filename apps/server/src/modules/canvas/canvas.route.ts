@@ -1354,7 +1354,11 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
           canvasId,
           (rawState.nodes ?? []).flatMap((node) => {
             const current = currentById.get(node.id);
-            return current ? [{ current, patch: node.data ?? {} }] : [];
+            const patch = node.data ?? {};
+            return current &&
+              changesAgentNodePreparation(current.data ?? {}, patch)
+              ? [{ current, patch }]
+              : [];
           }),
         );
       } catch (error) {
