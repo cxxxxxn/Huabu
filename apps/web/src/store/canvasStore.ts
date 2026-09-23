@@ -2217,13 +2217,14 @@ const useCanvasStore = create<RFState>()(
           edges: loadedEdges,
           centre: viewportCentreOf(loadedViewport),
         });
-        const warmedNodes = normalizeFrameHeaderInsets(warmedCanvas.nodes);
-        const warmedEdges =
+        let warmedNodes = normalizeFrameHeaderInsets(warmedCanvas.nodes);
+        let warmedEdges =
           warmedNodes === warmedCanvas.nodes
             ? warmedCanvas.edges
             : rerouteAllEdges(warmedNodes, warmedCanvas.edges);
         if (get().canvasId !== targetId) return;
         let loadedVersion = response.version;
+        let headerSaveFailed = false;
         if (warmedNodes !== warmedCanvas.nodes) {
           // Persist the coordinate change before exposing it to users or agents.
           try {
@@ -2238,16 +2239,10 @@ const useCanvasStore = create<RFState>()(
             loadedVersion = saved.version;
           } catch (error) {
             if (get().canvasId !== targetId) return;
-            console.error('Failed to save Frame header geometry:', error);
-            toast('Could not finish loading this Space. Reload to try again.', {
-              tone: 'danger',
-              duration: 0,
-              action: {
-                label: 'Reload',
-                onClick: () => void get().loadCanvas(targetId),
-              },
-            });
-            return;
+            console.warn('Frame header update deferred:', error);
+            headerSaveFailed = true;
+            warmedNodes = loadedNodes;
+            warmedEdges = loadedEdges;
           }
         }
         if (get().canvasId !== targetId) return;
@@ -2277,6 +2272,7 @@ const useCanvasStore = create<RFState>()(
 
         // Persist Note warmup hints unless the header write already included them.
         if (
+          !headerSaveFailed &&
           warmedCanvas.nodes !== loadedNodes &&
           warmedNodes === warmedCanvas.nodes
         ) {

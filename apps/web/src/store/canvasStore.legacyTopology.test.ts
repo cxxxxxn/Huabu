@@ -18,6 +18,7 @@ import { canvasHistoryManager } from './canvasHistoryManager';
 import useCanvasStore from './canvasStore';
 import { CanvasConflictError } from '../api';
 import { usePreviewWorkspaceStore } from './previewWorkspace/store';
+import * as notifications from '../components/Common/Toast';
 
 import type * as canvasApi from '../api';
 import type { Edge, Node } from '@xyflow/react';
@@ -170,13 +171,14 @@ describe('legacy topology load boundary', () => {
 
   it.each([
     new Error('Network unavailable'),
+    new Error('Thread thread-existing has no canonical execution record'),
     new CanvasConflictError({
       code: 'CANVAS_VERSION_CONFLICT',
       message: 'Changed elsewhere',
       serverVersion: 10,
     }),
   ])(
-    'does not expose unacknowledged header geometry or automatically retry: %s',
+    'loads the original geometry without retries or duplicate notifications when header saving fails: %s',
     async (error) => {
       const graph = storedGraph();
       graph.nodes[3].data.sizing = 'hug';
@@ -186,21 +188,37 @@ describe('legacy topology load boundary', () => {
         version: 9,
         state: graph,
       });
-      api.putCanvas.mockRejectedValueOnce(error);
-      const consoleError = vi
-        .spyOn(console, 'error')
+      api.putCanvas.mockRejectedValue(error);
+      const consoleWarn = vi
+        .spyOn(console, 'warn')
         .mockImplementation(() => {});
+      const notify = vi.spyOn(notifications, 'toast');
       try {
         await useCanvasStore.getState().loadCanvas('canvas-loaded');
         await vi.advanceTimersByTimeAsync(2000);
         expect(useCanvasStore.getState()).toMatchObject({
-          isLoading: true,
-          nodes: [],
-          version: 0,
+          isLoading: false,
+          canvasTitle: 'Loaded',
+          version: 9,
         });
+        const loaded = useCanvasStore.getState();
+        expect(loaded.nodes.find((node) => node.id === 'frame')).toMatchObject({
+          position: { x: 125, y: 236 },
+        });
+        expect(loaded.nodes.find((node) => node.id === 'note')).toMatchObject({
+          position: { x: 7, y: 8 },
+          data: { content: 'Keep this note' },
+        });
+        expect(loaded.edges).toEqual([graph.edges[1]]);
         expect(api.putCanvas).toHaveBeenCalledOnce();
+        await useCanvasStore.getState().loadCanvas('canvas-loaded');
+        await vi.advanceTimersByTimeAsync(2000);
+        expect(useCanvasStore.getState().isLoading).toBe(false);
+        expect(api.putCanvas).toHaveBeenCalledTimes(2);
+        expect(notify).not.toHaveBeenCalled();
       } finally {
-        consoleError.mockRestore();
+        consoleWarn.mockRestore();
+        notify.mockRestore();
       }
     },
   );
