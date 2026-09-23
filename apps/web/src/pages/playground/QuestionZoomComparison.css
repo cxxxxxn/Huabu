@@ -1,4 +1,8 @@
-/* Copyright (c) Microsoft Corporation. Licensed under the MIT license. */
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
 /* The default harmonized palette inherits production tokens from index.css.
    Retain the former light theme only for the original-theme comparison. */
 .qzc-study[data-palette='theme'] {

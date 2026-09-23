@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
 /* The document keeps the inner frame's full width even when a classic
    scrollbar consumes viewport width. Only its existing right padding is
    covered by the scrollbar lane; text never reflows on selection. */

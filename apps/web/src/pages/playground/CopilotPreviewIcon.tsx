@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT license.
+
 // Copilot artwork from @primer/octicons 19.19.0 (copilot-24.svg).
 // MIT License — Copyright (c) 2025 GitHub Inc.
 // Permission is hereby granted, free of charge, to any person obtaining a copy
