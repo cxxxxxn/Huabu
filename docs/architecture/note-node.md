@@ -155,6 +155,8 @@ An anchor's `javascript:` URL can only be activated by a click — browsers refu
 
 ## 7. Note-specific behaviours
 
+The shared `MilkdownPreview` optionally reports native text-selection snapshots for Chat fragment comments. Reports require both selection endpoints inside the same ProseMirror surface; selected text preserves paragraph separators and code line breaks and includes its ProseMirror range and short neighboring context. This callback does not change Note editing, link activation, block drag or provenance behavior. Chat owns the Comment editor and input insertion; Note previews do not enable this callback.
+
 These exist only for notes, and none of them are guessable from the node model above.
 
 When a later agent rewrite restores a modified block to its original user-owned baseline, its pending `modified` provenance record is removed. The first edit saves the full-document normalized block fingerprint as `baselineKey`, without a duplicate occurrence suffix, and later edits retain it alongside `baselineMarkdown`. This preserves reference-link and reference-image identity even though the stored Markdown fragment omits document-level definitions. Legacy records without `baselineKey` retain best-effort fragment comparison; missing original definitions cannot be reconstructed reliably, so those records may retain a pending marker. Other pending records and operation history are unchanged.

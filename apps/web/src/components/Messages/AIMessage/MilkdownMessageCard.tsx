@@ -5,15 +5,26 @@
  * Milkdown-backed renderer for AI chat messages.
  */
 
-import { memo, useCallback } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { parseArtifactUrl } from '@huabu/shared';
 
 import { MilkdownPreview } from '@/components/Milkdown';
 import useCanvasStore from '@/store/canvasStore';
+import { selectThreadDraft, useChatStore } from '@/store/chatStore';
+import { usePanelStore } from '@/store/panelStore';
 import { setDragPayload } from '@/utils/io/dragDrop';
 import { openDocumentLink } from '@/utils/openDocumentLink';
 
+import {
+  appendFragmentComment,
+  commentTemplateLanguage,
+  renderFragmentComment,
+} from './fragmentComment';
+import { FragmentCommentPopover } from './FragmentCommentPopover';
+
+import type { MilkdownPreviewSelection } from '@/components/Milkdown/MilkdownPreview';
 import type { ImageDragPayload, NoteDragPayload } from '@/utils/io/dragDrop';
 import type { NodeOrigin } from '@huabu/shared';
 
@@ -26,6 +37,9 @@ interface MilkdownMessageCardProps {
    * we don't subscribe N times for N rendered cards.
    */
   threadId: string;
+  messageId?: string;
+  segmentIndex?: number;
+  enableComments?: boolean;
 }
 
 /**
@@ -92,31 +106,97 @@ export function buildImageDragPayload(
 export const MilkdownMessageCard = memo(function MilkdownMessageCard({
   content,
   threadId,
+  messageId,
+  segmentIndex = 0,
+  enableComments = false,
 }: MilkdownMessageCardProps) {
+  const { i18n } = useTranslation();
   const canvasId = useCanvasStore((s) => s.canvasId);
+  const [selection, setSelection] = useState<MilkdownPreviewSelection | null>(
+    null,
+  );
+  const editingRef = useRef(false);
+  const handleTextSelection = useCallback(
+    (next: MilkdownPreviewSelection | null) => {
+      if (!editingRef.current) setSelection(next);
+    },
+    [],
+  );
+  const dismissComment = useCallback(() => {
+    editingRef.current = false;
+    setSelection(null);
+  }, []);
+  useEffect(() => {
+    if (!enableComments) dismissComment();
+  }, [enableComments, dismissComment]);
   const handleLinkClick = useCallback(
     (href: string) => openDocumentLink(href, { threadId }),
     [threadId],
   );
 
   return (
-    <MilkdownPreview
-      markdown={content}
-      canvasId={canvasId ?? undefined}
-      onLinkClick={handleLinkClick}
-      linkActivation="plain"
-      enableBlockDrag
-      onBlockDragStart={({ markdown, nativeEvent }) => {
-        const built =
-          buildImageDragPayload(markdown, threadId, canvasId) ??
-          buildNoteDragPayload(markdown, threadId);
-        if (!built) return;
+    <>
+      <MilkdownPreview
+        markdown={content}
+        canvasId={canvasId ?? undefined}
+        onLinkClick={handleLinkClick}
+        linkActivation="plain"
+        onTextSelection={
+          enableComments && messageId ? handleTextSelection : undefined
+        }
+        enableBlockDrag
+        onBlockDragStart={({ markdown, nativeEvent }) => {
+          const built =
+            buildImageDragPayload(markdown, threadId, canvasId) ??
+            buildNoteDragPayload(markdown, threadId);
+          if (!built) return;
 
-        setDragPayload(
-          nativeEvent as unknown as React.DragEvent,
-          built.payload,
-        );
-      }}
-    />
+          setDragPayload(
+            nativeEvent as unknown as React.DragEvent,
+            built.payload,
+          );
+        }}
+      />
+      {enableComments && messageId && selection ? (
+        <FragmentCommentPopover
+          selection={selection}
+          onBegin={() => {
+            editingRef.current = true;
+          }}
+          onDismiss={dismissComment}
+          onAdd={(comment) => {
+            const templateT = i18n.getFixedT(
+              commentTemplateLanguage(
+                comment,
+                i18n.resolvedLanguage ?? i18n.language,
+              ),
+            );
+            const rendered = renderFragmentComment(
+              {
+                ...selection,
+                sourceMessageId: messageId,
+                segmentIndex,
+                comment,
+              },
+              {
+                quote: templateT('messages.fragmentQuoteLabel'),
+                comment: templateT('messages.fragmentCommentLabel'),
+                context: templateT('messages.fragmentContextLabel'),
+              },
+            );
+            const chat = useChatStore.getState();
+            chat.setDraft(
+              threadId,
+              appendFragmentComment(
+                selectThreadDraft(chat, threadId),
+                rendered,
+              ),
+            );
+            dismissComment();
+            usePanelStore.getState().requestFocusChatInput(threadId);
+          }}
+        />
+      ) : null}
+    </>
   );
 });

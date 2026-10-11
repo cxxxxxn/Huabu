@@ -23,6 +23,33 @@ afterEach(() => {
 });
 
 describe('MilkdownPreview accessibility', () => {
+  it('does not remount the editor when fragment selection reporting toggles', async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    const onTextSelection = vi.fn();
+    const render = (enabled: boolean) => {
+      act(() => {
+        root?.render(
+          <MilkdownPreview
+            markdown="A completed answer."
+            enableBlockDrag
+            onTextSelection={enabled ? onTextSelection : undefined}
+          />,
+        );
+      });
+    };
+    render(false);
+    await vi.waitFor(() => {
+      expect(container?.querySelector('.ProseMirror')).not.toBeNull();
+    });
+    const editor = container.querySelector('.ProseMirror');
+    render(true);
+    expect(container.querySelector('.ProseMirror')).toBe(editor);
+    render(false);
+    expect(container.querySelector('.ProseMirror')).toBe(editor);
+  });
+
   it('keeps links hit-testable when the preview host is not', async () => {
     container = document.createElement('div');
     document.body.appendChild(container);
