@@ -101,6 +101,8 @@ The envelope splits "where the user pointed this turn" into orthogonal parts ([e
 
 Key differences: **selection / anchor point at existing canvas nodes** (enriched with a `preview` via node-ref; content via tools); **attachment is a one-off off-canvas asset** (content inlined directly). Anchor is "a single focus point + neighbourhood"; selection is "a set of node metadata".
 
+Chat fragment comments are distinct from all three Canvas pointing signals. The browser captures selected visible assistant text and neighboring context, then renders a quotation-plus-comment template into the owning thread's ordinary input draft on explicit **Add to input**. These templates become normal user text only when the user sends; they introduce no wire field, annotation sidecar, prompt-rewrite operation or permanent preference. Quoted response content is context, not an invoked slash command or elevated instruction. The existing text submission, binding/mode, attachment, permission and Stop behavior remains authoritative. A quotation is a capture-time snapshot, not a live reference: later source edits or message identity reconciliation do not remap the quote. See [Preview Workspace](./preview-workspace.md#1-ownership-boundaries) for editing, template language and draft lifetime.
+
 ### 4.1 Anchored conversation ownership
 
 The web retains `AgentConversationView` for anchored Question conversations. Its `presentationAnchor` and `conversationOwner` identify the same Canvas and node, with the owner also carrying `threadId`. Validation requires that Canvas to be active and the live Question's thread to match. Legacy World `nodeRef` presentation and its source-reference resolver are removed; a Space Preview cannot open a source-owned conversation in the host Canvas.

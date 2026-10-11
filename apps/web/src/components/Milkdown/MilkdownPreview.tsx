@@ -28,7 +28,11 @@ import { resolveArtifactUrl } from '@/api/artifact';
 import { useLinkFollowModifierHeld } from '@/hooks/useMultiSelectModifier';
 
 import { attachBlockDragListeners } from './blockDrag';
-import { createMilkdown, type MilkdownInstance } from './createMilkdown';
+import {
+  createMilkdown,
+  type MilkdownInstance,
+  type MilkdownTextSelection,
+} from './createMilkdown';
 import { markdownEquals, normalizeMarkdown } from './markdownUtils';
 
 import type { MilkdownBlockDragEvent, MilkdownLinkActivation } from './types';
@@ -52,6 +56,12 @@ export interface MilkdownPreviewProps {
   enableBlockDrag?: boolean;
   /** Fires alongside Crepe's native drag handler when a block drag begins. */
   onBlockDragStart?: (event: MilkdownBlockDragEvent) => void;
+  /** Reports only native text selections wholly inside this preview. */
+  onTextSelection?: (selection: MilkdownPreviewSelection | null) => void;
+}
+
+export interface MilkdownPreviewSelection extends MilkdownTextSelection {
+  position: { x: number; y: number };
 }
 
 /**
@@ -105,6 +115,7 @@ export function MilkdownPreview(
     onBlockDragStart,
     linkActivation = 'plain',
     onLinkClick,
+    onTextSelection,
   } = props;
   const resolvedAriaLabel = ariaLabel ?? t('editor.readOnlyContent');
   const followModifierHeld = useLinkFollowModifierHeld(
@@ -127,6 +138,9 @@ export function MilkdownPreview(
   const onLinkClickRef = useRef(onLinkClick);
   onLinkClickRef.current = onLinkClick;
   const hasLinkCallback = !!onLinkClick;
+  const onTextSelectionRef = useRef(onTextSelection);
+  onTextSelectionRef.current = onTextSelection;
+  const reportsTextSelection = !!onTextSelection;
 
   useEffect(() => {
     let cancelled = false;
@@ -202,6 +216,69 @@ export function MilkdownPreview(
     };
     // Re-mount when drag mode toggles (rare, expected).
   }, [enableBlockDrag, linkActivation, hasLinkCallback]);
+
+  useEffect(() => {
+    const mountRoot = containerRef.current;
+    if (!reportsTextSelection || !mountRoot) return;
+    let frame: number | undefined;
+    let hasReportedSelection = false;
+    const report = () => {
+      frame = undefined;
+      const instance = instanceRef.current;
+      const native = mountRoot.ownerDocument.getSelection();
+      const editor = mountRoot.querySelector('.ProseMirror');
+      if (
+        !instance ||
+        !editor ||
+        !native ||
+        native.isCollapsed ||
+        native.rangeCount !== 1 ||
+        !native.anchorNode ||
+        !native.focusNode ||
+        !editor.contains(native.anchorNode) ||
+        !editor.contains(native.focusNode)
+      ) {
+        hasReportedSelection = false;
+        onTextSelectionRef.current?.(null);
+        return;
+      }
+      const snapshot = instance.getTextSelection();
+      const rect = instance.getSelectionClientRect();
+      hasReportedSelection = !!snapshot && !!rect;
+      onTextSelectionRef.current?.(
+        snapshot && rect
+          ? { ...snapshot, position: { x: rect.left, y: rect.bottom } }
+          : null,
+      );
+    };
+    const schedule = () => {
+      const native = mountRoot.ownerDocument.getSelection();
+      if (
+        !hasReportedSelection &&
+        !mountRoot.contains(native?.anchorNode ?? null) &&
+        !mountRoot.contains(native?.focusNode ?? null)
+      ) {
+        return;
+      }
+      if (frame !== undefined) cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(report);
+    };
+    const doc = mountRoot.ownerDocument;
+    doc.addEventListener('selectionchange', schedule);
+    mountRoot.addEventListener('mouseup', schedule);
+    mountRoot.addEventListener('keyup', schedule);
+    window.addEventListener('scroll', schedule, true);
+    window.addEventListener('resize', schedule);
+    return () => {
+      if (frame !== undefined) cancelAnimationFrame(frame);
+      doc.removeEventListener('selectionchange', schedule);
+      mountRoot.removeEventListener('mouseup', schedule);
+      mountRoot.removeEventListener('keyup', schedule);
+      window.removeEventListener('scroll', schedule, true);
+      window.removeEventListener('resize', schedule);
+      onTextSelectionRef.current?.(null);
+    };
+  }, [reportsTextSelection]);
 
   useEffect(() => {
     if (markdownEquals(markdown, lastSyncedRef.current)) return;
