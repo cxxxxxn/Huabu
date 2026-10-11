@@ -36,6 +36,7 @@ interface AIMessageProps {
   segments: AssistantSegment[];
   isStreaming?: boolean;
   hideActions?: boolean;
+  enableComments?: boolean;
 }
 
 const NoteIcon = NODE_ICON.note;
@@ -116,6 +117,7 @@ export const AIMessage = memo(function AIMessage({
   segments,
   isStreaming,
   hideActions,
+  enableComments = false,
 }: AIMessageProps) {
   const { t } = useTranslation();
   const addNode = useCanvasStore((state) => state.addNode);
@@ -239,7 +241,13 @@ export const AIMessage = memo(function AIMessage({
               className="text-fg-default bg-surface ml-1 rounded-2xl border border-none px-4 text-sm"
             >
               <div className="leading-relaxed">
-                <MilkdownMessageCard content={seg.text} threadId={threadId} />
+                <MilkdownMessageCard
+                  content={seg.text}
+                  threadId={threadId}
+                  messageId={messageId}
+                  segmentIndex={idx}
+                  enableComments={enableComments && showMessageActions}
+                />
               </div>
             </div>
           );
