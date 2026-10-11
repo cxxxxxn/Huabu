@@ -155,7 +155,7 @@ An anchor's `javascript:` URL can only be activated by a click — browsers refu
 
 ## 7. Note-specific behaviours
 
-The shared `MilkdownPreview` optionally reports native text-selection snapshots for Chat fragment comments. Reports require both selection endpoints inside the same ProseMirror surface; selected text preserves paragraph separators and code line breaks and includes its ProseMirror range and short neighboring context. This callback does not change Note editing, link activation, block drag or provenance behavior. Chat owns the Comment editor and input insertion; Note previews do not enable this callback.
+The shared `MilkdownPreview` optionally reports native text-selection snapshots for Chat selection actions. Reports require both selection endpoints inside the same ProseMirror surface; selected text preserves paragraph separators and code line breaks and includes its ProseMirror range, selected Markdown and short neighboring context. Markdown is serialized through the existing Milkdown serializer from a document slice with enclosing parents, preserving selected inline marks and block/list/code structure without unselected text. This callback does not change Note editing, link activation, block drag or provenance behavior. Chat owns Copy, Add as note and the Comment editor/input insertion; Note previews do not enable this callback.
 
 These exist only for notes, and none of them are guessable from the node model above.
 

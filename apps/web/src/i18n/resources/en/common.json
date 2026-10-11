@@ -924,6 +924,7 @@
     "copyMessage": "Copy message",
     "copy": "Copy",
     "fragmentComment": "Comment",
+    "fragmentCopyFailed": "Could not copy the selected text. Please try again.",
     "fragmentCommentPlaceholder": "What would you like to say about this passage?",
     "addCommentToInput": "Add to input",
     "fragmentQuoteLabel": "Quote from an earlier reply:",
