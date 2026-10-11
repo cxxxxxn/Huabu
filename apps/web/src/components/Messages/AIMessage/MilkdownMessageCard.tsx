@@ -14,6 +14,7 @@ import { MilkdownPreview } from '@/components/Milkdown';
 import useCanvasStore from '@/store/canvasStore';
 import { selectThreadDraft, useChatStore } from '@/store/chatStore';
 import { usePanelStore } from '@/store/panelStore';
+import { copyToClipboard } from '@/utils/io/clipboard';
 import { setDragPayload } from '@/utils/io/dragDrop';
 import { openDocumentLink } from '@/utils/openDocumentLink';
 
@@ -160,6 +161,17 @@ export const MilkdownMessageCard = memo(function MilkdownMessageCard({
       {enableComments && messageId && selection ? (
         <FragmentCommentPopover
           selection={selection}
+          onCopy={() => copyToClipboard(selection.text)}
+          onSaveAsNote={() => {
+            useCanvasStore.getState().addNode({
+              nodeType: 'note',
+              data: {
+                content: selection.markdown,
+                origin: { type: 'user-from-chat', threadId },
+              },
+            });
+            dismissComment();
+          }}
           onBegin={() => {
             editingRef.current = true;
           }}

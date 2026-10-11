@@ -16,6 +16,7 @@ const fragment: FragmentComment = {
   segmentIndex: 0,
   range: { from: 1, to: 8 },
   text: 'one\n\ntwo',
+  markdown: 'one\n\ntwo',
   contextBefore: '',
   contextAfter: '',
   comment: 'Keep this.',

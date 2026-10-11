@@ -122,6 +122,42 @@ test('collects inline and cross-paragraph comments, edits input and explicitly s
   await expect(composer).toHaveValue('');
 });
 
+test('offers three selection icons and copies only the selected text while retaining whole-response actions', async ({
+  page,
+}) => {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  const composer = panel(page).locator('textarea[name="agent-message"]');
+  await composer.fill('Unchanged draft');
+  const wholeNoteActions = panel(page).getByRole('button', {
+    name: 'Add as note',
+    exact: true,
+  });
+  const originalCount = await wholeNoteActions.count();
+  const answer = panel(page)
+    .locator('[data-chat-message-id="a-turn-3-tool"] .ProseMirror')
+    .last();
+  await answer.locator('strong').dblclick();
+  const commentButton = page.getByRole('button', {
+    name: 'Comment',
+    exact: true,
+  });
+  await expect(commentButton).toBeVisible();
+  await commentButton.hover();
+  await expect(page.getByRole('tooltip')).toContainText('Comment');
+  await expect(
+    page.getByRole('button', { name: 'Add as note', exact: true }),
+  ).toHaveCount(originalCount + 1);
+  const selectionCopy = page.getByLabel('Copy', { exact: true });
+  await selectionCopy.click();
+  await expect
+    .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+    .toBe('cached');
+  await expect(commentButton).toHaveCount(0);
+  await expect(wholeNoteActions).toHaveCount(originalCount);
+  await expect(composer).toHaveValue('Unchanged draft');
+  await expect(answer.locator('strong')).toHaveText('cached');
+});
+
 test('supports code and keyboard selection and does not change the original answer', async ({
   page,
 }) => {

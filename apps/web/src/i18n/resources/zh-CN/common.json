@@ -921,6 +921,7 @@
     "copyMessage": "复制消息",
     "copy": "复制",
     "fragmentComment": "评论",
+    "fragmentCopyFailed": "无法复制所选文字，请重试。",
     "fragmentCommentPlaceholder": "你想对这段内容说什么？",
     "addCommentToInput": "加入输入框",
     "fragmentQuoteLabel": "前面回答中的引用：",

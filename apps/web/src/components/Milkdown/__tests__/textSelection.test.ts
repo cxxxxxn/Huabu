@@ -32,6 +32,7 @@ describe('Milkdown text selection snapshots', () => {
     editor.__selectTextBetweenForTest?.('selected', 'selected');
     expect(editor.getTextSelection()).toMatchObject({
       text: 'selected',
+      markdown: '**selected**\n',
       contextBefore: 'Before ',
       contextAfter: ' after.',
     });
@@ -39,6 +40,47 @@ describe('Milkdown text selection snapshots', () => {
       editor.getSelectionRange(),
     );
     expect(editor.getMarkdown()).toContain('**selected**');
+  });
+
+  it.each([
+    ['Before **selected** after.', 'lect', 'lect', '**lect**'],
+    [
+      'Before [selected](https://example.com) after.',
+      'lect',
+      'lect',
+      '[lect](https://example.com)',
+    ],
+    [
+      '- First item\n- Second **item**\n- Third item\n\nEnd.',
+      'Second',
+      'item',
+      '* Second **item**',
+    ],
+    [
+      '```ts\nconst first = 1;\nconst second = 2;\n```\n\nEnd.',
+      'const second',
+      '2;',
+      '```ts\nconst second = 2;\n```',
+    ],
+  ])(
+    'serializes only the selected Markdown in %s',
+    async (source, from, to, expected) => {
+      const editor = await mount(source);
+      const original = editor.getMarkdown();
+      editor.__selectTextBetweenForTest?.(from, to);
+      expect(editor.getTextSelection()?.markdown).toBe(`${expected}\n`);
+      expect(editor.getMarkdown()).toBe(original);
+    },
+  );
+
+  it('preserves cross-paragraph Markdown without including unselected boundary text', async () => {
+    const editor = await mount(
+      'Before **first**.\n\nSecond [link](https://example.com) after.',
+    );
+    editor.__selectTextBetweenForTest?.('first', 'link');
+    expect(editor.getTextSelection()?.markdown).toBe(
+      '**first**.\n\nSecond [link](https://example.com)\n',
+    );
   });
 
   it('preserves paragraph breaks and code line breaks without mutating the answer', async () => {
