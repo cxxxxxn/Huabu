@@ -22,10 +22,22 @@ async function loadEntry() {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  delete process.env.AGENTLET_SERVICE_SDK_URL;
+  delete process.env.HUABU_SERVICE_SDK_URL;
 });
 
 describe('Image Service entry', () => {
+  it('requires the canonical SDK location rather than a legacy alias', async () => {
+    vi.stubEnv('AGENTLET_SERVICE_SDK_URL', 'file:///legacy-sdk.js');
+    try {
+      const { main } = await loadEntry();
+      await expect(main(['--help'])).rejects.toThrow(
+        'HUABU_SERVICE_SDK_URL is unavailable',
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('uses classic Azure deployment routing', async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
@@ -126,7 +138,7 @@ describe('Image Service entry', () => {
         });
       }
     `;
-    process.env.AGENTLET_SERVICE_SDK_URL = `data:text/javascript;base64,${Buffer.from(sdkSource).toString('base64')}`;
+    process.env.HUABU_SERVICE_SDK_URL = `data:text/javascript;base64,${Buffer.from(sdkSource).toString('base64')}`;
     const output = `${process.env.TMPDIR ?? '/tmp'}/huabu-image-entry-${process.pid}.png`;
     const { main } = await loadEntry();
 
@@ -157,7 +169,7 @@ describe('Image Service entry', () => {
         });
       }
     `;
-    process.env.AGENTLET_SERVICE_SDK_URL = `data:text/javascript;base64,${Buffer.from(sdkSource).toString('base64')}`;
+    process.env.HUABU_SERVICE_SDK_URL = `data:text/javascript;base64,${Buffer.from(sdkSource).toString('base64')}`;
     const stdout = vi
       .spyOn(process.stdout, 'write')
       .mockImplementation(() => true);

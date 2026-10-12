@@ -5,10 +5,12 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { build } from 'tsup';
 import { describe, expect, it } from 'vitest';
 
+import clientRuntimeConfig from '../../../packages/client-runtime/tsup.config.js';
 import bundleConfig from '../tsup.config.js';
 
 const configured =
@@ -16,6 +18,68 @@ const configured =
 const configurations = Array.isArray(configured) ? configured : [configured];
 
 describe('server bundle runtime', () => {
+  it('loads real Agentlet and client-runtime artifacts outside the workspace without node_modules', async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'huabu-real-runtime-'));
+    try {
+      writeFileSync(path.join(directory, 'package.json'), '{"type":"module"}');
+      await build({
+        ...configurations[1],
+        config: false,
+        entry: {
+          index: path.resolve(
+            '../../external/agentlet/packages/local/src/index.ts',
+          ),
+        },
+        outDir: path.join(directory, 'agentlet'),
+        onSuccess: undefined,
+        silent: true,
+      });
+      const runtimeOptions =
+        typeof clientRuntimeConfig === 'function'
+          ? await clientRuntimeConfig({})
+          : clientRuntimeConfig;
+      if (Array.isArray(runtimeOptions))
+        throw new Error('Expected one runtime build config');
+      await build({
+        ...runtimeOptions,
+        config: false,
+        entry: {
+          'service-sdk': path.resolve(
+            '../../packages/client-runtime/src/service-sdk.ts',
+          ),
+          daemon: path.resolve('../../packages/client-runtime/src/daemon.ts'),
+        },
+        outDir: path.join(directory, 'client-runtime'),
+        silent: true,
+      });
+      const daemonHelp = execFileSync(
+        process.execPath,
+        [path.join(directory, 'agentlet/index.js'), 'daemon', '--help'],
+        { encoding: 'utf8' },
+      );
+      expect(daemonHelp).toContain('--env-inject');
+      const hostHelp = execFileSync(
+        process.execPath,
+        [path.join(directory, 'client-runtime/daemon.js'), '--help'],
+        { encoding: 'utf8' },
+      );
+      expect(hostHelp).toContain('pnpm start:daemon');
+      const sdkProbe = execFileSync(
+        process.execPath,
+        [
+          '--input-type=module',
+          '-e',
+          'const sdk = await import(process.argv[1]); console.log(typeof sdk.leaseService, typeof sdk.withServiceContext)',
+          pathToFileURL(path.join(directory, 'client-runtime/service-sdk.js'))
+            .href,
+        ],
+        { encoding: 'utf8' },
+      );
+      expect(sdkProbe.trim()).toBe('function function');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
   it.each(configurations)(
     'loads prefix-only Node built-ins with the $outDir configuration',
     async (configuration) => {

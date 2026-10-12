@@ -6,7 +6,7 @@ These environment variables are already set:
 
 - `HUABU_RFS_URL` — the base URL for this Space, with no trailing slash.
 - `AGENTLET_TOKEN` — the RFS bearer credential.
-- `AGENTLET_SERVICE_SDK_URL` — the daemon-owned `file://` URL used internally by downloaded Service Package entries to lease current configuration.
+- `HUABU_SERVICE_SDK_URL` — the Huabu-owned `file://` URL used by optional Node Service entries to lease current configuration. Huabu provides the entry, not Node; choose a compatible Node from your own environment.
 - `HUABU_THREAD_ID` — your conversation ID. Pass it on `execute` (see §6) to attribute your edits.
 
 Prefer deterministic direct operations:
@@ -307,9 +307,11 @@ cd image-gen
 
 Every archive contains one top-level directory named after the Service, so extracting `image-gen.zip` creates `image-gen/` rather than placing files directly in the current directory. `service.yaml` and every file declared by `package.files` are included; undeclared development files are not.
 
-Read the extracted `SKILL.md`, then run `node entry.mjs --help` before invoking the optional entry. Runtime help uses the leased Manifest and configuration to show current choices and configured defaults that may not be visible from the source alone. The entry obtains that coherent Service context on demand through `AGENTLET_SERVICE_SDK_URL`; you normally do not need to import or call the SDK yourself. An entry is a modifiable starting point rather than a complete provider SDK: when the task needs another provider endpoint, follow the official documentation linked by the Skill and modify only your local Package copy.
+With compatible Node available, read the extracted `SKILL.md`, then run `node entry.mjs --help` before invoking the optional entry. Runtime help uses the leased Manifest and configuration to show current choices and configured defaults that may not be visible from the source alone. The entry obtains that coherent Service context on demand through `HUABU_SERVICE_SDK_URL`; you normally do not need to import or call the SDK yourself. An entry is a modifiable starting point rather than a complete provider SDK: when the task needs another provider endpoint, follow the official documentation linked by the Skill and modify only your local Package copy. Old downloaded entries that use `AGENTLET_SERVICE_SDK_URL` must be refreshed; there is no legacy alias.
 
-Never print, persist, or forward leased credentials. A Service Package without `SKILL.md` is intentionally unavailable for direct External Agent use; do not construct provider calls from its Settings manifest.
+Without Node, JS entries cannot run, but Service leases remain language-independent. Use your own HTTP client in a business subprocess to `POST "$HUABU_RFS_URL/services/<id>/lease"` with the normal bearer authentication, consume the coherent `manifest` and `config` response in memory, and call only the intended provider according to its documentation. Do not print the lease into tool output, save it to disk, put credentials in argv, or export them to a global shell environment.
+
+Never print or persist leased credentials or send them to unrelated recipients; only the intended provider receives the credential necessary for the operation. A Service Package without `SKILL.md` is intentionally unavailable for direct External Agent use; do not construct provider calls from its Settings manifest.
 
 ## Advanced workflows
 

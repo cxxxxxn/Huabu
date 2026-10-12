@@ -236,7 +236,7 @@ describe('GET /api/rfs/:canvasId/skill', () => {
         );
       }
       expect(res.body).toContain('/capabilities/commands/$COMMAND');
-      expect(res.body).toContain('AGENTLET_SERVICE_SDK_URL');
+      expect(res.body).toContain('HUABU_SERVICE_SDK_URL');
       expect(res.body).toContain('/services');
       expect(res.body).toContain('$HUABU_RFS_URL/skill/tasks');
       expect(res.body).toContain('**parent-local**');

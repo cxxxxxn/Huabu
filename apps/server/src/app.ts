@@ -27,7 +27,7 @@ import {
   getAgentProfileRegistry,
   installAcpProfileCachePort,
   mountAgenetes,
-  resolveDaemonEntry,
+  resolveDaemonRuntime,
 } from './modules/agent/acp/index.js';
 import { initializeAgentDefaults } from './modules/agent/agent-defaults.js';
 import agentDefaultsRoutes from './modules/agent/agent-defaults.route.js';
@@ -299,10 +299,17 @@ try {
     app.log.warn({ err }, '[acp] could not remove legacy acp-config.json');
   }
 }
+const daemonRuntime = resolveDaemonRuntime();
+if (!daemonRuntime.artifacts.serviceSdkEntry) {
+  app.log.warn(
+    '[acp] Service SDK artifact missing; direct HTTP remains available, rebuild client-runtime to use JS Service entries',
+  );
+}
 const agentletGateway = mountAgenetes(app, {
   connectionToken: getConnectionToken(),
   dataDir: getDataDir(),
-  daemonEntryPath: resolveDaemonEntry() ?? '',
+  daemonEntryPath: daemonRuntime.artifacts.daemonEntry ?? '',
+  bootstrapEnv: daemonRuntime.bootstrapEnv,
   getMaxAgents: () => getExternalAgentRuntimeConfig().maxAgents,
   // Host-namespaced env isolation: the agentlet daemon and every external
   // agent it spawns are host-agnostic and must receive their Huabu

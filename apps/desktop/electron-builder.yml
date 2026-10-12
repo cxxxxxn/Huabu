@@ -83,6 +83,12 @@ extraResources:
       # files bloat the installer for no benefit.
       - '**/*.js'
       - '**/*.js.map'
+      - 'package.json'
+  - from: ../server/dist-bundle/client-runtime
+    to: server/client-runtime
+    filter:
+      - '**/*.js'
+      - 'package.json'
   - from: ../web/dist
     to: web
     filter:

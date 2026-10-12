@@ -38,7 +38,7 @@ export type { TranslatorLogger } from '@agenetes/acp-driver';
 
 export { getDaemonAuth } from '@agenetes/agentlet-host';
 export { getDaemonSupervisor, getDaemonStatus } from '@agenetes/agentlet-host';
-export { resolveDaemonEntry } from './daemon-entry.js';
+export { resolveDaemonEntry, resolveDaemonRuntime } from './daemon-entry.js';
 export { installAcpProfileCachePort } from './profile-cache-port.js';
 export {
   ensureAgentForThread,

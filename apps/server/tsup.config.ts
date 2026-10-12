@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { cpSync } from 'node:fs';
+import { cpSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
@@ -84,6 +84,15 @@ export default defineConfig([
       const servicesDst = path.resolve('dist-bundle/services');
       cpSync(servicesSrc, servicesDst, { recursive: true });
       console.log(`[tsup] copied Service packages -> ${servicesDst}`);
+      cpSync(
+        path.resolve('../../packages/client-runtime/dist'),
+        path.resolve('dist-bundle/client-runtime'),
+        { recursive: true },
+      );
+      writeFileSync(
+        path.resolve('dist-bundle/client-runtime/package.json'),
+        '{"type":"module"}\n',
+      );
       // @resvg/resvg-wasm — copied next to server.js so the
       // snapshot_nodes tool's bundle-layout fallback finds it via
       // bundled server module's file URL.
@@ -112,9 +121,6 @@ export default defineConfig([
       index: path.resolve(
         '../../external/agentlet/packages/local/src/index.ts',
       ),
-      'service-sdk/index': path.resolve(
-        '../../external/agentlet/packages/local/src/service-sdk/index.ts',
-      ),
     },
     format: ['esm'],
     outDir: 'dist-bundle/agentlet',
@@ -128,6 +134,12 @@ export default defineConfig([
     banner: BANNER,
     esbuildOptions(options) {
       options.platform = 'node';
+    },
+    async onSuccess() {
+      writeFileSync(
+        path.resolve('dist-bundle/agentlet/package.json'),
+        '{"type":"module"}\n',
+      );
     },
   },
 ]);

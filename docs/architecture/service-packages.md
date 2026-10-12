@@ -48,7 +48,7 @@ Internal Agent tools keep their high-level Huabu integrations. `generate_image` 
 
 Product pipelines also retain reviewed Server adapters. The YouTube loader and Ink OCR request path resolve their registered Service configuration but do not import Package entries.
 
-External Agent Packages provide a real `SKILL.md` and may provide an `entry.mjs` that imports `AGENTLET_SERVICE_SDK_URL`, leases one coherent runtime context containing the current Manifest and configuration, and implements only a useful baseline provider workflow. Every executable entry supports `-h` and `--help`; an Agent runs help before invocation because runtime Manifest constraints and configured defaults may not be derivable from the source alone. Entries define their own CLI mapping, use Manifest enum options as the authoritative choices, use explicitly mapped configuration fields as defaults, and let an explicit operation argument override only those defaults. The entry is not a complete provider SDK: the Skill links official provider documentation, and an Agent may modify its downloaded local copy for additional endpoints. The bundled Image and Tavily Packages are Agent-facing. YouTube Transcripts and Ink OCR are not Agent-facing and therefore publish neither placeholder file.
+External Agent Packages provide a real `SKILL.md` and may provide an `entry.mjs` that imports `HUABU_SERVICE_SDK_URL`, leases one coherent runtime context containing the current Manifest and configuration, and implements only a useful baseline provider workflow. Every executable entry supports `-h` and `--help`; an Agent runs help before invocation because runtime Manifest constraints and configured defaults may not be derivable from the source alone. Entries define their own CLI mapping, use Manifest enum options as the authoritative choices, use explicitly mapped configuration fields as defaults, and let an explicit operation argument override only those defaults. The entry is not a complete provider SDK: the Skill links official provider documentation, and an Agent may modify its downloaded local copy for additional endpoints. The bundled Image and Tavily Packages are Agent-facing. YouTube Transcripts and Ink OCR are not Agent-facing and therefore publish neither placeholder file.
 
 ## Owner Settings API
 
@@ -78,17 +78,17 @@ Manifest and Skill responses contain no credentials. Lease requires the normal a
 
 Package download streams a ZIP on demand from the validated Package record without a temporary file or ZIP cache. The archive contains one `<serviceId>/` root directory, `service.yaml`, and exactly the files declared by `package.files`; undeclared tests and development files are excluded. The response uses the Package content hash as its ETag. Phase 1 resolves records from bundled directories; a future validated custom-Service installation can expose the same immutable root, exact file list, and hash without changing the route.
 
-## Agentlet SDK
+## Huabu client SDK
 
-Agentlet publishes `dist/service-sdk/index.js`. The daemon computes its absolute `file://` URL relative to its own `import.meta.url` and injects it as the authoritative `AGENTLET_SERVICE_SDK_URL` after workload environment values, so a Profile or session cannot replace it.
+`packages/client-runtime` publishes the self-contained `dist/service-sdk.js`. Remote `huabu-daemon` and the embedded Server resolve the device-local artifact through the same resolver/bootstrap builder and inject its absolute `file://` URL as `HUABU_SERVICE_SDK_URL`. Generic Agentlet forwards and protects that opaque bootstrap key without owning SDK code. No old SDK alias or fallback is provided; previously downloaded entries must be refreshed and Agents restarted to obtain the new bootstrap. Node is selected by the Agent, not supplied or checked by the daemon. Without Node, the existing authenticated HTTP lease is still available to any HTTP-capable business process.
 
-`leaseService(id)` obtains a fresh `{ id, version, manifest, config }` context without downloading or loading Package code. `withServiceContext(id, callback)` is the scoped convenience wrapper used by `entry.mjs`. The SDK verifies that the leased Manifest identity and version match the enclosing context, reports bounded status-only request failures, and does not include response bodies that could contain credentials.
+`leaseService(id)` obtains a fresh `{ id, version, manifest, config }` context without downloading or loading Package code. `withServiceContext(id, callback)` is the scoped convenience wrapper used by `entry.mjs`. The SDK validates the canonical shared `serviceLeaseSchema`, including identity/version coherence and declared config fields, reports bounded status-only request failures, and does not include malformed JSON or response bodies that could contain credentials.
 
 The SDK reduces accidental persistence but is not a sandbox. A trusted External Agent and loaded client share the Agent process's filesystem, network, RFS bearer, and provider credentials. Static provider credentials cannot be revoked after disclosure except by provider-side rotation.
 
 ## Build and packaging
 
-Server development reads Packages from `apps/server/src/services`. The Server bundle copies that directory to `dist-bundle/services`, while RFS distribution still selects only Manifest-declared files. The bundled Agentlet build emits both `agentlet/index.js` and `agentlet/service-sdk/index.js`; the published Agentlet npm package already includes its complete `dist` tree.
+Server development reads Packages from `apps/server/src/services`. The Server bundle copies that directory to `dist-bundle/services`, while RFS distribution still selects only Manifest-declared files. Agentlet is bundled separately as `agentlet/index.js` with no SDK. The self-contained client runtime is copied into `dist-bundle/client-runtime`; Desktop resources include its JS files and explicit ESM `package.json`. Server build/bundle and development startup build the runtime. `pnpm start:daemon` builds Agentlet and the runtime before running the source launcher, without global PATH installation.
 
 ## Code entry points
 
@@ -100,4 +100,6 @@ Server development reads Packages from `apps/server/src/services`. The Server bu
 | `apps/server/src/modules/services/services.route.ts`             | Owner Generic Settings API                                                 |
 | `apps/server/src/modules/remote_fs/rfs.route.ts`                 | Authenticated Service discovery, files, and lease                          |
 | `apps/web/src/components/Settings/sections/ServicesSettings.tsx` | Manifest-driven Services UI                                                |
-| `external/agentlet/packages/local/src/service-sdk/index.ts`      | External Agent SDK                                                         |
+| `packages/client-runtime/src/service-sdk.ts`                     | Canonical lease-only External Agent SDK                                    |
+| `packages/client-runtime/src/bootstrap.ts`                       | Shared device-local artifacts and host bootstrap                           |
+| `packages/client-runtime/src/daemon.ts`                          | Source-checkout launcher and connection env inputs                         |

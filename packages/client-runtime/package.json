@@ -1,0 +1,30 @@
+{
+  "name": "@huabu/client-runtime",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/bootstrap.ts",
+      "import": "./dist/bootstrap.js"
+    },
+    "./service-sdk": {
+      "types": "./src/service-sdk.ts",
+      "import": "./dist/service-sdk.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@huabu/shared": "workspace:*",
+    "dotenv": "^17.2.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.11"
+  }
+}

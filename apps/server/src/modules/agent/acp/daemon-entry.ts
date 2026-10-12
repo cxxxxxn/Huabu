@@ -1,10 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import {
+  buildHuabuBootstrapEnv,
+  resolveRuntimeArtifacts,
+} from '@huabu/client-runtime';
 /**
  * Resolve the absolute path to the agentlet daemon entry script.
  *
@@ -26,36 +29,15 @@ import { fileURLToPath } from 'node:url';
  * The first existing path wins.
  */
 export function resolveDaemonEntry(): string | null {
-  const env = process.env.HUABU_AGENTLET_DAEMON_PATH;
-  if (env && existsSync(env)) return env;
+  return resolveDaemonRuntime().artifacts.daemonEntry;
+}
 
-  // import.meta.url resolves to this source file in dev (tsx) and to
-  // the bundled server.js in production (every module collapses into
-  // the same file under tsup --bundle). Two candidates handle both.
+export function resolveDaemonRuntime() {
   const here = dirname(fileURLToPath(import.meta.url));
-
-  // Production: dist-bundle/server.js → dist-bundle/agentlet/index.js
-  const bundled = resolve(here, 'agentlet', 'index.js');
-  if (existsSync(bundled)) return bundled;
-
-  // Dev: apps/server/src/modules/agent/acp/daemon-entry.ts
-  //   → external/agentlet/packages/local/dist/index.js
-  const dev = resolve(
-    here,
-    '..',
-    '..',
-    '..',
-    '..',
-    '..',
-    '..',
-    'external',
-    'agentlet',
-    'packages',
-    'local',
-    'dist',
-    'index.js',
-  );
-  if (existsSync(dev)) return dev;
-
-  return null;
+  const artifacts = resolveRuntimeArtifacts({
+    daemonOverride: process.env.HUABU_AGENTLET_DAEMON_PATH,
+    bundleDir: here,
+    repoRoot: resolve(here, '../../../../../..'),
+  });
+  return { artifacts, bootstrapEnv: buildHuabuBootstrapEnv(artifacts) };
 }
