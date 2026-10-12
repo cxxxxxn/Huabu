@@ -363,6 +363,10 @@ describe('GET /api/rfs/:canvasId/skill', () => {
         method: 'GET',
         url: '/rfs/c1/skill/interactive-views',
       });
+      const serviceConfig = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/skill/service-config',
+      });
       const unknown = await app.inject({
         method: 'GET',
         url: '/rfs/c1/skill/not-a-skill',
@@ -377,6 +381,11 @@ describe('GET /api/rfs/:canvasId/skill', () => {
       expect(tasks.body).toContain('# Durable Tasks and Runs');
       expect(agents.body).toContain('# Creating and Prompting Agents');
       expect(interactiveViews.body).toContain('# Building Interactive Views');
+      expect(serviceConfig.statusCode).toBe(200);
+      expect(serviceConfig.body).toContain(
+        '# Using Service configuration in your own process',
+      );
+      expect(serviceConfig.body).toContain('withServiceContext');
       expect(interactiveViews.body).toContain('huabu.view.connect');
       expect(unknown.statusCode).toBe(404);
       expect(unknown.json()).toMatchObject({ code: 'skill_not_found' });

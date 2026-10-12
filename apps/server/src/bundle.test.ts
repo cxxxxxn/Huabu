@@ -48,6 +48,7 @@ describe('server bundle runtime', () => {
             '../../packages/client-runtime/src/service-sdk.ts',
           ),
           daemon: path.resolve('../../packages/client-runtime/src/daemon.ts'),
+          rfs: path.resolve('../../packages/client-runtime/src/rfs.ts'),
         },
         outDir: path.join(directory, 'client-runtime'),
         silent: true,
@@ -64,6 +65,16 @@ describe('server bundle runtime', () => {
         { encoding: 'utf8' },
       );
       expect(hostHelp).toContain('pnpm start:daemon');
+      const rfsHelp = execFileSync(
+        process.execPath,
+        [path.join(directory, 'client-runtime/rfs.js'), '--help'],
+        {
+          encoding: 'utf8',
+          env: { ...process.env, HUABU_RFS_URL: '', AGENTLET_TOKEN: '' },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      );
+      expect(rfsHelp).toContain('Response bodies and SSE are raw');
       const sdkProbe = execFileSync(
         process.execPath,
         [

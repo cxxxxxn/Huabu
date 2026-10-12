@@ -4,7 +4,12 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/bootstrap.ts', 'src/daemon.ts', 'src/service-sdk.ts'],
+  entry: [
+    'src/bootstrap.ts',
+    'src/daemon.ts',
+    'src/service-sdk.ts',
+    'src/rfs.ts',
+  ],
   format: ['esm'],
   target: 'node24',
   noExternal: [/.*/],

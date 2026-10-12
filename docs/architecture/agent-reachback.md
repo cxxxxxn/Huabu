@@ -25,7 +25,7 @@ All endpoints are mounted under `/api/rfs/:canvasId`; `HUABU_RFS_URL` already co
 | Endpoint                           | Responsibility                                                                                                                      |
 | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `GET /skill`                       | Return the public bundled root guide; authenticated requests resolve the current root guide and append live Skill Frames.           |
-| `GET /skill/:skillId`              | Return an authenticated advanced guide: `layout`, `tasks`, or `agents`.                                                             |
+| `GET /skill/:skillId`              | Return an authenticated advanced guide: `layout`, `tasks`, `agents`, `interactive-views`, or `service-config`.                      |
 | `GET /download/<path>`             | Stream a known node, artifact, or staged-upload file.                                                                               |
 | `POST /upload/<name>`              | Stage bytes in the canvas `.upload/` directory without creating a node.                                                             |
 | `DELETE /upload/<name>`            | Remove one exact staged upload.                                                                                                     |
@@ -117,6 +117,14 @@ From a prepared Huabu source checkout, use `pnpm start:daemon` with `HUABU_PUBLI
 The embedded path does not invoke `huabu-daemon`, pnpm, or repo env files. Server resolves the same client artifacts/bootstrap and supplies them to the existing generic supervisor, which directly forks Agentlet with the bound loopback endpoint and authoritative child credential. Desktop keeps its existing Electron Server/Agentlet process chain and does not expose an Electron Node-mode executable to Agents. Agent tool runtime choice remains independent of daemon startup. SDK/RFS coordinates are supplied only for actual local artifacts; missing optional tools do not gate embedded Agentlet or HTTP access. The RFS implementation is delivered independently of SDK migration.
 
 Installation retains required builds but no longer modifies user shell rc or PATH. Previously installed PATH entries are left untouched.
+
+### Optional RFS client
+
+`packages/client-runtime/dist/rfs.js` is a self-contained optional Node entry, advertised as `HUABU_RFS_ENTRY` only when present. Run it with an Agent-selected compatible Node; Huabu neither injects a Node executable nor gates Agent startup on the client. The commands are `get-skill`, `query`, `execute`, `download`, `upload`, and `agent profiles|create|prompt`. JSON/text sources are mutually exclusive and forwarded unchanged; file `-` means stdin. `agent create --no-start` requires a JSON source and only sets the existing create-only header, leaving body validation to the Server. `execute` and `agent create` add safe `HUABU_THREAD_ID` correlation, warning if absent. Uploads stream raw bytes; logical path segments are encoded once.
+
+Responses, including incremental Agent SSE and business failures, reach stdout unchanged. Exit zero means successful HTTP transport/normal EOF, not command acceptance or Agent business success. HTTP/local/I/O/network/TLS/detectable transport errors fail; HTTP error bodies still go to stdout. A file download is written to a sibling temporary file and renamed only after complete success; `304` preserves the target. `--dump-header` records semantic status and Fetch-normalized headers, not wire-identical traffic. The client never follows redirects, retries mutations, reconnects SSE, or cancels remote work on Ctrl+C. Ambiguous mutation failure explicitly warns to inspect state before another request.
+
+Help retains local usage and attempts a bounded live contract request. Query/execute help uses `/capabilities`, or `/capabilities/queries/:type` and `/capabilities/commands/:type` for one specified operation; Agent help uses `/skill/agents`. An unavailable live contract is marked on stderr and help still exits zero. There is no private schema registry or offline cache presented as current. The focused authenticated `/skill/service-config` guide covers the existing lease API for an Agent's own business process without adding a provider runner or exporting credentials.
 
 Skills explain when and how to compose workflows, but they do not duplicate the wire protocol. `GET /capabilities` and its per-operation endpoints remain the canonical, schema-derived source for current query and command fields, limits, and semantics.
 

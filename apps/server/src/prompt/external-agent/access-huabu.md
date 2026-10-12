@@ -8,6 +8,9 @@ These environment variables are already set:
 - `AGENTLET_TOKEN` — the RFS bearer credential.
 - `HUABU_SERVICE_SDK_URL` — the Huabu-owned `file://` URL used by optional Node Service entries to lease current configuration. Huabu provides the entry, not Node; choose a compatible Node from your own environment.
 - `HUABU_THREAD_ID` — your conversation ID. Pass it on `execute` (see §6) to attribute your edits.
+- `HUABU_RFS_ENTRY` — when present, the optional local RFS JS entry. Huabu does not provide a Node executable or require this client for HTTP access.
+
+If you have compatible Node, `node "$HUABU_RFS_ENTRY" --help` (PowerShell: `node "$env:HUABU_RFS_ENTRY" --help`) combines local usage with the live Server contract. It supports `get-skill`, `query`, `execute`, `download`, `upload`, and raw streaming `agent` operations. `query --help TYPE` and `execute --help TYPE` load only the requested capability detail. A missing runtime or entry is a reason to choose native HTTP before issuing a request, not to repeat a possibly delivered mutation: after transport failure, inspect state before any resend. Exit 0 means successful HTTP delivery/normal EOF; always inspect command outcomes, conflicts, and Agent SSE events yourself. Ctrl+C closes local delivery, not remote work.
 
 Prefer deterministic direct operations:
 
@@ -309,7 +312,7 @@ Every archive contains one top-level directory named after the Service, so extra
 
 With compatible Node available, read the extracted `SKILL.md`, then run `node entry.mjs --help` before invoking the optional entry. Runtime help uses the leased Manifest and configuration to show current choices and configured defaults that may not be visible from the source alone. The entry obtains that coherent Service context on demand through `HUABU_SERVICE_SDK_URL`; you normally do not need to import or call the SDK yourself. An entry is a modifiable starting point rather than a complete provider SDK: when the task needs another provider endpoint, follow the official documentation linked by the Skill and modify only your local Package copy. Old downloaded entries that use `AGENTLET_SERVICE_SDK_URL` must be refreshed; there is no legacy alias.
 
-Without Node, JS entries cannot run, but Service leases remain language-independent. Use your own HTTP client in a business subprocess to `POST "$HUABU_RFS_URL/services/<id>/lease"` with the normal bearer authentication, consume the coherent `manifest` and `config` response in memory, and call only the intended provider according to its documentation. Do not print the lease into tool output, save it to disk, put credentials in argv, or export them to a global shell environment.
+Without Node, JS entries cannot run, but Service leases remain language-independent. When using your own business process instead of a bundled entry, load authenticated `GET skill/service-config` for the in-memory lease/provider workflow.
 
 Never print or persist leased credentials or send them to unrelated recipients; only the intended provider receives the credential necessary for the operation. A Service Package without `SKILL.md` is intentionally unavailable for direct External Agent use; do not construct provider calls from its Settings manifest.
 
@@ -321,6 +324,7 @@ Load these authenticated guides only when the request needs them:
 - `GET skill/tasks` — durable long-horizon Tasks and Runs.
 - `GET skill/agents` — available Profiles, Agent creation, launch configuration, continued conversations, and recursive delegation.
 - `GET skill/interactive-views` — durable sandboxed HTML Views with Host-owned state, data, navigation, and Agent actions.
+- `GET skill/service-config` — fresh Service configuration leases consumed privately by your own business subprocess, including non-Node HTTP clients.
 
 ```bash
 curl -fsS -H "$AUTH" "$HUABU_RFS_URL/skill/tasks"
