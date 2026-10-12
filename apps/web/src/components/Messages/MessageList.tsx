@@ -674,6 +674,7 @@ export const MessageList = memo(function MessageList({
                       segments={msg.segments}
                       isStreaming={msg.id === streamingAssistantId}
                       hideActions={hideAIActions}
+                      enableComments={isActive && !isHistoryLoading}
                     />
                   </div>,
                 );

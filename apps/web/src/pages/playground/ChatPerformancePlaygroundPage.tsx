@@ -8,6 +8,7 @@ import { MessageList } from '@/components/Messages/MessageList';
 import { ThreadChatInput } from '@/components/Panels/ChatPanel/ThreadChatInput';
 import { selectRetainedPreviewTabs } from '@/components/Panels/PreviewWorkspace/retainedPreviewTabs';
 import { ChatSessionProvider } from '@/hooks/useChatSession';
+import { useChatStore } from '@/store/chatStore';
 import { activateTab } from '@/store/previewWorkspace/model';
 
 import type { ChatMessage } from '@/store/chatTypes';
@@ -173,6 +174,7 @@ function ActivationPanel({
   recentTurnCount: number | undefined;
 }) {
   const [mountId] = useState(() => crypto.randomUUID());
+  const [submittedDraft, setSubmittedDraft] = useState('');
   const session = useMemo(
     () => ({ ...SESSION, threadId: `activation-fixture-${tabId}` }),
     [tabId],
@@ -185,6 +187,7 @@ function ActivationPanel({
         data-mount-id={mountId}
         data-activation-id={activationId}
         data-cached-messages={thread.messages.length}
+        data-submitted-draft={submittedDraft}
         className="flex min-h-0 flex-1 flex-col"
       >
         <MessageList
@@ -198,7 +201,15 @@ function ActivationPanel({
           completedTurnId={thread.completedTurnId}
         />
         <div className="pt-3">
-          <ThreadChatInput onSubmit={NOOP} onStop={NOOP} mode="ask" />
+          <ThreadChatInput
+            onSubmit={(event, _mode, draft) => {
+              event.preventDefault();
+              setSubmittedDraft(draft);
+              useChatStore.getState().setDraft(session.threadId, '');
+            }}
+            onStop={NOOP}
+            mode="ask"
+          />
         </div>
       </section>
     </ChatSessionProvider>

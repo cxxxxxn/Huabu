@@ -277,6 +277,14 @@ export interface MilkdownTextRange {
   to: number;
 }
 
+export interface MilkdownTextSelection {
+  range: MilkdownTextRange;
+  text: string;
+  markdown: string;
+  contextBefore: string;
+  contextAfter: string;
+}
+
 export interface MilkdownLinkState {
   href: string;
   range: MilkdownTextRange;
@@ -341,6 +349,8 @@ export interface MilkdownInstance {
   getSelectionRange(includeEmpty?: boolean): MilkdownTextRange | null;
   /** Plain text in the current non-empty text selection. */
   getSelectionText(): string | null;
+  /** Capture selected text and nearby context, preserving block separators. */
+  getTextSelection(): MilkdownTextSelection | null;
   /** Active link under the current selection or cursor. */
   getActiveLink(): MilkdownLinkState | null;
   /** Capture one whole link or unlinked selected text, without moving selection. */
@@ -2675,6 +2685,44 @@ export async function createMilkdown(
         const { selection, doc } = view.state;
         if (selection.empty || selection instanceof NodeSelection) return;
         result = doc.textBetween(selection.from, selection.to, ' ');
+      });
+      return result;
+    },
+    getTextSelection: () => {
+      let result: MilkdownTextSelection | null = null;
+      crepe.editor.action((ctx) => {
+        const { selection, doc } = ctx.get(editorViewCtx).state;
+        if (selection.empty || selection instanceof NodeSelection) return;
+        const leafText = (node: ProseNode) =>
+          node.type.name === 'hardbreak' ? '\n' : '';
+        const text = doc.textBetween(
+          selection.from,
+          selection.to,
+          '\n\n',
+          leafText,
+        );
+        if (!text.trim()) return;
+        const slice = doc.slice(selection.from, selection.to, true);
+        const markdown = ctx.get(serializerCtx)(
+          doc.type.create(null, slice.content),
+        );
+        result = {
+          range: { from: selection.from, to: selection.to },
+          text,
+          markdown,
+          contextBefore: doc.textBetween(
+            Math.max(0, selection.from - 40),
+            selection.from,
+            ' ',
+            leafText,
+          ),
+          contextAfter: doc.textBetween(
+            selection.to,
+            Math.min(doc.content.size, selection.to + 40),
+            ' ',
+            leafText,
+          ),
+        };
       });
       return result;
     },

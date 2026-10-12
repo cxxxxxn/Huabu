@@ -12,7 +12,7 @@ const baseURL = `http://127.0.0.1:${port}`;
 
 export default defineConfig({
   testDir: '.',
-  testMatch: 'chat-activation.spec.ts',
+  testMatch: ['chat-activation.spec.ts', 'fragment-feedback.spec.ts'],
   metadata: { chatActivationProduction: true },
   outputDir: '../test-results/chat-activation',
   timeout: 60_000,
