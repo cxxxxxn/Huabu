@@ -8,12 +8,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
 import { selectThreadDraft, useChatStore } from '@/store/chatStore';
 import { usePanelStore } from '@/store/panelStore';
+import { copyToClipboard } from '@/utils/io/clipboard';
 
 import { MilkdownMessageCard } from './MilkdownMessageCard';
 
 import type { MilkdownPreviewSelection } from '@/components/Milkdown/MilkdownPreview';
 
 const preview = vi.hoisted(() => ({
+  addNode: vi.fn(),
   onTextSelection: undefined as
     | ((selection: MilkdownPreviewSelection | null) => void)
     | undefined,
@@ -29,13 +31,20 @@ vi.mock('@/components/Milkdown', () => ({
   },
 }));
 vi.mock('@/store/canvasStore', () => ({
-  default: (selector: (state: { canvasId: string | null }) => unknown) =>
-    selector({ canvasId: null }),
+  default: Object.assign(
+    (selector: (state: { canvasId: string | null }) => unknown) =>
+      selector({ canvasId: null }),
+    { getState: () => ({ addNode: preview.addNode }) },
+  ),
+}));
+vi.mock('@/utils/io/clipboard', () => ({
+  copyToClipboard: vi.fn().mockResolvedValue(undefined),
 }));
 
 const selection: MilkdownPreviewSelection = {
   range: { from: 1, to: 8 },
   text: 'selected\n\npassage',
+  markdown: '**selected**\n\npassage',
   contextBefore: 'Before ',
   contextAfter: ' after',
   position: { x: 20, y: 20 },
@@ -45,6 +54,8 @@ let host: HTMLDivElement;
 
 beforeEach(async () => {
   await i18n.changeLanguage('en');
+  preview.addNode.mockClear();
+  vi.mocked(copyToClipboard).mockReset().mockResolvedValue(undefined);
   useChatStore.setState({ threadsById: {} });
   host = document.createElement('div');
   document.body.appendChild(host);
@@ -70,7 +81,9 @@ function render(enabled = true, content = 'Original answer') {
 }
 function button(name: string) {
   const found = [...document.querySelectorAll('button')].find(
-    (item) => item.textContent?.trim() === name,
+    (item) =>
+      item.textContent?.trim() === name ||
+      item.getAttribute('aria-label') === name,
   );
   if (!found) throw new Error(`Missing button: ${name}`);
   return found;
@@ -100,6 +113,51 @@ function select() {
 }
 
 describe('AI response comments', () => {
+  it('copies only the selected plain text without writing a note or changing the draft', async () => {
+    useChatStore.getState().setDraft('thread-a', 'Keep my draft.');
+    render();
+    act(() => preview.onTextSelection?.(selection));
+    await act(async () => button('Copy').click());
+    expect(copyToClipboard).toHaveBeenCalledExactlyOnceWith(selection.text);
+    expect(preview.addNode).not.toHaveBeenCalled();
+    expect(selectThreadDraft(useChatStore.getState(), 'thread-a')).toBe(
+      'Keep my draft.',
+    );
+    expect(document.querySelector('button[aria-label="Comment"]')).toBeNull();
+  });
+
+  it('surfaces clipboard failures and allows retrying the same snapshot', async () => {
+    vi.mocked(copyToClipboard).mockRejectedValueOnce(
+      new Error('Clipboard unavailable'),
+    );
+    render();
+    act(() => preview.onTextSelection?.(selection));
+    await act(async () => button('Copy').click());
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+      'Could not copy',
+    );
+    expect(button('Copy').disabled).toBe(false);
+    await act(async () => button('Copy').click());
+    expect(copyToClipboard).toHaveBeenCalledTimes(2);
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('saves the selected Markdown with the same note origin as the whole-response action', () => {
+    render();
+    act(() => preview.onTextSelection?.(selection));
+    click('Add as note');
+    expect(preview.addNode).toHaveBeenCalledExactlyOnceWith({
+      nodeType: 'note',
+      data: {
+        content: selection.markdown,
+        origin: { type: 'user-from-chat', threadId: 'thread-a' },
+      },
+    });
+    expect(copyToClipboard).not.toHaveBeenCalled();
+    expect(selectThreadDraft(useChatStore.getState(), 'thread-a')).toBe('');
+    expect(document.querySelector('button[aria-label="Comment"]')).toBeNull();
+  });
+
   it('opens a snapshot editor, requires a comment and cancels without changing the draft', () => {
     render();
     select();

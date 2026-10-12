@@ -280,6 +280,7 @@ export interface MilkdownTextRange {
 export interface MilkdownTextSelection {
   range: MilkdownTextRange;
   text: string;
+  markdown: string;
   contextBefore: string;
   contextAfter: string;
 }
@@ -2701,9 +2702,14 @@ export async function createMilkdown(
           leafText,
         );
         if (!text.trim()) return;
+        const slice = doc.slice(selection.from, selection.to, true);
+        const markdown = ctx.get(serializerCtx)(
+          doc.type.create(null, slice.content),
+        );
         result = {
           range: { from: selection.from, to: selection.to },
           text,
+          markdown,
           contextBefore: doc.textBetween(
             Math.max(0, selection.from - 40),
             selection.from,
