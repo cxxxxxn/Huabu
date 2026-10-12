@@ -9,7 +9,7 @@ import {
 } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Readable, Writable } from 'node:stream';
+import { PassThrough, Readable, Writable } from 'node:stream';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -83,6 +83,45 @@ async function call(
 }
 
 describe('optional raw RFS client', () => {
+  it.each([
+    [['get-skill', 'service-config'], '/skill/service-config'],
+    [['agent', 'profiles'], '/agent/profiles'],
+  ])(
+    'reads the exact authenticated catalogue/Skill endpoint',
+    async (args, path) => {
+      const env = await server((request, response) => {
+        expect(request.url).toBe(`/rfs/space${path}`);
+        expect(request.headers.authorization).toBe('Bearer private-token');
+        response.end('raw content');
+      });
+      const result = await call(args, env);
+      expect(result.code).toBe(0);
+      expect(result.stdout.toString()).toBe('raw content');
+    },
+  );
+
+  it('interrupts pending stdin before sending any mutation', async () => {
+    let count = 0;
+    const env = await server((_request, response) => {
+      count++;
+      response.end();
+    });
+    const controller = new AbortController();
+    const stderr = output();
+    const stdin = new PassThrough();
+    const pending = runRfs(['execute', '--json-file', '-'], {
+      env,
+      stdin,
+      stdout: output().stream,
+      stderr: stderr.stream,
+      signal: controller.signal,
+    });
+    controller.abort();
+    expect(await pending).toBe(130);
+    expect(count).toBe(0);
+    expect(stdin.destroyed).toBe(true);
+    expect(stderr.text()).not.toContain('Remote outcome may be unknown');
+  });
   it.each(['query', 'execute'])(
     'forwards %s JSON bytes and unknown result fields without interpreting business outcomes',
     async (command) => {

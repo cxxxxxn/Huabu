@@ -1,8 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -10,6 +12,10 @@ import { pathToFileURL } from 'node:url';
 import { build } from 'tsup';
 import { describe, expect, it } from 'vitest';
 
+import {
+  buildHuabuBootstrapEnv,
+  resolveRuntimeArtifacts,
+} from '../../../packages/client-runtime/src/bootstrap.js';
 import clientRuntimeConfig from '../../../packages/client-runtime/tsup.config.js';
 import bundleConfig from '../tsup.config.js';
 
@@ -75,6 +81,66 @@ describe('server bundle runtime', () => {
         },
       );
       expect(rfsHelp).toContain('Response bodies and SSE are raw');
+      const bootstrap = buildHuabuBootstrapEnv(
+        resolveRuntimeArtifacts({ bundleDir: directory }),
+      );
+      const rfsEntry = bootstrap.HUABU_RFS_ENTRY;
+      if (!rfsEntry) throw new Error('Expected built RFS entry');
+      expect(rfsEntry).toBe(path.join(directory, 'client-runtime/rfs.js'));
+      expect(bootstrap.HUABU_SERVICE_SDK_URL).toBe(
+        pathToFileURL(path.join(directory, 'client-runtime/service-sdk.js'))
+          .href,
+      );
+      const original = ' {"type":"FUTURE","unknown":true}\n';
+      const mockServer = createServer((request, response) => {
+        let body = '';
+        request.on('data', (chunk) => {
+          body += chunk;
+        });
+        request.on('end', () => {
+          expect(request.url).toBe('/rfs/space/query');
+          expect(request.headers.authorization).toBe('Bearer mock-token');
+          expect(body).toBe(original);
+          response.end('{"business":false,"future":1}\n');
+        });
+      });
+      await new Promise<void>((resolve) =>
+        mockServer.listen(0, '127.0.0.1', resolve),
+      );
+      try {
+        const address = mockServer.address();
+        if (!address || typeof address === 'string')
+          throw new Error('Expected test port');
+        const child = spawn(
+          process.execPath,
+          [rfsEntry, 'query', '--json-file', '-'],
+          {
+            env: {
+              HUABU_RFS_URL: `http://127.0.0.1:${address.port}/rfs/space`,
+              AGENTLET_TOKEN: 'mock-token',
+            },
+            stdio: ['pipe', 'pipe', 'pipe'],
+          },
+        );
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', (chunk) => {
+          stdout += chunk;
+        });
+        child.stderr.on('data', (chunk) => {
+          stderr += chunk;
+        });
+        child.stdin.end(original);
+        const [code] = await once(child, 'close');
+        expect(code).toBe(0);
+        expect(stdout).toBe('{"business":false,"future":1}\n');
+        expect(stderr).toBe('');
+      } finally {
+        mockServer.closeAllConnections();
+        await new Promise<void>((resolve, reject) =>
+          mockServer.close((error) => (error ? reject(error) : resolve())),
+        );
+      }
       const sdkProbe = execFileSync(
         process.execPath,
         [

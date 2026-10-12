@@ -7,20 +7,17 @@ import { useTranslation } from 'react-i18next';
 
 import {
   createAgentletConnectionCommand,
-  getConnectionTokenConfig,
   getExternalAgentRuntimeConfig,
-  updateConnectionToken,
   updateExternalAgentRuntimeConfig,
 } from '@/api/acp';
 import { Button } from '@/components/Common/Button';
 import { Input } from '@/components/Common/Input';
 import { Select } from '@/components/Common/Select';
-import { TextInput } from '@/components/Common/TextInput';
 import { toast } from '@/components/Common/Toast';
 import { SettingRow } from '@/components/Settings/Common/SettingRow';
 import { copyToClipboard } from '@/utils/io/clipboard';
 
-import type { ConnectionTokenConfig } from '@huabu/shared';
+import type { ConnectionCopyFormat, ConnectionShell } from '@huabu/shared';
 
 const IDLE_TIMEOUT_PRESETS = new Set(['0', '300', '600', '1800', '3600']);
 
@@ -33,13 +30,9 @@ export function ExternalAgentRuntimeSettings() {
   const [customMinutes, setCustomMinutes] = useState('10');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [tokenConfig, setTokenConfig] = useState<ConnectionTokenConfig | null>(
-    null,
-  );
-  const [tokenInput, setTokenInput] = useState('');
-  const [tokenLoading, setTokenLoading] = useState(true);
-  const [tokenSaving, setTokenSaving] = useState(false);
-  const [copyingCommand, setCopyingCommand] = useState(false);
+  const [connectionShell, setConnectionShell] =
+    useState<ConnectionShell>('posix');
+  const [copying, setCopying] = useState<ConnectionCopyFormat | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -68,29 +61,6 @@ export function ExternalAgentRuntimeSettings() {
       })
       .finally(() => {
         if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [t]);
-
-  useEffect(() => {
-    let active = true;
-    void getConnectionTokenConfig()
-      .then((config) => {
-        if (active) setTokenConfig(config);
-      })
-      .catch((error) => {
-        if (!active) return;
-        toast(
-          error instanceof Error
-            ? error.message
-            : t('settings.agentletTokenLoadFailed'),
-          { tone: 'danger' },
-        );
-      })
-      .finally(() => {
-        if (active) setTokenLoading(false);
       });
     return () => {
       active = false;
@@ -173,69 +143,43 @@ export function ExternalAgentRuntimeSettings() {
     parsedCustomMinutes >= 1 &&
     parsedCustomMinutes <= 1440;
 
-  const saveConnectionToken = useCallback(async () => {
-    const token = tokenInput.trim();
-    if (!token || !tokenConfig?.writable) return;
-    setTokenSaving(true);
-    try {
-      setTokenConfig(await updateConnectionToken({ token }));
-      setTokenInput('');
-      toast(t('settings.agentletTokenSaved'), { tone: 'success' });
-    } catch (error) {
-      toast(
-        error instanceof Error
-          ? error.message
-          : t('settings.agentletTokenSaveFailed'),
-        { tone: 'danger' },
-      );
-    } finally {
-      setTokenSaving(false);
-    }
-  }, [t, tokenConfig?.writable, tokenInput]);
-
-  const clearConnectionToken = useCallback(async () => {
-    if (!tokenConfig?.writable) return;
-    setTokenSaving(true);
-    try {
-      setTokenConfig(await updateConnectionToken({ token: null }));
-      setTokenInput('');
-      toast(t('settings.agentletTokenCleared'), { tone: 'success' });
-    } catch (error) {
-      toast(
-        error instanceof Error
-          ? error.message
-          : t('settings.agentletTokenSaveFailed'),
-        { tone: 'danger' },
-      );
-    } finally {
-      setTokenSaving(false);
-    }
-  }, [t, tokenConfig?.writable]);
-
-  const copyConnectionCommand = useCallback(async () => {
-    setCopyingCommand(true);
-    try {
-      const result = await createAgentletConnectionCommand();
-      await copyToClipboard(result.command);
-      const warningKey = result.warnings.includes('insecure')
-        ? 'settings.agentletCommandCopiedInsecure'
-        : result.warnings.includes('loopback')
-          ? 'settings.agentletCommandCopiedLoopback'
-          : 'settings.agentletCommandCopied';
-      toast(t(warningKey), {
-        tone: result.warnings.length > 0 ? 'warning' : 'success',
-      });
-    } catch (error) {
-      toast(
-        error instanceof Error
-          ? error.message
-          : t('settings.agentletCommandCopyFailed'),
-        { tone: 'danger' },
-      );
-    } finally {
-      setCopyingCommand(false);
-    }
-  }, [t]);
+  const copyConnection = useCallback(
+    async (format: ConnectionCopyFormat) => {
+      setCopying(format);
+      try {
+        const result = await createAgentletConnectionCommand(
+          connectionShell,
+          format,
+        );
+        await copyToClipboard(result.content);
+        const warningKey = result.warnings.includes('insecure')
+          ? 'settings.agentletCommandCopiedInsecure'
+          : result.warnings.includes('loopback')
+            ? 'settings.agentletCommandCopiedLoopback'
+            : result.source === 'generated'
+              ? 'settings.agentletCommandCopiedGenerated'
+              : format === 'env-file'
+                ? 'settings.agentletEnvFileCopied'
+                : 'settings.agentletCommandCopied';
+        toast(t(warningKey), {
+          tone:
+            result.warnings.length > 0 || result.source === 'generated'
+              ? 'warning'
+              : 'success',
+        });
+      } catch (error) {
+        toast(
+          error instanceof Error
+            ? error.message
+            : t('settings.agentletCommandCopyFailed'),
+          { tone: 'danger' },
+        );
+      } finally {
+        setCopying(null);
+      }
+    },
+    [connectionShell, t],
+  );
 
   return (
     <>
@@ -243,7 +187,7 @@ export function ExternalAgentRuntimeSettings() {
         layout="stacked"
         title={
           <span className="flex items-center gap-1">
-            {t('settings.agentletConnectionToken')}
+            {t('settings.agentletHowToConnect')}
             <Button
               variant="ghost"
               size="sm"
@@ -255,74 +199,62 @@ export function ExternalAgentRuntimeSettings() {
             </Button>
           </span>
         }
-        description={
-          tokenConfig
-            ? t('settings.agentletConnectionTokenDescription', {
-                source: t(`settings.agentletTokenSource.${tokenConfig.source}`),
-                access: tokenConfig.writable
-                  ? ''
-                  : t('settings.agentletTokenReadOnly'),
-              })
-            : t('settings.agentletConnectionTokenDescriptionLoading')
-        }
+        description={t('settings.agentletHowToConnectDescription')}
       >
+        <p className="text-fg-muted text-xs">
+          {t('settings.agentletSourceSetup')}
+        </p>
+        <pre className="bg-surface text-fg-default my-2 overflow-x-auto rounded-md p-2 text-xs">
+          {'git clone https://github.com/microsoft/Huabu.git\ncd Huabu'}
+        </pre>
+        <p className="text-fg-muted mb-2 text-xs">
+          {t('settings.agentletSourceRevision')}
+        </p>
+        <pre className="bg-surface text-fg-default my-2 overflow-x-auto rounded-md p-2 text-xs">
+          {'pnpm install'}
+        </pre>
         <div className="flex w-full flex-wrap items-center gap-2">
-          <TextInput
-            id="agentlet-connection-token"
-            className="min-w-40 flex-1 basis-56"
-            type="password"
-            value={tokenInput}
-            onChange={(event) => setTokenInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') void saveConnectionToken();
-            }}
-            placeholder={t('settings.agentletConnectionTokenPlaceholder')}
-            aria-label={t('settings.agentletConnectionToken')}
-            autoComplete="new-password"
-            maxLength={512}
-            disabled={
-              tokenLoading || tokenSaving || tokenConfig?.writable !== true
-            }
+          <Select<ConnectionShell>
+            options={[
+              { value: 'posix', label: t('settings.agentletShellPosix') },
+              { value: 'powershell', label: 'PowerShell' },
+            ]}
+            value={connectionShell}
+            onChange={setConnectionShell}
+            ariaLabel={t('settings.agentletTargetShell')}
+            disabled={copying !== null}
           />
           <Button
-            variant="outline"
+            variant="solid"
             tone="info"
             size="sm"
             className="shrink-0 whitespace-nowrap"
-            onClick={() => void saveConnectionToken()}
-            disabled={
-              !tokenInput.trim() ||
-              tokenLoading ||
-              tokenSaving ||
-              tokenConfig?.writable !== true
-            }
+            onClick={() => void copyConnection('command')}
+            disabled={copying !== null}
           >
-            {t('settings.saveChanges')}
-          </Button>
-          {tokenConfig?.source === 'stored' ? (
-            <Button
-              variant="outline"
-              size="sm"
-              className="shrink-0 whitespace-nowrap"
-              onClick={() => void clearConnectionToken()}
-              disabled={tokenSaving || !tokenConfig.writable}
-            >
-              {t('settings.agentletTokenClear')}
-            </Button>
-          ) : null}
-          <Button
-            variant="outline"
-            tone="info"
-            size="sm"
-            className="shrink-0 whitespace-nowrap"
-            onClick={() => void copyConnectionCommand()}
-            disabled={tokenLoading || copyingCommand || !tokenConfig}
-          >
-            {copyingCommand
+            {copying === 'command'
               ? t('settings.agentletCommandCopying')
               : t('settings.agentletCommandCopy')}
           </Button>
+          <Button
+            variant="outline"
+            tone="info"
+            size="sm"
+            className="shrink-0 whitespace-nowrap"
+            onClick={() => void copyConnection('env-file')}
+            disabled={copying !== null}
+          >
+            {copying === 'env-file'
+              ? t('settings.agentletCommandCopying')
+              : t('settings.agentletEnvFileCopy')}
+          </Button>
         </div>
+        <p className="text-fg-muted mt-2 text-xs">
+          {t('settings.agentletEnvFileInstructions')}
+        </p>
+        <p className="text-warning mt-2 text-xs">
+          {t('settings.agentletGeneratedTokenWarning')}
+        </p>
       </SettingRow>
       <SettingRow
         title={t('settings.externalAgentIdleTimeout')}

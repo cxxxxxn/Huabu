@@ -150,6 +150,10 @@ Malformed request fields and malformed cursors return HTTP 400 with `code: "malf
 
 `GET /api/acp/profiles` returns persisted Profiles, active connected devices, connectivity-filtered `selectableProfileIds`, supervised-child health, and optional Agent defaults. `POST /api/acp/profiles` requires an explicit active `agentletId`. `GET /api/acp/agent-cli` requires exactly one explicit target: `agentletId` while creating or `profileId` while editing. The server validates every target against the live Gateway and never substitutes the supervised child or first connected device. Harness commands are compiled by the target Agentlet during spawn; there is no HTTP launch-preview contract.
 
+## External-agent connection copy
+
+`POST /api/acp/connection-command` is an owner-only, non-cacheable explicit credential reveal. The canonical `agentletConnectionCommandRequestSchema` validates strict `{ origin, shell: "posix" | "powershell", format: "command" | "env-file" }`. Its response is `{ content, source: "environment" | "generated", warnings }`; copy content is a source-daemon invocation or private dotenv data, never an Agentlet token argv flag. Origin mismatch/invalid roots and lossless dotenv encoding failures return explicit 400 errors; operational failures remain 500. The former `GET/PUT /api/acp/connection-token`, update/config wire types, and web helpers are removed; old persisted records are deliberately untouched.
+
 ## Utility Agent selection
 
 `GET/PUT /api/agent/defaults` uses `agentDefaultsSchema` for the Utility Agent only: its Profile and optional functional-model override serve Huabu-owned auxiliary work and never choose a conversational binding. The recent conversational Agent is browser-local UI state and has no HTTP contract.

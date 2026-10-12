@@ -275,8 +275,8 @@ app.register(rfsRoutes, { prefix: '/api/rfs' });
 // It mounts the stateless Gateway, forks & supervises the agentlet daemon,
 // and authenticates connections against the host-injected connection token.
 // The daemon owns the agent worker pool; the server tells it which agent CLI
-// to spawn (per user profile). The connection token never crosses the HTTP
-// boundary — it lives only in-process and on the loopback WS.
+// to spawn (per user profile). The token is revealed only by the explicit
+// owner-only no-store copy action and is never part of ordinary read models.
 //
 // L1 owns all deployment-layout knowledge and injects it downward:
 // the global connection token, the data directory, and the resolved

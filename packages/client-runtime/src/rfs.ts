@@ -5,12 +5,10 @@ import { once } from 'node:events';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { Readable } from 'node:stream';
+import { Readable, Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-
-import type { Writable } from 'node:stream';
 
 const usage = `Huabu RFS (optional Node client)
   get-skill [skillId]
@@ -89,7 +87,12 @@ function allow(values: Values, permitted: string[]) {
     if (name !== 'help' && !permitted.includes(name))
       throw new Error(`Unsupported option --${name} for this command`);
 }
-async function input(values: Values, stdin: Readable, jsonOnly: boolean) {
+async function input(
+  values: Values,
+  stdin: Readable,
+  jsonOnly: boolean,
+  signal: AbortSignal,
+) {
   const names = ['json', 'json-file', 'text', 'text-file'] as const;
   const selected = names.filter((name) => values[name] !== undefined);
   const [name] = selected;
@@ -103,7 +106,7 @@ async function input(values: Values, stdin: Readable, jsonOnly: boolean) {
   if (value === undefined) throw new Error('Input source is missing');
   const bytes = name.endsWith('-file')
     ? value === '-'
-      ? await collect(stdin)
+      ? await collect(stdin, signal)
       : await readFile(value)
     : Buffer.from(value);
   return {
@@ -111,10 +114,18 @@ async function input(values: Values, stdin: Readable, jsonOnly: boolean) {
     contentType: name.startsWith('json') ? 'application/json' : 'text/plain',
   };
 }
-async function collect(stream: Readable): Promise<Buffer> {
+async function collect(stream: Readable, signal: AbortSignal): Promise<Buffer> {
   const chunks: Buffer[] = [];
-  for await (const chunk of stream)
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  await pipeline(
+    stream,
+    new Writable({
+      write(chunk, _encoding, callback) {
+        chunks.push(Buffer.from(chunk));
+        callback();
+      },
+    }),
+    { signal },
+  );
   return Buffer.concat(chunks);
 }
 async function deliver(
@@ -242,7 +253,7 @@ export async function runRfs(args: string[], io: RfsIO = {}): Promise<number> {
       allow(values, ['json', 'json-file']);
       if (rest.length)
         throw new Error(`${command} takes no positional arguments`);
-      const source = await input(values, stdin, true);
+      const source = await input(values, stdin, true, signal);
       body = new Uint8Array(source.bytes);
       headers['Content-Type'] = source.contentType;
       path = `/${command}`;
@@ -299,7 +310,12 @@ export async function runRfs(args: string[], io: RfsIO = {}): Promise<number> {
           throw new Error(
             'agent create takes no thread ID; agent prompt requires one',
           );
-        const source = await input(values, stdin, values['no-start'] === true);
+        const source = await input(
+          values,
+          stdin,
+          values['no-start'] === true,
+          signal,
+        );
         body = new Uint8Array(source.bytes);
         headers['Content-Type'] = source.contentType;
         if (values['no-start']) headers['X-Huabu-Agent-Start'] = 'false';

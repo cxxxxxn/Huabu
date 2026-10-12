@@ -131,7 +131,7 @@ export function readConnectionConfig(options: {
     throw new Error('huabu-daemon requires HUABU_PUBLIC_ORIGIN');
   if (!token?.trim())
     throw new Error('huabu-daemon requires HUABU_CONNECTION_TOKEN');
-  return { origin: normalizePublicOrigin(origin), token };
+  return { origin: normalizePublicOrigin(origin), token: token.trim() };
 }
 
 export function parseDaemonArgs(argv: string[]) {

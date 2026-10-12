@@ -165,7 +165,6 @@ export const routes = {
   acpAgentlet: '/acp/agentlet',
   acpAgentletRestart: '/acp/agentlet/restart',
   acpRuntimeConfig: '/acp/runtime-config',
-  acpConnectionToken: '/acp/connection-token',
   acpConnectionCommand: '/acp/connection-command',
   acpThreadCachedMeta: (
     threadId: string,
