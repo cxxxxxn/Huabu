@@ -59,7 +59,7 @@ describe('deployment readiness', () => {
     });
   });
 
-  it('reports the Bubble owner policy without disclosing its endpoint', () => {
+  it('reports the Bubble owner policy', () => {
     const result = buildDeploymentReadiness({
       allowedHostsConfigured: true,
       basicAuthConfigured: false,

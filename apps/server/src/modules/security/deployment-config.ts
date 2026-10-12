@@ -72,6 +72,18 @@ export function resolveDeploymentConfig(
       'HUABU_PUBLIC_ORIGIN must be reachable beyond loopback when HUABU_BIND_HOST is not loopback',
     );
   }
+
+  // Bubble's `default` driver trusts the bearer text as the principal id.
+  if (
+    bindScope === 'network' &&
+    identity.provider === 'bubble' &&
+    identity.authenticators.some((entry) => entry.driver === 'default')
+  ) {
+    throw new Error(
+      'The Bubble "default" authenticator verifies nothing and is not allowed when HUABU_BIND_HOST is not loopback',
+    );
+  }
+
   return {
     allowedHostsConfigured,
     basicAuthConfigured: userConfigured,
