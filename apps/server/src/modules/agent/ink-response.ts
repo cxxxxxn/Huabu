@@ -98,9 +98,8 @@ export function createInkResponse(canvasId: string, threadId: string) {
         const position = anchor
           ? (getAbsolutePosition(nodes, anchor.id) ?? anchor.position)
           : { x: 0, y: 0 };
-        const size = anchor
-          ? getNodeSize(anchor)
-          : getNodeDefaultSize('question');
+        const fallback = getNodeDefaultSize(anchor?.type ?? 'question');
+        const measured = anchor ? getNodeSize(anchor) : { width: 0, height: 0 };
         const text = outcome.text.trim();
         const notice = outcome.error
           ? `Ink request failed: ${outcome.error}`
@@ -121,8 +120,14 @@ export function createInkResponse(canvasId: string, threadId: string) {
                   nodes,
                   source: {
                     ...position,
-                    width: size.width,
-                    height: size.height ?? 100,
+                    width:
+                      measured.width > 0
+                        ? measured.width
+                        : fallback.width || 200,
+                    height:
+                      measured.height > 0
+                        ? measured.height
+                        : fallback.height || 100,
                   },
                   nodeType: 'note',
                   side: 'bottom',

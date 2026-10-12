@@ -38,7 +38,7 @@ beforeEach(() => {
           id: ownerId,
           type: 'question',
           position: { x: 100, y: 100 },
-          style: { width: 200, height: 100 },
+          style: { width: 200 },
           data: { threadId, agentMode: 'ask' },
         },
       ],
@@ -89,7 +89,7 @@ describe('host Ink response delivery', () => {
         outcome.text,
       );
       expect(note.data.origin).toEqual({ type: 'user-from-chat', threadId });
-      expect(note.position.y).toBeGreaterThan(200);
+      expect(note.position.y).toBe(260);
       expect(getCanvasStore(canvasId).read()?.state.edges).toEqual([
         expect.objectContaining({ source: ownerId, target: note.id }),
       ]);
@@ -102,6 +102,33 @@ describe('host Ink response delivery', () => {
       unsubscribe();
     }
   });
+
+  it.each([
+    { style: undefined, expected: { x: 120, y: 260 } },
+    { style: { width: 0, height: 0 }, expected: { x: 120, y: 260 } },
+    { style: { width: 200, height: 180 }, expected: { x: 0, y: 360 } },
+  ])(
+    'preserves the 80px placement gap for anchor geometry %j',
+    async ({ style, expected }) => {
+      const store = getCanvasStore(canvasId);
+      const canvas = store.read();
+      if (!canvas) throw new Error('Missing test Canvas');
+      store.write({
+        ...canvas,
+        state: {
+          ...canvas.state,
+          nodes: nodes().map((node) => ({ ...node, style })),
+        },
+      });
+      const response = createInkResponse(canvasId, threadId);
+      try {
+        await response.deliver({ text: 'Answer', interrupted: false });
+        expect(notes()[0].position).toEqual(expected);
+      } finally {
+        response.stop();
+      }
+    },
+  );
 
   it.each(['title', 'different-thread', 'actual-result'] as const)(
     'distinguishes %s writes from an answer delivered by this turn',
