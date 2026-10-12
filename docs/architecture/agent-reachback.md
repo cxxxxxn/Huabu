@@ -106,6 +106,10 @@ Huabu injects `HUABU_RFS_URL` and `AGENTLET_TOKEN` into the external agent envir
 
 Agentlet additionally injects its daemon-owned `AGENTLET_SERVICE_SDK_URL`, an absolute `file://` URL for the SDK shipped in Agentlet's `dist/service-sdk`. Session or Profile environment cannot override this value. Downloaded Service Package entries use the SDK only to obtain current configuration leases; the SDK does not discover or load Package code, and provider credentials remain absent from startup environment until an entry requests them.
 
+Agentlet also accepts a generic, default-empty `bootstrapEnv` map or repeatable `--env-inject KEY=VALUE`. It copies and freezes opaque non-secret values at construction, without interpreting host names or resolving paths. Bootstrap overrides inherited values; sessions that declare any managed key or `AGENTLET_TOKEN` fail before process launch. Windows matching is case-insensitive and removes inherited case variants in the final child environment; Unix remains case-sensitive. Ordinary session context and `AGENTLET_SERVER` overrides retain their behavior. The currently bundled SDK is still supplied until the coordinated Huabu client-runtime migration.
+
+There is no automatic `AGENTLET_REACHBACK_DIR` default or ambient resource registry. Hosts can opt in by explicitly declaring that key through bootstrap. `server/sendResource` remains available and interpolates only explicit bootstrap keys, reporting missing keys or write errors as non-fatal resource diagnostics. Bootstrap does not provision Node or gate Agent startup on optional tool availability. Control handshake rejection exits nonzero; normal supervised shutdown exits zero.
+
 Skills explain when and how to compose workflows, but they do not duplicate the wire protocol. `GET /capabilities` and its per-operation endpoints remain the canonical, schema-derived source for current query and command fields, limits, and semantics.
 
 The guide is direct-first: an external agent can discover, query, download, snapshot, upload, execute, and verify without creating another Agent. `POST /agent` remains an optional high-level interpretation and delegation path.
