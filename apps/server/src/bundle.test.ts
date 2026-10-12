@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import archiver from 'archiver';
 import { build } from 'tsup';
 import { describe, expect, it } from 'vitest';
 
@@ -80,7 +81,7 @@ describe('server bundle runtime', () => {
           stdio: ['ignore', 'pipe', 'pipe'],
         },
       );
-      expect(rfsHelp).toContain('Response bodies and SSE are raw');
+      expect(rfsHelp).toContain('Operation response bodies and SSE are raw');
       const bootstrap = buildHuabuBootstrapEnv(
         resolveRuntimeArtifacts({ bundleDir: directory }),
       );
@@ -93,6 +94,24 @@ describe('server bundle runtime', () => {
       );
       const original = ' {"type":"FUTURE","unknown":true}\n';
       const mockServer = createServer((request, response) => {
+        if (request.url === '/rfs/space/skill/rfs') {
+          response.end(
+            '# Space override\n\n# Space-specific Skills\nUse team vocabulary.',
+          );
+          return;
+        }
+        if (request.url === '/rfs/space/download/services/image-gen.zip') {
+          const archive = archiver('zip');
+          archive.on('error', (error) => response.destroy(error));
+          archive.append('id: image-gen', { name: 'image-gen/service.yaml' });
+          archive.append('# Package Skill', { name: 'image-gen/SKILL.md' });
+          archive.append('throw new Error("do not execute");', {
+            name: 'image-gen/entry.mjs',
+          });
+          archive.pipe(response);
+          void archive.finalize();
+          return;
+        }
         let body = '';
         request.on('data', (chunk) => {
           body += chunk;
@@ -111,12 +130,13 @@ describe('server bundle runtime', () => {
         const address = mockServer.address();
         if (!address || typeof address === 'string')
           throw new Error('Expected test port');
+        const rfsBase = `http://127.0.0.1:${address.port}/rfs/space`;
         const child = spawn(
           process.execPath,
           [rfsEntry, 'query', '--json-file', '-'],
           {
             env: {
-              HUABU_RFS_URL: `http://127.0.0.1:${address.port}/rfs/space`,
+              HUABU_RFS_URL: rfsBase,
               AGENTLET_TOKEN: 'mock-token',
             },
             stdio: ['pipe', 'pipe', 'pipe'],
@@ -135,6 +155,44 @@ describe('server bundle runtime', () => {
         expect(code).toBe(0);
         expect(stdout).toBe('{"business":false,"future":1}\n');
         expect(stderr).toBe('');
+        async function invoke(args: string[]) {
+          const subprocess = spawn(process.execPath, [rfsEntry, ...args], {
+            env: {
+              HUABU_RFS_URL: rfsBase,
+              AGENTLET_TOKEN: 'mock-token',
+            },
+            stdio: ['ignore', 'pipe', 'pipe'],
+          });
+          let stdout = '';
+          let stderr = '';
+          subprocess.stdout.on('data', (chunk) => {
+            stdout += chunk;
+          });
+          subprocess.stderr.on('data', (chunk) => {
+            stderr += chunk;
+          });
+          const [code] = await once(subprocess, 'close');
+          return { code, stdout, stderr };
+        }
+        const root = await invoke(['get-skill']);
+        expect(root.code).toBe(0);
+        expect(root.stdout).toContain('Usage: huabu-rfs');
+        expect(root.stdout).toContain('Use team vocabulary.');
+        const downloaded = await invoke([
+          'service',
+          'download',
+          'image-gen',
+          '--out-folder',
+          path.join(directory, 'services'),
+        ]);
+        expect(downloaded.code).toBe(0);
+        expect(downloaded.stderr).toBe('');
+        expect(
+          readFileSync(
+            path.join(directory, 'services/image-gen/SKILL.md'),
+            'utf8',
+          ),
+        ).toBe('# Package Skill');
       } finally {
         mockServer.closeAllConnections();
         await new Promise<void>((resolve, reject) =>

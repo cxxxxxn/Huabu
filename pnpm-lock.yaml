@@ -693,13 +693,22 @@ importers:
       '@huabu/shared':
         specifier: workspace:*
         version: link:../shared
+      commander:
+        specifier: ^13.0.0
+        version: 13.1.0
       dotenv:
         specifier: ^17.2.3
         version: 17.4.2
+      yauzl:
+        specifier: ^3.3.0
+        version: 3.4.0
     devDependencies:
       '@types/node':
         specifier: ^24.13.3
         version: 24.13.3
+      '@types/yauzl':
+        specifier: ^2.10.3
+        version: 2.10.3
       tsup:
         specifier: ^8.5.1
         version: 8.5.1(jiti@2.7.0)(postcss@8.5.25)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0)

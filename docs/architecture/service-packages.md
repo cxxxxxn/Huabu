@@ -1,6 +1,6 @@
 # Service Packages
 
-> Current architecture for Huabu-managed third-party services. Last updated: 2026-10-10
+> Current architecture for Huabu-managed third-party services. Last updated: 2026-10-12
 
 ## Scope
 
@@ -78,6 +78,12 @@ Manifest and Skill responses contain no credentials. Lease requires the normal a
 
 Package download streams a ZIP on demand from the validated Package record without a temporary file or ZIP cache. The archive contains one `<serviceId>/` root directory, `service.yaml`, and exactly the files declared by `package.files`; undeclared tests and development files are excluded. The response uses the Package content hash as its ETag. Phase 1 resolves records from bundled directories; a future validated custom-Service installation can expose the same immutable root, exact file list, and hash without changing the route.
 
+## CLI Package discovery and download
+
+The optional RFS CLI exposes `service list`, `service manifest ID`, `service skill ID` and `service download ID --out-folder FOLDER`, reusing the existing RFS endpoints above. Command-specific `service --help` is served by `external-agent/rfs-cli/service.md`; provider entry help remains a separate operation.
+
+Download saves and extracts the complete archive to `FOLDER/ID/`, not a flattened directory or a credentials file. It uses private staging and publishes only a validated complete extraction, refuses an existing target and uses an exclusive same-ID lock. Archive path confinement reuses existing filesystem helpers; links, special/encrypted entries, duplicate/case-colliding paths, wrong roots, invalid sizes/CRC and over-limit archives fail explicitly. Limits are 64 MiB compressed, 128 MiB expanded, 4096 entries and 4096 filesystem paths including implicit directories. Handled failures clean staging/lock; forced termination may leave artifacts requiring manual inspection. Success prints the final absolute directory. Download never executes Package code, obtains leases or stores configuration credentials. Agent-facing Package selection and provider execution boundaries are unchanged.
+
 ## Huabu client SDK
 
 `packages/client-runtime` publishes the self-contained `dist/service-sdk.js`. Remote `huabu-daemon` and the embedded Server resolve the device-local artifact through the same resolver/bootstrap builder and inject its absolute `file://` URL as `HUABU_SERVICE_SDK_URL`. Generic Agentlet forwards and protects that opaque bootstrap key without owning SDK code. No old SDK alias or fallback is provided; previously downloaded entries must be refreshed and Agents restarted to obtain the new bootstrap. Node is selected by the Agent, not supplied or checked by the daemon. Without Node, the existing authenticated HTTP lease is still available to any HTTP-capable business process.
@@ -103,3 +109,4 @@ Server development reads Packages from `apps/server/src/services`. The Server bu
 | `packages/client-runtime/src/service-sdk.ts`                     | Canonical lease-only External Agent SDK                                    |
 | `packages/client-runtime/src/bootstrap.ts`                       | Shared device-local artifacts and host bootstrap                           |
 | `packages/client-runtime/src/daemon.ts`                          | Source-checkout launcher and connection env inputs                         |
+| `packages/client-runtime/src/rfs-service.ts`                     | Staged Service ZIP validation and extraction                               |

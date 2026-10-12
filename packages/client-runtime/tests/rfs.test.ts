@@ -10,6 +10,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough, Readable, Writable } from 'node:stream';
+import { crc32 } from 'node:zlib';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -82,10 +83,62 @@ async function call(
   return { code, stdout: stdout.bytes(), stderr: stderr.text() };
 }
 
+function zip(
+  entries: {
+    name: string;
+    data?: string;
+    attributes?: number;
+    checksum?: number;
+    expanded?: number;
+    method?: number;
+  }[],
+) {
+  const bodies: Buffer[] = [];
+  const index: Buffer[] = [];
+  let offset = 0;
+  for (const entry of entries) {
+    const name = Buffer.from(entry.name);
+    const data = Buffer.from(entry.data ?? '');
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(entry.method ?? 0, 8);
+    local.writeUInt32LE(entry.checksum ?? crc32(data), 14);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(entry.expanded ?? data.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(0x0314, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(entry.method ?? 0, 10);
+    central.writeUInt32LE(entry.checksum ?? crc32(data), 16);
+    central.writeUInt32LE(data.length, 20);
+    central.writeUInt32LE(entry.expanded ?? data.length, 24);
+    central.writeUInt16LE(name.length, 28);
+    central.writeUInt32LE(entry.attributes ?? 0, 38);
+    central.writeUInt32LE(offset, 42);
+    bodies.push(local, name, data);
+    index.push(central, name);
+    offset += local.length + name.length + data.length;
+  }
+  const catalogue = Buffer.concat(index);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(catalogue.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...bodies, catalogue, end]);
+}
+
 describe('optional raw RFS client', () => {
   it.each([
     [['get-skill', 'service-config'], '/skill/service-config'],
     [['agent', 'profiles'], '/agent/profiles'],
+    [['service', 'list'], '/services'],
+    [['service', 'skill', 'image-gen'], '/services/image-gen/skill'],
+    [['service', 'manifest', 'image-gen'], '/services/image-gen/manifest'],
   ])(
     'reads the exact authenticated catalogue/Skill endpoint',
     async (args, path) => {
@@ -164,6 +217,9 @@ describe('optional raw RFS client', () => {
     ['upload', 'a/b', '--file', '-'],
     ['upload', 'a'],
     ['capabilities'],
+    ['service', 'download', 'image-gen'],
+    ['service', 'download', '../escape', '--out-folder', 'x'],
+    ['query', '--help', '../TYPE'],
   ])('rejects invalid input locally: %j', async (...args) => {
     let count = 0;
     const env = await server((_request, response) => {
@@ -364,16 +420,284 @@ describe('optional raw RFS client', () => {
     [['query', '--help'], '/capabilities'],
     [['query', '--help', 'QUERY'], '/capabilities/queries/QUERY'],
     [['execute', '--help', 'CMD'], '/capabilities/commands/CMD'],
-    [['agent', '--help'], '/skill/agents'],
+    [['agent', '--help'], undefined],
+    [['agent', 'prompt', '--help'], undefined],
+    [['service', '--help'], undefined],
+    [['download', '--help'], undefined],
+    [['get-skill', '--help'], undefined],
   ])('combines local/live help at the exact endpoint', async (args, path) => {
+    const requests: string[] = [];
     const env = await server((request, response) => {
-      expect(request.url).toBe(`/rfs/space${path}`);
+      requests.push(request.url ?? '');
       response.end('live contract');
     });
     const result = await call(args, env);
     expect(result.code).toBe(0);
-    expect(result.stdout.toString()).toContain('Huabu RFS');
-    expect(result.stdout.toString()).toContain(`GET ${path}\nlive contract`);
+    expect(result.stdout.toString()).toContain('Usage: huabu-rfs');
+    const guide = `/skill/rfs-${args[0]}`;
+    expect(requests).toEqual([
+      `/rfs/space${guide}`,
+      ...(path ? [`/rfs/space${path}`] : []),
+    ]);
+    expect(result.stdout.toString()).toContain(`GET ${guide}\nlive contract`);
+    if (path)
+      expect(result.stdout.toString()).toContain(`GET ${path}\nlive contract`);
+  });
+
+  it.each([['get-skill'], ['--help'], []])(
+    'loads Space-aware root context and generated usage in one call: %j',
+    async (...args) => {
+      const env = await server((request, response) => {
+        expect(request.url).toBe('/rfs/space/skill/rfs');
+        response.end(
+          '# Space Override\n\n# Space-specific Skills\nUse team glossary.',
+        );
+      });
+      const result = await call(args, env);
+      expect(result.code).toBe(0);
+      expect(result.stdout.toString()).toContain('Usage: huabu-rfs');
+      expect(result.stdout.toString()).toContain('service');
+      expect(result.stdout.toString()).toContain('# Space Override');
+      expect(result.stdout.toString()).toContain('Use team glossary.');
+    },
+  );
+
+  it('does not turn a failed root Skill request into successful local help', async () => {
+    const env = await server((_request, response) => {
+      response.writeHead(401);
+      response.end('authentication failed');
+    });
+    const result = await call(['get-skill'], env);
+    expect(result.code).toBe(1);
+    expect(result.stdout.toString()).toBe('authentication failed');
+  });
+
+  it('downloads a complete Service into FOLDER/ID without leasing or executing it', async () => {
+    const folder = await directory();
+    const archive = zip([
+      { name: 'image-gen/service.yaml', data: 'id: image-gen' },
+      { name: 'image-gen/SKILL.md', data: '# Package Skill' },
+      {
+        name: 'image-gen/docs/entry.mjs',
+        data: 'throw new Error("never execute");',
+      },
+    ]);
+    const env = await server((request, response) => {
+      expect(request.url).toBe('/rfs/space/download/services/image-gen.zip');
+      expect(request.headers.authorization).toBe('Bearer private-token');
+      response.end(archive);
+    });
+    const result = await call(
+      ['service', 'download', 'image-gen', '--out-folder', folder],
+      env,
+    );
+    expect(result.code).toBe(0);
+    expect(result.stdout.toString()).toBe(`${join(folder, 'image-gen')}\n`);
+    expect(await readFile(join(folder, 'image-gen', 'SKILL.md'), 'utf8')).toBe(
+      '# Package Skill',
+    );
+    expect(
+      await readFile(join(folder, 'image-gen', 'docs', 'entry.mjs'), 'utf8'),
+    ).toContain('never execute');
+    expect(await readdir(folder)).toEqual(['image-gen']);
+    const repeat = await call(
+      ['service', 'download', 'image-gen', '--out-folder', folder],
+      env,
+    );
+    expect(repeat.code).toBe(1);
+    expect(repeat.stderr).toContain('Refusing to overwrite');
+    expect(await readdir(folder)).toEqual(['image-gen']);
+  });
+
+  it.each([
+    [{ name: 'image-gen/../escape', data: 'bad' }],
+    [{ name: 'image-gen/NUL.txt', data: 'bad' }],
+    [{ name: 'image-gen/name.', data: 'bad' }],
+    [
+      { name: 'image-gen/A/one', data: 'a' },
+      { name: 'image-gen/a/two', data: 'b' },
+    ],
+    [{ name: 'wrong/SKILL.md', data: 'bad' }],
+    [
+      {
+        name: 'image-gen/link',
+        attributes: (0xa000 << 16) >>> 0,
+        data: 'outside',
+      },
+    ],
+    [
+      { name: 'image-gen/SKILL.md', data: 'a' },
+      { name: 'image-gen/skill.md', data: 'b' },
+    ],
+    [{ name: 'image-gen/SKILL.md', data: 'bad', checksum: 123 }],
+    [{ name: 'image-gen/only.txt', data: 'no manifest or Skill' }],
+  ])(
+    'rejects unsafe/incomplete Service archives and cleans staging: %j',
+    async (...entries) => {
+      const folder = await directory();
+      const archive = zip(entries);
+      const env = await server((_request, response) => response.end(archive));
+      const result = await call(
+        ['service', 'download', 'image-gen', '--out-folder', folder],
+        env,
+      );
+      expect(result.code).toBe(1);
+      expect(result.stderr).not.toBe('');
+      expect(result.stdout.length).toBe(0);
+      expect(await readdir(folder)).toEqual([]);
+    },
+  );
+
+  it('keeps Service HTTP errors on stdout without creating a target', async () => {
+    const folder = await directory();
+    const env = await server((_request, response) => {
+      response.writeHead(403);
+      response.end('not Agent-facing');
+    });
+    const result = await call(
+      ['service', 'download', 'image-gen', '--out-folder', folder],
+      env,
+    );
+    expect(result.code).toBe(1);
+    expect(result.stdout.toString()).toBe('not Agent-facing');
+    expect(await readdir(folder)).toEqual([]);
+  });
+
+  it('enforces the actual Service compressed-byte limit and removes staging', async () => {
+    const folder = await directory();
+    const env = await server((_request, response) =>
+      response.end(Buffer.alloc(64 * 1024 * 1024 + 1)),
+    );
+    const result = await call(
+      ['service', 'download', 'image-gen', '--out-folder', folder],
+      env,
+    );
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('exceeds download size limit');
+    expect(await readdir(folder)).toEqual([]);
+  });
+
+  it('enforces the declared expanded-byte limit before decompression', async () => {
+    const folder = await directory();
+    const archive = zip([
+      {
+        name: 'image-gen/large',
+        data: 'x',
+        method: 8,
+        expanded: 128 * 1024 * 1024 + 1,
+      },
+    ]);
+    const env = await server((_request, response) => response.end(archive));
+    const result = await call(
+      ['service', 'download', 'image-gen', '--out-folder', folder],
+      env,
+    );
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('exceeds extraction size limit');
+    expect(await readdir(folder)).toEqual([]);
+  });
+
+  it('excludes concurrent same-ID downloads without removing another invocation lock', async () => {
+    const folder = await directory();
+    const archive = zip([
+      { name: 'image-gen/service.yaml', data: 'id: image-gen' },
+      { name: 'image-gen/SKILL.md', data: '# Skill' },
+    ]);
+    let firstResponse: ServerResponse | undefined;
+    const env = await server((_request, response) => {
+      if (!firstResponse) {
+        firstResponse = response;
+        response.writeHead(200);
+        response.flushHeaders();
+      } else response.end(archive);
+    });
+    const args = ['service', 'download', 'image-gen', '--out-folder', folder];
+    const first = call(args, env);
+    await expect
+      .poll(() => readdir(folder))
+      .toContain('.huabu-rfs-image-gen.lock');
+    const second = await call(args, env);
+    expect(second.code).toBe(1);
+    expect(await readdir(folder)).toContain('.huabu-rfs-image-gen.lock');
+    if (!firstResponse) throw new Error('Expected first transfer');
+    firstResponse.end(archive);
+    expect((await first).code).toBe(0);
+    expect(await readdir(folder)).toEqual(['image-gen']);
+  });
+
+  it('cleans a locally interrupted Service transfer without publishing a directory', async () => {
+    const folder = await directory();
+    const controller = new AbortController();
+    const env = await server((_request, response) => {
+      response.writeHead(200);
+      response.write('incomplete ZIP');
+    });
+    const pending = call(
+      ['service', 'download', 'image-gen', '--out-folder', folder],
+      env,
+      Buffer.alloc(0),
+      { signal: controller.signal },
+    );
+    await expect
+      .poll(() => readdir(folder))
+      .toContain('.huabu-rfs-image-gen.lock');
+    controller.abort();
+    const result = await pending;
+    expect(result.code).toBe(130);
+    expect(result.stderr).not.toContain('Remote outcome may be unknown');
+    expect(await readdir(folder)).toEqual([]);
+  });
+
+  it('rejects more than 4096 archive entries and cleans all staged directories', async () => {
+    const folder = await directory();
+    const archive = zip([
+      { name: 'image-gen/' },
+      ...Array.from({ length: 4096 }, (_, index) => ({
+        name: `image-gen/dir${index}/`,
+      })),
+    ]);
+    const env = await server((_request, response) => response.end(archive));
+    const result = await call(
+      ['service', 'download', 'image-gen', '--out-folder', folder],
+      env,
+    );
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('too many entries');
+    expect(await readdir(folder)).toEqual([]);
+  });
+
+  it('cleans staging after a truncated Service transfer', async () => {
+    const folder = await directory();
+    const env = await server((_request, response) => {
+      response.setHeader('content-length', '100');
+      response.write('partial ZIP');
+      setTimeout(() => response.destroy(), 10);
+    });
+
+    const result = await call(
+      ['service', 'download', 'image-gen', '--out-folder', folder],
+      env,
+    );
+    expect(result.code).toBe(1);
+    expect(await readdir(folder)).toEqual([]);
+  });
+
+  it('bounds implicit directories as well as archive entries', async () => {
+    const folder = await directory();
+    const archive = zip(
+      Array.from({ length: 2048 }, (_, index) => ({
+        name: `image-gen/dir${index}/file`,
+        data: '',
+      })),
+    );
+    const env = await server((_request, response) => response.end(archive));
+    const result = await call(
+      ['service', 'download', 'image-gen', '--out-folder', folder],
+      env,
+    );
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('too many filesystem paths');
+    expect(await readdir(folder)).toEqual([]);
   });
 
   it('marks absent/auth-failed/timed-out live help without changing help exit status', async () => {

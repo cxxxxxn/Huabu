@@ -26,6 +26,13 @@ const FOCUSED_SKILL_TEMPLATES = {
   agents: 'external-agent/agents.md',
   'interactive-views': 'external-agent/interactive-views.md',
   'service-config': 'external-agent/service-config.md',
+  'rfs-get-skill': 'external-agent/rfs-cli/get-skill.md',
+  'rfs-query': 'external-agent/rfs-cli/query.md',
+  'rfs-execute': 'external-agent/rfs-cli/execute.md',
+  'rfs-download': 'external-agent/rfs-cli/download.md',
+  'rfs-upload': 'external-agent/rfs-cli/upload.md',
+  'rfs-agent': 'external-agent/rfs-cli/agent.md',
+  'rfs-service': 'external-agent/rfs-cli/service.md',
 } as const;
 
 export type RfsFocusedSkillId = keyof typeof FOCUSED_SKILL_TEMPLATES;
@@ -40,7 +47,10 @@ export function resolveBundledRootSkill(): string {
  * override when it exists, otherwise the bundled default. Returned as raw
  * markdown text (served with `Content-Type: text/markdown`).
  */
-export async function resolveCanvasSkill(canvasId: string): Promise<string> {
+export async function resolveCanvasSkill(
+  canvasId: string,
+  format: 'http' | 'cli' = 'http',
+): Promise<string> {
   // A user-authored override, read as a blob under the Space's guide scope
   // (proposal §6.4.3, disposition D). The scope is the Space root bounded to
   // the guide names, so the file a user authors is exactly where they left it
@@ -56,7 +66,11 @@ export async function resolveCanvasSkill(canvasId: string): Promise<string> {
     }),
   ]);
   const guide =
-    override === null ? resolveBundledRootSkill() : override.toString('utf8');
+    override === null
+      ? format === 'cli'
+        ? renderPromptFile('external-agent/rfs-cli/index.md')
+        : resolveBundledRootSkill()
+      : override.toString('utf8');
   return frameSkill ? `${guide}\n\n${frameSkill.markdown}` : guide;
 }
 

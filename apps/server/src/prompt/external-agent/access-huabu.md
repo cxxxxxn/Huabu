@@ -8,9 +8,8 @@ These environment variables are already set:
 - `AGENTLET_TOKEN` — the RFS bearer credential.
 - `HUABU_SERVICE_SDK_URL` — the Huabu-owned `file://` URL used by optional Node Service entries to lease current configuration. Huabu provides the entry, not Node; choose a compatible Node from your own environment.
 - `HUABU_THREAD_ID` — your conversation ID. Pass it on `execute` (see §6) to attribute your edits.
-- `HUABU_RFS_ENTRY` — when present, the optional local RFS JS entry. Huabu does not provide a Node executable or require this client for HTTP access.
 
-If you have compatible Node, `node "$HUABU_RFS_ENTRY" --help` (PowerShell: `node "$env:HUABU_RFS_ENTRY" --help`) combines local usage with the live Server contract. It supports `get-skill`, `query`, `execute`, `download`, `upload`, and raw streaming `agent` operations. `query --help TYPE` and `execute --help TYPE` load only the requested capability detail. A missing runtime or entry is a reason to choose native HTTP before issuing a request, not to repeat a possibly delivered mutation: after transport failure, inspect state before any resend. Exit 0 means successful HTTP delivery/normal EOF; always inspect command outcomes, conflicts, and Agent SSE events yourself. Ctrl+C closes local delivery, not remote work.
+This is the HTTP-native access guide. Client selection and optional CLI discovery are described in the initial bootstrap; these HTTP operations require no Node runtime or custom tool.
 
 Prefer deterministic direct operations:
 

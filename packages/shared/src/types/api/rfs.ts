@@ -35,6 +35,12 @@ import { z } from 'zod';
 import { inkIntentReportSchema } from './agent.js';
 import { CANVAS_NODE_TYPES } from '../canvas/node.js';
 
+export const rfsSkillParamsSchema = z.object({
+  canvasId: z.string().min(1).max(256),
+  skillId: z.string().min(1).max(128),
+});
+export type RfsSkillParams = z.infer<typeof rfsSkillParamsSchema>;
+
 export const rfsInkIntentParamsSchema = z.object({
   canvasId: z.string().min(1).max(256),
   threadId: z.string().min(1).max(256),

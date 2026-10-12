@@ -57,6 +57,8 @@ import {
   rfsExecuteRequestSchema,
   rfsInkIntentParamsSchema,
   rfsInkIntentRequestSchema,
+  rfsSkillParamsSchema,
+  type RfsSkillParams,
   type RfsInkIntentParams,
   type RfsInkIntentResponse,
   type ApiResult,
@@ -319,10 +321,28 @@ const rfsRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  app.get<{ Params: { canvasId: string; skillId: string } }>(
+  app.get<{ Params: RfsSkillParams }>(
     '/:canvasId/skill/:skillId',
     async (request, reply) => {
-      const guide = resolveFocusedSkill(request.params.skillId);
+      const parsed = rfsSkillParamsSchema.safeParse(request.params);
+      if (!parsed.success)
+        return reply.code(400).send(rfsError('Invalid Skill parameters'));
+      const { canvasId, skillId } = parsed.data;
+      let guide: string | null;
+      try {
+        guide =
+          skillId === 'rfs'
+            ? await resolveCanvasSkill(canvasId, 'cli')
+            : resolveFocusedSkill(skillId);
+      } catch (error) {
+        request.log.error(
+          { err: error, canvasId, skillId },
+          'rfs skill resolve failed',
+        );
+        return reply
+          .code(500)
+          .send(rfsError('Failed to load the requested Skill.'));
+      }
       if (!guide) {
         return reply
           .code(404)

@@ -8,7 +8,17 @@ Guidelines:
 
 ## Working with this Space
 
-Before acting on the Space, fetch its access guide with authentication so Huabu can return a Space-specific `skill.md` override when one exists:
+Before acting on the Space, load its authenticated root guide, which includes any Space-specific `skill.md` override and live Skill Frames.
+
+If `HUABU_RFS_ENTRY` is present and you have compatible Node (24.16+), prefer the optional CLI:
+
+```bash
+node "$HUABU_RFS_ENTRY" get-skill
+```
+
+PowerShell: `node "$env:HUABU_RFS_ENTRY" get-skill`. This returns basic CLI usage and the current Space guide in one call. Use `COMMAND --help` for a command's workflow and `get-skill ID` for focused Skills. Global `--help` also attempts to load the root guide, but local-only help after a live failure does not mean Space instructions were loaded.
+
+Huabu provides the JS entry, not Node. Do not install or provision a runtime merely to access the Space. Without a compatible runtime or entry, use authenticated native HTTP:
 
 ```bash
 curl -fsS -H "Authorization: Bearer $AGENTLET_TOKEN" "$HUABU_RFS_URL/skill"

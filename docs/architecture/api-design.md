@@ -112,6 +112,10 @@ export async function postEcho(body: EchoBody): Promise<EchoResponse> {
 - **Error message**: take from the first zod issue, fall back to a
   fixed string. Never ship `error.format()` — it leaks zod internals.
 
+## RFS Skill delivery
+
+`rfsSkillParamsSchema` in `packages/shared/src/types/api/rfs.ts` validates canvas and Skill path parameters for the authenticated focused-guide route. `GET /api/rfs/:canvasId/skill/rfs` is the Space-aware CLI root under the existing Skill route, not a public bootstrap exception: it applies the same root override/Skill Frame resolution as authenticated HTTP `/skill`, with a CLI-specific bundled default. Fixed `rfs-*` IDs return command guidance without Space instruction repetition. Unknown IDs retain explicit 404 errors. CLI Service commands reuse the existing Service HTTP contracts; local extraction output is not a new wire response.
+
 ## Agent Node owner-specific writes
 
 [`agent-node.ts`](../../packages/shared/src/types/api/agent-node.ts) defines the bounded editable node schema, launch overrides, association bodies, result acknowledgements, and internal projection shape. `PUT /api/canvas/:canvasId` accepts editable fields, not a complete replacement read model: omitted fields remain unchanged, Question FSM fields cannot be submitted, and the server composes from current state under the Canvas mutex. The same ownership guard applies to ordinary `MERGE_NODE_DATA`, regardless of the submitted originator. It does not reserve unrelated node types' `status` or thread-reference metadata.

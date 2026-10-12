@@ -19,10 +19,13 @@
   },
   "dependencies": {
     "@huabu/shared": "workspace:*",
-    "dotenv": "^17.2.3"
+    "commander": "^13.0.0",
+    "dotenv": "^17.2.3",
+    "yauzl": "^3.3.0"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
+    "@types/yauzl": "^2.10.3",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
     "vitest": "^4.1.11"

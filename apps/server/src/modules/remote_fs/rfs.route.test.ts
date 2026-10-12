@@ -394,6 +394,77 @@ describe('GET /api/rfs/:canvasId/skill', () => {
       await app.close();
     }
   });
+
+  it('serves the CLI root default and shares authenticated override/Skill Frames with HTTP', async () => {
+    seedInstructionFrame('c1', 'skill', 'Use the CLI team glossary.');
+    const app = await buildApp();
+    const headers = { authorization: 'Bearer token' };
+    try {
+      const initial = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/skill/rfs',
+        headers,
+      });
+      expect(initial.statusCode).toBe(200);
+      expect(initial.body).toContain(
+        '# Working with this Space through Huabu RFS',
+      );
+      expect(initial.body).toContain('Use the CLI team glossary.');
+      expect(initial.body).not.toContain('curl -fsS');
+      writeFileSync(
+        join(diskDirOf('c1'), 'skill.md'),
+        '# Shared override',
+        'utf8',
+      );
+      const cli = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/skill/rfs',
+        headers,
+      });
+      const http = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/skill',
+        headers,
+      });
+      expect(cli.body).toBe(http.body);
+      expect(cli.body).toContain('# Shared override');
+      expect(cli.body).toContain('# Space-specific Skills');
+      expect(cli.body).not.toContain(
+        '# Working with this Space through Huabu RFS',
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it.each([
+    ['rfs-get-skill', '# Loading Space Skills'],
+    ['rfs-query', '# Querying the Space'],
+    ['rfs-execute', '# Executing Space commands'],
+    ['rfs-download', '# Downloading Space files'],
+    ['rfs-upload', '# Uploading staged bytes'],
+    ['rfs-agent', '# Agent control through the CLI'],
+    ['rfs-service', '# Service Packages through the CLI'],
+  ])(
+    'loads focused CLI help %s without Space instructions',
+    async (id, heading) => {
+      seedInstructionFrame('c1', 'skill', 'Private shared instructions.');
+      const app = await buildApp();
+      try {
+        const res = await app.inject({
+          method: 'GET',
+          url: `/rfs/c1/skill/${id}`,
+          headers: { authorization: 'Bearer token' },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.body).toContain(heading);
+        expect(res.body).not.toContain('{{include:');
+        expect(res.body).not.toContain('Private shared instructions.');
+      } finally {
+        await app.close();
+      }
+    },
+  );
 });
 
 describe('GET /api/rfs/:canvasId/agent/profiles', () => {
