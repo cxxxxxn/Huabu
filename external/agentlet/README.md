@@ -44,8 +44,7 @@ The remote host supplies the Gateway WebSocket URL and authentication token:
 
 ```bash
 agentlet daemon \
-  --server "wss://host.example/api/bridge" \
-  --token "$AGENTLET_TOKEN"
+  --server "wss://host.example/api/bridge"
 ```
 
 For local development only, `ws://` can be enabled explicitly:
@@ -53,7 +52,6 @@ For local development only, `ws://` can be enabled explicitly:
 ```bash
 agentlet daemon \
   --server "ws://127.0.0.1:3001/api/bridge" \
-  --token "development-token" \
   --allow-insecure
 ```
 
@@ -68,6 +66,9 @@ Important options:
 | `--heartbeat <seconds>` | WebSocket ping interval; `0` disables heartbeats. |
 | `--log-level <level>` | `debug`, `info`, `warn`, or `error`. |
 | `--log-file <path>` | Optional JSON-lines log destination. |
+| `--env-inject <KEY=VALUE>` | Repeatable non-secret, opaque bootstrap value forwarded to every spawned agent. |
+
+Set `AGENTLET_TOKEN` in the daemon's environment before running these examples. The generic `--token` option remains available, but environment credentials avoid putting the token in process arguments. A rejected control handshake exits nonzero; an ordinary shutdown exits zero.
 
 The control and session connections use the same `agentletId`. Each spawned ACP session has its own `sessionId` and WebSocket, so control-channel and session-channel failures remain independent. The machine control channel reconnects automatically; a closed session channel stops that session's relay and is not automatically reconnected.
 
@@ -114,13 +115,25 @@ The complete daemon/Gateway wire behavior is documented in [`spec/protocol.md`](
 
 ## Agent Reachback
 
-The host may push scripts or other resources through `server/sendResource`. The daemon resolves destinations against its environment registry, writes the resource locally, and injects the same environment into spawned processes.
+The host may push scripts or other resources through `server/sendResource`. The daemon interpolates destinations against its explicit bootstrap map, writes the resource locally, and injects that map into spawned processes. It does not provision a default reachback directory or infer bootstrap values from its ambient environment.
+
+```bash
+agentlet daemon --server "wss://host.example/api/bridge" \
+  --env-inject TOOL_ENTRY="/device/tools/entry.js" \
+  --env-inject AGENTLET_REACHBACK_DIR="/device/resources"
+```
+
+The bootstrap map defaults to empty. The equivalent programmatic option is `bootstrapEnv`. Values are copied and frozen at construction, split at the first `=` by the CLI, and remain opaque: spaces, empty values, additional equals signs, and relative paths are preserved without expansion or path resolution. Keys must match `[A-Za-z_][A-Za-z0-9_]*`; NUL, duplicate keys, and `AGENTLET_TOKEN` declarations are rejected without printing values. Do not pass credentials through `--env-inject`, because arguments are visible to other processes.
+
+Bootstrap overrides inherited values. A session that declares any bootstrap key or `AGENTLET_TOKEN` is rejected before process launch, even if its value is identical. Windows matching is case-insensitive and the final child environment removes inherited case variants; Unix matching is case-sensitive. Ordinary session values, including `AGENTLET_SERVER`, retain their override behavior. This protects launch configuration, not the executing agent's ability to change its own environment.
+
+Hosts previously relying on automatic `AGENTLET_REACHBACK_DIR` must supply it explicitly; ambient values are no longer an interpolation registry and no path is automatically resolved.
 
 The standard environment includes:
 
 | Variable | Purpose |
 | --- | --- |
-| `AGENTLET_REACHBACK_DIR` | Directory containing host-provided resources. |
+| `AGENTLET_REACHBACK_DIR` | Optional host-defined bootstrap value, with no built-in default or path interpretation. |
 | `AGENTLET_SERVER` | Gateway URL supplied to the daemon. |
 | `AGENTLET_TOKEN` | Authentication token available to host-provided reachback tools. |
 | `AGENTLET_SERVICE_SDK_URL` | Daemon-owned absolute `file://` URL used by Service Package entries to lease current configuration through the ESM Service SDK published under `dist/service-sdk`. |

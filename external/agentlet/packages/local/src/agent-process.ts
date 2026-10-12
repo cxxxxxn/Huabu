@@ -5,7 +5,8 @@ import { EventEmitter } from 'node:events'
 export interface AgentProcessOptions {
   command: string
   cwd?: string
-  env?: Record<string, string>
+  env?: NodeJS.ProcessEnv
+  inheritEnv?: boolean
 }
 
 export interface AgentProcessEvents {
@@ -43,7 +44,9 @@ export class AgentProcess extends EventEmitter<AgentProcessEvents> {
     this.process = spawn(this.options.command, {
       shell: true,
       cwd: this.options.cwd,
-      env: { ...process.env, ...this.options.env },
+      env: this.options.inheritEnv === false
+        ? this.options.env
+        : { ...process.env, ...this.options.env },
       stdio: ['pipe', 'pipe', 'pipe'],
     })
 

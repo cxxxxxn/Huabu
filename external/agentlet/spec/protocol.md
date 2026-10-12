@@ -162,7 +162,7 @@ The native ACP `sessionId` is established by session bootstrap and is the routin
 - The Gateway authenticates both control and session connections before accepting hello.
 - Agent commands run with the daemon process's operating-system permissions.
 - Both compiled known-harness commands and explicit Custom commands use the target platform shell. Known commands are built only from trusted static Definition tokens and bounded options; Custom commands are trusted control-plane input.
-- Resource destinations are resolved through the daemon environment registry.
+- Resource destinations interpolate only the explicit frozen daemon bootstrap map.
 
 The Custom shell spawn carries a narrowly scoped `codeql[js/command-line-injection]` annotation because executing host-authorized shell code is its intended capability, including pipelines and custom launch scripts. This is not a sanitizer, an executable allow-list, a sandbox, or proof of interactive confirmation: the host must authorize commands for the target machine and must not interpolate prompts or other untrusted content into them. Known Definitions share shell execution but compile only trusted fixed tokens and bounded options. The annotation requires compatible alert-suppression analysis and alert handling; adding it alone does not guarantee dismissal in GitHub code scanning.
 
@@ -170,7 +170,7 @@ The Custom shell spawn carries a narrowly scoped `codeql[js/command-line-injecti
 
 `server/sendResource` runs on the machine-level control channel and carries `{ destination, content }`.
 
-The destination may reference daemon environment variables such as `${AGENTLET_REACHBACK_DIR}`. The daemon resolves the destination, creates parent directories, writes the text content, and logs success or failure.
+The destination may reference explicit bootstrap values such as `${AGENTLET_REACHBACK_DIR}` when the host configured them through `--env-inject` or `bootstrapEnv`. There is no implicit directory or ambient interpolation lookup. The daemon interpolates the destination, creates parent directories, writes the text content, and logs success or a non-fatal resource failure.
 
 Hosts should send resources when a daemon connects and repeat them after reconnect. Writes are overwrite-based and idempotent.
 
