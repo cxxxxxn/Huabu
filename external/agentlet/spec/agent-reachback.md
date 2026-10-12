@@ -71,7 +71,7 @@ The final child environment combines ordinary inherited values and session overr
 | _host-specific bootstrap_ | `--env-inject` or `bootstrapEnv` | Host-owned non-secret tool coordinates available to all spawned agents and resource interpolation. |
 | _host-specific session context_ | `sessionSpec.env` | Workload context that may override ordinary inherited values, but cannot declare a bootstrap key or daemon token. |
 
-Explicit bootstrap is the only source of `${ENV_VAR}` interpolation in resource destinations (§3). Empty values are valid; missing keys, including inherited keys and object prototype names, produce a non-fatal `resource_save_failed` diagnostic. Hosts that used the former implicit reachback directory must now provide it explicitly. The existing bundled Service SDK URL remains daemon-owned until its host-side migration is delivered; it is not part of the generic bootstrap default.
+Explicit bootstrap is the only source of `${ENV_VAR}` interpolation in resource destinations (§3). Empty values are valid; missing keys, including inherited keys and object prototype names, produce a non-fatal `resource_save_failed` diagnostic. Hosts that used the former implicit reachback directory must now provide it explicitly. Agentlet supplies no host-specific SDK or SDK location; these belong to host bootstrap.
 
 ## 3. Tool Distribution
 

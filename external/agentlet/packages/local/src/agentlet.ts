@@ -893,10 +893,6 @@ export function buildAgentProcessEnv(
     createBootstrapEnv(Object.entries(bootstrapEnv), platform),
     {
       AGENTLET_TOKEN: token,
-      AGENTLET_SERVICE_SDK_URL: new URL(
-        './service-sdk/index.js',
-        import.meta.url,
-      ).href,
     },
     platform,
   )
