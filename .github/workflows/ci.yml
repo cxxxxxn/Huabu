@@ -131,7 +131,7 @@ jobs:
       # The backend runs from source under tsx, so it needs the workspace
       # packages built for the same reason the typecheck step does.
       - name: Build workspace protocol/runtime packages
-        run: pnpm run build:agentlet && pnpm run build:agenetes
+        run: pnpm run build:agentlet && pnpm run build:agenetes && pnpm run build:client-runtime
 
       # Mirrors the Testcontainers setup in
       # `apps/server/src/test-support/storage-containers.ts`: the same pinned
