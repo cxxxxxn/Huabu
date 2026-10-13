@@ -114,7 +114,7 @@ export async function postEcho(body: EchoBody): Promise<EchoResponse> {
 
 ## RFS Skill delivery
 
-`rfsSkillParamsSchema` in `packages/shared/src/types/api/rfs.ts` validates canvas and Skill path parameters for the authenticated focused-guide route. `GET /api/rfs/:canvasId/skill/rfs` is the Space-aware CLI root under the existing Skill route, not a public bootstrap exception: it appends the same live Skill Frames as authenticated HTTP `/skill`, but starts from the CLI-specific bundled default. The former Space-root `skill.md` override is ignored. Fixed `rfs-*` IDs return command guidance without Space instruction repetition. Unknown IDs retain explicit 404 errors. CLI Service commands reuse the existing Service HTTP contracts; local extraction output is not a new wire response.
+`rfsSkillParamsSchema` in `packages/shared/src/types/api/rfs.ts` validates canvas and Skill path parameters for the authenticated focused-guide route. Root and focused Skills keep the existing `GET /api/rfs/:canvasId/skill[/<skillId>]` URLs. `X-Huabu-Skill-Client` selects `http` or `rfs-cli`; absence defaults to `http`, unknown values return `400`, and variant responses include `Vary: X-Huabu-Skill-Client`. Both presentations append the same live Skill Frames at the root. The former Space-root `skill.md` override is ignored. HTTP exposes `agents`, `interactive-views`, `layout`, `services`, and `tasks`; CLI intentionally exposes only `agents`, `layout`, and `services` while Task/View abstractions await redesign. Unknown or unavailable IDs retain explicit 404 errors. CLI Service commands reuse the existing Service HTTP contracts; local extraction output is not a new wire response.
 
 ## Agent Node owner-specific writes
 

@@ -13,30 +13,24 @@ import { renderPromptFile } from '../../prompt/agents/loader.js';
 import { getLogger } from '../../utils/logger.js';
 import { resolveSpaceSkill } from '../agent/space-instruction-frames.js';
 
-/** PROMPT-ROOT-relative path of the bundled access guide. */
-const ACCESS_GUIDE_TEMPLATE = 'external-agent/access-huabu.md';
+import type { RfsSkillClient } from '@huabu/shared';
+
 const logger = getLogger('rfs-skill');
 
-const FOCUSED_SKILL_TEMPLATES = {
-  layout: 'external-agent/layout.md',
-  tasks: 'external-agent/tasks.md',
-  agents: 'external-agent/agents.md',
-  'interactive-views': 'external-agent/interactive-views.md',
-  'service-config': 'external-agent/service-config.md',
-  'rfs-get-skill': 'external-agent/rfs-cli/get-skill.md',
-  'rfs-query': 'external-agent/rfs-cli/query.md',
-  'rfs-execute': 'external-agent/rfs-cli/execute.md',
-  'rfs-download': 'external-agent/rfs-cli/download.md',
-  'rfs-upload': 'external-agent/rfs-cli/upload.md',
-  'rfs-agent': 'external-agent/rfs-cli/agent.md',
-  'rfs-service': 'external-agent/rfs-cli/service.md',
+const FOCUSED_SKILLS = {
+  http: ['agents', 'interactive-views', 'layout', 'services', 'tasks'],
+  'rfs-cli': ['agents', 'layout', 'services'],
 } as const;
 
-export type RfsFocusedSkillId = keyof typeof FOCUSED_SKILL_TEMPLATES;
+function clientDirectory(client: RfsSkillClient) {
+  return client === 'http' ? 'http-native' : client;
+}
 
 /** Resolve the public root guide without consulting Canvas storage. */
-export function resolveBundledRootSkill(): string {
-  return renderPromptFile(ACCESS_GUIDE_TEMPLATE);
+export function resolveBundledRootSkill(client: RfsSkillClient): string {
+  return renderPromptFile(
+    `external-agent/${clientDirectory(client)}/access-huabu.md`,
+  );
 }
 
 /**
@@ -45,7 +39,7 @@ export function resolveBundledRootSkill(): string {
  */
 export async function resolveCanvasSkill(
   canvasId: string,
-  format: 'http' | 'cli' = 'http',
+  client: RfsSkillClient,
 ): Promise<string> {
   const frameSkill = await resolveSpaceSkill(canvasId).catch(
     (error: unknown) => {
@@ -56,19 +50,18 @@ export async function resolveCanvasSkill(
       return null;
     },
   );
-  const guide =
-    format === 'cli'
-      ? renderPromptFile('external-agent/rfs-cli/index.md')
-      : resolveBundledRootSkill();
+  const guide = resolveBundledRootSkill(client);
   return frameSkill ? `${guide}\n\n${frameSkill.markdown}` : guide;
 }
 
 /** Resolve one fixed, authenticated advanced guide. */
-export function resolveFocusedSkill(skillId: string): string | null {
-  if (!Object.prototype.hasOwnProperty.call(FOCUSED_SKILL_TEMPLATES, skillId)) {
+export function resolveFocusedSkill(
+  skillId: string,
+  client: RfsSkillClient,
+): string | null {
+  if (!(FOCUSED_SKILLS[client] as readonly string[]).includes(skillId))
     return null;
-  }
   return renderPromptFile(
-    FOCUSED_SKILL_TEMPLATES[skillId as RfsFocusedSkillId],
+    `external-agent/${clientDirectory(client)}/${skillId}.md`,
   );
 }

@@ -1,15 +1,14 @@
 # Accessing this Huabu Space
 
-You are working with a **Huabu** Space, an infinite visual surface of notes, images, PDFs, sketches, questions, frames, and links. You do not see the Space directly. Use plain HTTP with `curl`, `wget`, `Invoke-RestMethod`, Python `requests`, or Node `fetch`; no custom tool or SDK is required.
+You are working with a **Huabu** Space, an infinite visual surface of notes, images, PDFs, sketches, questions, frames, and links. You do not see the Space directly. Use the optional `huabu-rfs` client with your own compatible Node. Huabu provides `HUABU_RFS_ENTRY`, not a Node runtime.
 
 These environment variables are already set:
 
 - `HUABU_RFS_URL` — the base URL for this Space, with no trailing slash.
 - `AGENTLET_TOKEN` — the RFS bearer credential.
-- `HUABU_SERVICE_SDK_URL` — the Huabu-owned `file://` URL used by optional Node Service entries to lease current configuration. Huabu provides the entry, not Node; choose a compatible Node from your own environment.
 - `HUABU_THREAD_ID` — your conversation ID. Pass it on `execute` (see §6) to attribute your edits.
 
-This is the HTTP-native access guide. Client selection and optional CLI discovery are described in the initial bootstrap; these HTTP operations require no Node runtime or custom tool.
+Invoke examples as `node "$HUABU_RFS_ENTRY" ...`; on PowerShell use `node "$env:HUABU_RFS_ENTRY" ...`. The shorter `huabu-rfs` name below denotes that invocation.
 
 Prefer deterministic direct operations:
 
@@ -23,23 +22,13 @@ Prefer deterministic direct operations:
 
 ## 1. Discover operations
 
-Fetch the compact handshake once:
+The CLI hides capability endpoints behind command help. Load the catalogue or one exact operation contract:
 
 ```bash
-curl -fsS -H "$AUTH" "$HUABU_RFS_URL/capabilities"
-```
-
-It reports protocol version, effective read/write permissions, limits, execution semantics, supported query and command types, and links. Load a detailed schema only for the operation you are about to use:
-
-```bash
-curl -fsS -H "$AUTH" \
-  "$HUABU_RFS_URL/capabilities/queries/INSPECT_NODES"
-
-curl -fsS -H "$AUTH" \
-  "$HUABU_RFS_URL/capabilities/commands/CREATE_NODES"
-
-curl -fsS -H "$AUTH" \
-  "$HUABU_RFS_URL/capabilities/queries/SNAPSHOT_NODES"
+huabu-rfs query --help
+huabu-rfs query --help INSPECT_NODES
+huabu-rfs execute --help CREATE_NODES
+huabu-rfs query --help SNAPSHOT_NODES
 ```
 
 Do not guess fields or duplicate the schemas locally. Re-fetch the relevant capability when validation fails or the protocol changes.
@@ -56,8 +45,7 @@ cat > /tmp/huabu-query.json <<'JSON'
 }
 JSON
 
-curl -fsS -H "$AUTH" -H "Content-Type: application/json" \
-  --data-binary @/tmp/huabu-query.json "$HUABU_RFS_URL/query"
+huabu-rfs query --json-file /tmp/huabu-query.json
 ```
 
 Use:
@@ -76,18 +64,20 @@ Selected-node context supplies an exact `file` path. Pass that path through inst
 Always write bodies to a file rather than dumping large content into your context. For a node, save response headers too: `X-Huabu-Node-Id`, `X-Huabu-Node-Type`, `X-Huabu-Node-Label`, `X-Huabu-Src`, `X-Huabu-Locked`, `X-Huabu-Node-Edges`, and `ETag`.
 
 ```bash
-curl -fsS -H "$AUTH" -D /tmp/huabu-headers.txt -o /tmp/node.md \
-  "$HUABU_RFS_URL/download/nodes/My%20note.md"
+huabu-rfs download \
+  --output /tmp/node.md \
+  --dump-header /tmp/huabu-headers.txt \
+  "nodes/My note.md"
 ```
 
 The `ETag` is the node's authored-content revision. Cache it and use `If-None-Match` to avoid re-reading unchanged content. Write a conditional response to a temporary file so a `304` cannot replace your cached body with an empty file:
 
 ```bash
-STATUS="$(curl -sS -H "$AUTH" -H 'If-None-Match: "3d7e"' \
-  -D /tmp/huabu-headers.txt -o /tmp/node.next -w '%{http_code}' \
-  "$HUABU_RFS_URL/download/nodes/My%20note.md")"
-[ "$STATUS" = 200 ] && mv /tmp/node.next /tmp/node.md
-[ "$STATUS" = 304 ] && rm -f /tmp/node.next
+huabu-rfs download \
+  --output /tmp/node.md \
+  --dump-header /tmp/huabu-headers.txt \
+  --if-none-match '"3d7e"' \
+  "nodes/My note.md"
 ```
 
 `304 Not Modified` means your cached copy is current. `200` returns the new body and revision. Treat any other status as an error rather than using the temporary body.
@@ -99,8 +89,7 @@ Use the `SNAPSHOT_NODES` query when you need to see an `image` or the user's han
 Fetch the query capability before constructing a request:
 
 ```bash
-curl -fsS -H "$AUTH" \
-  "$HUABU_RFS_URL/capabilities/queries/SNAPSHOT_NODES"
+huabu-rfs query --help SNAPSHOT_NODES
 ```
 
 Then submit node IDs obtained from `query`:
@@ -114,15 +103,15 @@ cat > /tmp/huabu-snapshot.json <<'JSON'
 }
 JSON
 
-curl -fsS -H "$AUTH" -H "Content-Type: application/json" \
-  --data-binary @/tmp/huabu-snapshot.json "$HUABU_RFS_URL/query"
+huabu-rfs query --json-file /tmp/huabu-snapshot.json
 ```
 
 The response is `{ "type": "SNAPSHOT_NODES", "result": { "snapshots": [{ "src", "downloadPath", "width", "height", "originNodeIds" }] } }`. `src` is the bare artifact key accepted by Huabu media-node commands; `downloadPath` is the exact path to retrieve through `GET download/<path>`. Multiple nearby image or sketch nodes may be spatially clustered into one PNG, and `originNodeIds` identifies every contributing node.
 
 ```bash
-curl -fsS -H "$AUTH" -o /tmp/huabu-snapshot.png \
-  "$HUABU_RFS_URL/download/artifacts/sketch-raster-example.png"
+huabu-rfs download \
+  --output /tmp/huabu-snapshot.png \
+  artifacts/sketch-raster-example.png
 ```
 
 Snapshots are content-addressed, so repeating an unchanged request reuses the existing artifact. To render only selected strokes from a sketch, use the capability-documented `strokeSubsets` KEEP list. Reduce `maxPixels` when the resulting PNG is too large for a downstream vision model.
@@ -132,15 +121,13 @@ Snapshots are content-addressed, so repeating an unchanged request reuses the ex
 Stage bytes under a descriptive, unique name. Uploads are inert until an `execute` command references their returned path. Existing names are never overwritten; a collision returns `409`.
 
 ```bash
-curl -fsS -H "$AUTH" --data-binary @./diagram.png \
-  "$HUABU_RFS_URL/upload/diagram.png"
+huabu-rfs upload --file ./diagram.png diagram.png
 ```
 
 The response is `{ "path": "upload/diagram.png", "size": ... }`. Remove an unused staged file with:
 
 ```bash
-curl -fsS -X DELETE -H "$AUTH" \
-  "$HUABU_RFS_URL/upload/diagram.png"
+huabu-rfs upload --delete diagram.png
 ```
 
 ## 6. Huabu layout basics
@@ -193,8 +180,7 @@ This table is only a navigation summary. For the complete contract of one comman
 
 ```bash
 COMMAND=SET_FRAME_LAYOUT
-curl -fsS -H "$AUTH" \
-  "$HUABU_RFS_URL/capabilities/commands/$COMMAND"
+huabu-rfs execute --help "$COMMAND"
 ```
 
 The response contains `schema`, `constraints`, `result`, and `examples`. Treat `schema` as authoritative rather than inferring parameters from the summary above. Confirm with the user before destructive, broad, or difficult-to-reverse changes.
@@ -221,9 +207,7 @@ cat > /tmp/huabu-execute.json <<'JSON'
 }
 JSON
 
-curl -fsS -H "$AUTH" -H "Content-Type: application/json" \
-  -H "X-Huabu-Host-Thread-Id: $HUABU_THREAD_ID" \
-  --data-binary @/tmp/huabu-execute.json "$HUABU_RFS_URL/execute"
+huabu-rfs execute --json-file /tmp/huabu-execute.json
 ```
 
 Commands run in order, failures do not roll back accepted commands, and an accepted subset commits once. Always inspect every entry in `results`; do not infer success from HTTP 200 alone. Read generated node IDs from `results[].nodes` and generated edge IDs from `results[].edges`.
@@ -249,8 +233,7 @@ Use an Agent when open-ended work benefits from interpretation or a durable visi
 Plain text creates a visible Agent with the first selectable external Profile and immediately submits its first prompt. This server-side fallback does not read the Web client's browser-local recent selection:
 
 ```bash
-SSE="$(curl -fsS -N -H "$AUTH" -H "Content-Type: text/plain" \
-  --data-binary @./prompt.txt "$HUABU_RFS_URL/agent")"
+SSE="$(huabu-rfs agent create --text-file ./prompt.txt)"
 THREAD_ID="$(printf '%s\n' "$SSE" | sed -n 's/^: threadId //p' | head -n 1)"
 printf '%s\n' "$SSE" | sed -n 's/^data: //p' | tail -n +2
 ```
@@ -262,14 +245,11 @@ The SSE `created` event reports the new Node, thread, effective Profile, and opt
 Address the existing thread in the URL. If you know the Agent Node but did not retain its creation response, query that Node first; a Question Node with an existing association includes `threadId`:
 
 ```bash
-THREAD_ID="$(curl -fsS -H "$AUTH" -H "Content-Type: application/json" \
-  --data-binary '{"type":"INSPECT_NODES","ids":["node-123"]}' \
-  "$HUABU_RFS_URL/query" \
+THREAD_ID="$(huabu-rfs query \
+  --json '{"type":"INSPECT_NODES","ids":["node-123"]}' \
   | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).result.nodes[0]?.threadId ?? ""))')"
 
-SSE="$(curl -fsS -N -H "$AUTH" -H "Content-Type: text/plain" \
-  --data-binary @./follow-up.txt \
-  "$HUABU_RFS_URL/agent/$THREAD_ID/prompt")"
+SSE="$(huabu-rfs agent prompt --text-file ./follow-up.txt "$THREAD_ID")"
 printf '%s\n' "$SSE" | sed -n 's/^data: //p'
 ```
 
@@ -280,7 +260,7 @@ An absent `threadId` means the result is not a Question Node with an existing th
 For available Profile discovery, launch configuration, create-only requests, optional parent connections, or recursive delegation, load:
 
 ```bash
-curl -fsS -H "$AUTH" "$HUABU_RFS_URL/skill/agents"
+huabu-rfs get-skill agents
 ```
 
 ## Provider Services
@@ -288,30 +268,31 @@ curl -fsS -H "$AUTH" "$HUABU_RFS_URL/skill/agents"
 List the bundled provider services that Huabu can provision:
 
 ```bash
-curl -fsS -H "$AUTH" "$HUABU_RFS_URL/services"
+huabu-rfs service list
 ```
 
 Before using one, fetch and follow its Skill:
 
 ```bash
-curl -fsS -H "$AUTH" "$HUABU_RFS_URL/services/image-gen/skill"
+huabu-rfs service skill image-gen
 ```
 
 Download the complete Package to a path in your working directory:
 
 ```bash
-curl -fsS -H "$AUTH" \
-  "$HUABU_RFS_URL/download/services/image-gen.zip" \
-  -o image-gen.zip
-unzip image-gen.zip
+huabu-rfs service download --out-folder . image-gen
 cd image-gen
 ```
 
 Every archive contains one top-level directory named after the Service, so extracting `image-gen.zip` creates `image-gen/` rather than placing files directly in the current directory. `service.yaml` and every file declared by `package.files` are included; undeclared development files are not.
 
-With compatible Node available, read the extracted `SKILL.md`, then run `node entry.mjs --help` before invoking the optional entry. Runtime help uses the leased Manifest and configuration to show current choices and configured defaults that may not be visible from the source alone. The entry obtains that coherent Service context on demand through `HUABU_SERVICE_SDK_URL`; you normally do not need to import or call the SDK yourself. An entry is a modifiable starting point rather than a complete provider SDK: when the task needs another provider endpoint, follow the official documentation linked by the Skill and modify only your local Package copy. Old downloaded entries that use `AGENTLET_SERVICE_SDK_URL` must be refreshed; there is no legacy alias.
+Read the extracted `SKILL.md` before using the Package. Load the focused Services guide for optional entry execution, custom provider operations and private configuration leases.
 
-Without Node, JS entries cannot run, but Service leases remain language-independent. When using your own business process instead of a bundled entry, load authenticated `GET skill/service-config` for the in-memory lease/provider workflow.
+Load `services` for complete discovery, download, entry and private in-process lease guidance:
+
+```bash
+huabu-rfs get-skill services
+```
 
 Never print or persist leased credentials or send them to unrelated recipients; only the intended provider receives the credential necessary for the operation. A Service Package without `SKILL.md` is intentionally unavailable for direct External Agent use; do not construct provider calls from its Settings manifest.
 
@@ -319,14 +300,12 @@ Never print or persist leased credentials or send them to unrelated recipients; 
 
 Load these authenticated guides only when the request needs them:
 
-- `GET skill/layout` — structured diagrams, grids, flowcharts, roadmaps, and advanced Frame layout.
-- `GET skill/tasks` — durable long-horizon Tasks and Runs.
-- `GET skill/agents` — available Profiles, Agent creation, launch configuration, continued conversations, and recursive delegation.
-- `GET skill/interactive-views` — durable sandboxed HTML Views with Host-owned state, data, navigation, and Agent actions.
-- `GET skill/service-config` — fresh Service configuration leases consumed privately by your own business subprocess, including non-Node HTTP clients.
+- `layout` — structured diagrams, grids, flowcharts, roadmaps, and advanced Frame layout.
+- `agents` — available Profiles, Agent creation, launch configuration, continued conversations, and recursive delegation.
+- `services` — Service discovery, Package download and private configuration leases for custom business processes.
 
 ```bash
-curl -fsS -H "$AUTH" "$HUABU_RFS_URL/skill/tasks"
+huabu-rfs get-skill layout
 ```
 
 ## Error handling

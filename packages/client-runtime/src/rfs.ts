@@ -11,6 +11,7 @@ import { pathToFileURL } from 'node:url';
 
 import { CommanderError } from 'commander';
 
+import { RFS_SKILL_CLIENT_HEADER } from '@huabu/shared';
 import { serviceParamsSchema } from '@huabu/shared/service-package';
 
 import {
@@ -18,8 +19,11 @@ import {
   segment,
   type InputOptions,
   type DownloadOptions,
+  type UploadOptions,
 } from './rfs-cli.js';
 import { installServicePackage } from './rfs-service.js';
+
+const SKILL_CLIENT_HEADERS = { [RFS_SKILL_CLIENT_HEADER]: 'rfs-cli' };
 
 function header(value: string, name: string): string {
   if (!value || /[^\x20-\x7e\x80-\xff]/.test(value))
@@ -294,12 +298,17 @@ export async function runRfs(args: string[], io: RfsIO = {}): Promise<number> {
       signal,
       AbortSignal.timeout(io.helpTimeoutMs ?? 3000),
     ]);
-    for (const path of [plan.guide, plan.capability].filter(
-      (value): value is string => value !== undefined,
-    )) {
+    for (const [path, skill, label] of [
+      [plan.guide, true, 'Skill'],
+      [plan.capability, false, 'operation contract'],
+    ] as const) {
+      if (!path) continue;
       try {
         const response = await fetch(`${config.base}${path}`, {
-          headers: config.headers,
+          headers: {
+            ...config.headers,
+            ...(skill ? SKILL_CLIENT_HEADERS : {}),
+          },
           redirect: 'manual',
           signal: helpSignal,
         });
@@ -308,10 +317,10 @@ export async function runRfs(args: string[], io: RfsIO = {}): Promise<number> {
           throw new Error(`HTTP ${response.status}`);
         }
         const text = await response.text();
-        stdout.write(`\nLive Server contract - GET ${path}\n${text}\n`);
+        stdout.write(`\nLive ${label}\n${text}\n`);
       } catch (error) {
         diagnostic(
-          `Live Server contract unavailable (${path}): ${error instanceof Error ? error.message : String(error)}. Live help may be incomplete; local usage remains available.`,
+          `Live Server contract unavailable (${label}): ${error instanceof Error ? error.message : String(error)}. Live help may be incomplete; local usage remains available.`,
         );
       }
     }
@@ -324,7 +333,8 @@ export async function runRfs(args: string[], io: RfsIO = {}): Promise<number> {
       },
       getSkill: (id, usage) =>
         send({
-          path: id ? `/skill/${segment(id)}` : '/skill/rfs',
+          path: id ? `/skill/${segment(id)}` : '/skill',
+          headers: SKILL_CLIENT_HEADERS,
           usage: id ? undefined : usage,
         }),
       query: (options) => post('/query', options, true),
@@ -355,8 +365,17 @@ export async function runRfs(args: string[], io: RfsIO = {}): Promise<number> {
                 },
         });
       },
-      upload: async (name, file) => {
+      upload: async (name, options: UploadOptions) => {
         const path = `/upload/${segment(name)}`;
+        const selected =
+          Number(options.file !== undefined) + Number(options.delete === true);
+        if (selected !== 1)
+          throw new Error('Provide exactly one of --file or --delete');
+        if (options.delete) {
+          await send({ path, method: 'DELETE', mutation: true });
+          return;
+        }
+        const file = options.file;
         if (!file) throw new Error('Upload file path must be nonempty');
         uploadStream = file === '-' ? stdin : createReadStream(file);
         if (file !== '-') await once(uploadStream, 'open');

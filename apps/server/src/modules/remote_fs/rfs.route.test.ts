@@ -236,9 +236,8 @@ describe('GET /api/rfs/:canvasId/skill', () => {
         );
       }
       expect(res.body).toContain('/capabilities/commands/$COMMAND');
-      expect(res.body).toContain('HUABU_SERVICE_SDK_URL');
       expect(res.body).toContain('/services');
-      expect(res.body).toContain('$HUABU_RFS_URL/skill/tasks');
+      expect(res.body).toContain('GET skill/services');
       expect(res.body).toContain('**parent-local**');
       expect(res.body).toContain('read-only `absolutePosition`');
       expect(res.body).toContain(
@@ -247,6 +246,23 @@ describe('GET /api/rfs/:canvasId/skill', () => {
       expect(res.body).toContain(
         `${getNodeDefaultSize('note').height}px nominal layout height`,
       );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('serves the anonymous CLI root from the same endpoint by header', async () => {
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/skill',
+        headers: { 'x-huabu-skill-client': 'rfs-cli' },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers.vary).toBe('X-Huabu-Skill-Client');
+      expect(response.body).toContain('huabu-rfs query --help');
+      expect(response.body).not.toContain('# Space-specific Skills');
     } finally {
       await app.close();
     }
@@ -364,9 +380,9 @@ describe('GET /api/rfs/:canvasId/skill', () => {
         method: 'GET',
         url: '/rfs/c1/skill/interactive-views',
       });
-      const serviceConfig = await app.inject({
+      const services = await app.inject({
         method: 'GET',
-        url: '/rfs/c1/skill/service-config',
+        url: '/rfs/c1/skill/services',
       });
       const unknown = await app.inject({
         method: 'GET',
@@ -382,11 +398,10 @@ describe('GET /api/rfs/:canvasId/skill', () => {
       expect(tasks.body).toContain('# Durable Tasks and Runs');
       expect(agents.body).toContain('# Creating and Prompting Agents');
       expect(interactiveViews.body).toContain('# Building Interactive Views');
-      expect(serviceConfig.statusCode).toBe(200);
-      expect(serviceConfig.body).toContain(
-        '# Using Service configuration in your own process',
-      );
-      expect(serviceConfig.body).toContain('withServiceContext');
+      expect(services.statusCode).toBe(200);
+      expect(services.body).toContain('# Using Huabu Services');
+      expect(services.body).toContain('withServiceContext');
+      expect(services.body).toContain('urllib.request');
       expect(interactiveViews.body).toContain('huabu.view.connect');
       expect(unknown.statusCode).toBe(404);
       expect(unknown.json()).toMatchObject({ code: 'skill_not_found' });
@@ -396,35 +411,36 @@ describe('GET /api/rfs/:canvasId/skill', () => {
     }
   });
 
-  it('serves distinct CLI/HTTP defaults with shared live Skill Frames', async () => {
+  it('selects HTTP/CLI presentations by header and shares Skill Frames', async () => {
     seedInstructionFrame('c1', 'skill', 'Use the CLI team glossary.');
     const app = await buildApp();
     const headers = { authorization: 'Bearer token' };
     try {
       const initial = await app.inject({
         method: 'GET',
-        url: '/rfs/c1/skill/rfs',
-        headers,
+        url: '/rfs/c1/skill',
+        headers: { ...headers, 'x-huabu-skill-client': 'rfs-cli' },
       });
       expect(initial.statusCode).toBe(200);
-      expect(initial.body).toContain(
-        '# Working with this Space through Huabu RFS',
-      );
+      expect(initial.body).toContain('# Accessing this Huabu Space');
+      expect(initial.body).toContain('huabu-rfs query --help');
       expect(initial.body).toContain('Use the CLI team glossary.');
       expect(initial.body).not.toContain('curl -fsS');
       const cli = await app.inject({
         method: 'GET',
-        url: '/rfs/c1/skill/rfs',
-        headers,
+        url: '/rfs/c1/skill',
+        headers: { ...headers, 'x-huabu-skill-client': 'rfs-cli' },
       });
       const http = await app.inject({
         method: 'GET',
         url: '/rfs/c1/skill',
         headers,
       });
-      expect(cli.body).toContain('# Working with this Space through Huabu RFS');
+      expect(cli.body).toContain('# Accessing this Huabu Space');
+      expect(cli.body).toContain('huabu-rfs query --help');
       expect(http.body).toContain('# Accessing this Huabu Space');
       expect(cli.body).not.toBe(http.body);
+      expect(cli.headers.vary).toBe('X-Huabu-Skill-Client');
       expect(cli.body).toContain('Use the CLI team glossary.');
       expect(http.body).toContain('Use the CLI team glossary.');
       expect(cli.body).toContain('# Space-specific Skills');
@@ -434,15 +450,11 @@ describe('GET /api/rfs/:canvasId/skill', () => {
   });
 
   it.each([
-    ['rfs-get-skill', '# Loading Space Skills'],
-    ['rfs-query', '# Querying the Space'],
-    ['rfs-execute', '# Executing Space commands'],
-    ['rfs-download', '# Downloading Space files'],
-    ['rfs-upload', '# Uploading staged bytes'],
-    ['rfs-agent', '# Agent control through the CLI'],
-    ['rfs-service', '# Service Packages through the CLI'],
+    ['agents', '# Creating and Prompting Agents'],
+    ['layout', '# Advanced Space Layout'],
+    ['services', '# Using Huabu Services'],
   ])(
-    'loads focused CLI help %s without Space instructions',
+    'loads focused CLI Skill %s without Space instructions',
     async (id, heading) => {
       seedInstructionFrame('c1', 'skill', 'Private shared instructions.');
       const app = await buildApp();
@@ -450,7 +462,10 @@ describe('GET /api/rfs/:canvasId/skill', () => {
         const res = await app.inject({
           method: 'GET',
           url: `/rfs/c1/skill/${id}`,
-          headers: { authorization: 'Bearer token' },
+          headers: {
+            'x-huabu-skill-client': 'rfs-cli',
+            authorization: 'Bearer token',
+          },
         });
         expect(res.statusCode).toBe(200);
         expect(res.body).toContain(heading);
@@ -461,6 +476,40 @@ describe('GET /api/rfs/:canvasId/skill', () => {
       }
     },
   );
+
+  it('does not expose Task/View Skills to the CLI presentation', async () => {
+    const app = await buildApp();
+    try {
+      for (const id of ['tasks', 'interactive-views']) {
+        const response = await app.inject({
+          method: 'GET',
+          url: `/rfs/c1/skill/${id}`,
+          headers: { 'x-huabu-skill-client': 'rfs-cli' },
+        });
+        expect(response.statusCode).toBe(404);
+        expect(response.json()).toMatchObject({ code: 'skill_not_found' });
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects unknown Skill clients instead of falling back', async () => {
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/skill',
+        headers: { 'x-huabu-skill-client': 'unknown' },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({
+        message: expect.stringContaining('Invalid Skill client'),
+      });
+    } finally {
+      await app.close();
+    }
+  });
 });
 
 describe('GET /api/rfs/:canvasId/agent/profiles', () => {

@@ -21,9 +21,8 @@
  * - `POST   task/:taskId/run/create` — create and start one Task Run.
  * - `POST   task/:taskId/run/:runId/complete` — complete one running Task Run.
  * - `GET    agent/profiles`  — list available Agent Profiles.
- * - `GET    skill`           — pull the canvas-access guide (per-canvas
- *   override → bundled default).
- * - `GET    skill/:skillId`  — pull one authenticated advanced RFS guide.
+ * - `GET    skill`           — pull the HTTP/CLI root guide selected by header.
+ * - `GET    skill/:skillId`  — pull one selected focused presentation.
  * - `GET    capabilities*`   — discover direct query/command contracts.
  * - `POST   query`           — run one bounded canonical SpaceQuery.
  * - `POST   execute`         — execute validated agent Space commands.
@@ -57,6 +56,8 @@ import {
   rfsExecuteRequestSchema,
   rfsInkIntentParamsSchema,
   rfsInkIntentRequestSchema,
+  RFS_SKILL_CLIENT_HEADER,
+  rfsSkillClientSchema,
   rfsSkillParamsSchema,
   type RfsSkillParams,
   type RfsInkIntentParams,
@@ -305,10 +306,16 @@ const rfsRoutes: FastifyPluginAsync = async (app) => {
     '/:canvasId/skill',
     async (request, reply) => {
       const { canvasId } = request.params;
+      reply.header('Vary', RFS_SKILL_CLIENT_HEADER);
+      const client = rfsSkillClientSchema.safeParse(
+        request.headers[RFS_SKILL_CLIENT_HEADER.toLowerCase()] ?? 'http',
+      );
+      if (!client.success)
+        return reply.code(400).send(rfsError('Invalid Skill client'));
       try {
         const guide = request.headers.authorization
-          ? await resolveCanvasSkill(canvasId)
-          : resolveBundledRootSkill();
+          ? await resolveCanvasSkill(canvasId, client.data)
+          : resolveBundledRootSkill(client.data);
         return reply
           .header('Content-Type', 'text/markdown; charset=utf-8')
           .send(guide);
@@ -328,12 +335,15 @@ const rfsRoutes: FastifyPluginAsync = async (app) => {
       if (!parsed.success)
         return reply.code(400).send(rfsError('Invalid Skill parameters'));
       const { canvasId, skillId } = parsed.data;
+      reply.header('Vary', RFS_SKILL_CLIENT_HEADER);
+      const client = rfsSkillClientSchema.safeParse(
+        request.headers[RFS_SKILL_CLIENT_HEADER.toLowerCase()] ?? 'http',
+      );
+      if (!client.success)
+        return reply.code(400).send(rfsError('Invalid Skill client'));
       let guide: string | null;
       try {
-        guide =
-          skillId === 'rfs'
-            ? await resolveCanvasSkill(canvasId, 'cli')
-            : resolveFocusedSkill(skillId);
+        guide = resolveFocusedSkill(skillId, client.data);
       } catch (error) {
         request.log.error(
           { err: error, canvasId, skillId },

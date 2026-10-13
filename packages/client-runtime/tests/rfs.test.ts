@@ -134,7 +134,7 @@ function zip(
 
 describe('optional raw RFS client', () => {
   it.each([
-    [['get-skill', 'service-config'], '/skill/service-config'],
+    [['get-skill', 'services'], '/skill/services'],
     [['agent', 'profiles'], '/agent/profiles'],
     [['service', 'list'], '/services'],
     [['service', 'skill', 'image-gen'], '/services/image-gen/skill'],
@@ -145,6 +145,8 @@ describe('optional raw RFS client', () => {
       const env = await server((request, response) => {
         expect(request.url).toBe(`/rfs/space${path}`);
         expect(request.headers.authorization).toBe('Bearer private-token');
+        if (path.startsWith('/skill'))
+          expect(request.headers['x-huabu-skill-client']).toBe('rfs-cli');
         response.end('raw content');
       });
       const result = await call(args, env);
@@ -329,13 +331,32 @@ describe('optional raw RFS client', () => {
     });
     for (const source of [file, '-']) {
       const result = await call(
-        ['upload', 'a %20.bin', '--file', source],
+        ['upload', '--file', source, 'a %20.bin'],
         env,
         payload,
       );
       expect(result.code).toBe(0);
       expect(result.stdout.toString()).toBe('{"unknown":"untouched"}');
     }
+  });
+
+  it('deletes a staged upload without reading a file or request body', async () => {
+    const env = await server((request, response) => {
+      expect(request.method).toBe('DELETE');
+      expect(request.url).toBe('/rfs/space/upload/old.bin');
+      void bytes(request).then((body) => {
+        expect(body.length).toBe(0);
+        response.end('deleted');
+      });
+    });
+    const result = await call(['upload', '--delete', 'old.bin'], env);
+    expect(result.code).toBe(0);
+    expect(result.stdout.toString()).toBe('deleted');
+    for (const args of [
+      ['upload', 'old.bin'],
+      ['upload', '--delete', '--file', '-', 'old.bin'],
+    ])
+      expect((await call(args, env)).code).toBe(1);
   });
 
   it('replaces only a complete download, dumps metadata, and preserves cached target on 304', async () => {
@@ -417,38 +438,48 @@ describe('optional raw RFS client', () => {
   });
 
   it.each([
-    [['query', '--help'], '/capabilities'],
-    [['query', '--help', 'QUERY'], '/capabilities/queries/QUERY'],
-    [['execute', '--help', 'CMD'], '/capabilities/commands/CMD'],
-    [['agent', '--help'], undefined],
-    [['agent', 'prompt', '--help'], undefined],
-    [['service', '--help'], undefined],
-    [['download', '--help'], undefined],
-    [['get-skill', '--help'], undefined],
-  ])('combines local/live help at the exact endpoint', async (args, path) => {
-    const requests: string[] = [];
-    const env = await server((request, response) => {
-      requests.push(request.url ?? '');
-      response.end('live contract');
-    });
-    const result = await call(args, env);
-    expect(result.code).toBe(0);
-    expect(result.stdout.toString()).toContain('Usage: huabu-rfs');
-    const guide = `/skill/rfs-${args[0]}`;
-    expect(requests).toEqual([
-      `/rfs/space${guide}`,
-      ...(path ? [`/rfs/space${path}`] : []),
-    ]);
-    expect(result.stdout.toString()).toContain(`GET ${guide}\nlive contract`);
-    if (path)
-      expect(result.stdout.toString()).toContain(`GET ${path}\nlive contract`);
-  });
+    [['query', '--help'], undefined, '/capabilities'],
+    [['query', '--help', 'QUERY'], undefined, '/capabilities/queries/QUERY'],
+    [['execute', '--help', 'CMD'], undefined, '/capabilities/commands/CMD'],
+    [['agent', '--help'], '/skill/agents', undefined],
+    [['agent', 'prompt', '--help'], '/skill/agents', undefined],
+    [['service', '--help'], '/skill/services', undefined],
+    [['download', '--help'], undefined, undefined],
+    [['get-skill', '--help'], undefined, undefined],
+  ])(
+    'combines local/live help at the exact endpoint',
+    async (args, guide, capability) => {
+      const requests: string[] = [];
+      const env = await server((request, response) => {
+        requests.push(request.url ?? '');
+        if (request.url?.includes('/skill/'))
+          expect(request.headers['x-huabu-skill-client']).toBe('rfs-cli');
+        response.end('live contract');
+      });
+      const result = await call(args, env);
+      expect(result.code).toBe(0);
+      expect(result.stdout.toString()).toContain('Usage: huabu-rfs');
+      expect(requests).toEqual([
+        ...(guide ? [`/rfs/space${guide}`] : []),
+        ...(capability ? [`/rfs/space${capability}`] : []),
+      ]);
+      if (guide)
+        expect(result.stdout.toString()).toContain('Live Skill\nlive contract');
+      if (capability)
+        expect(result.stdout.toString()).toContain(
+          'Live operation contract\nlive contract',
+        );
+      if (capability)
+        expect(result.stdout.toString()).not.toContain('/capabilities');
+    },
+  );
 
   it.each([['get-skill'], ['--help'], []])(
     'loads Space-aware root context and generated usage in one call: %j',
     async (...args) => {
       const env = await server((request, response) => {
-        expect(request.url).toBe('/rfs/space/skill/rfs');
+        expect(request.url).toBe('/rfs/space/skill');
+        expect(request.headers['x-huabu-skill-client']).toBe('rfs-cli');
         response.end(
           '# Space Override\n\n# Space-specific Skills\nUse team glossary.',
         );

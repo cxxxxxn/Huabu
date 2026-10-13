@@ -80,7 +80,7 @@ Package download streams a ZIP on demand from the validated Package record witho
 
 ## CLI Package discovery and download
 
-The optional RFS CLI exposes `service list`, `service manifest ID`, `service skill ID` and `service download ID --out-folder FOLDER`, reusing the existing RFS endpoints above. Command-specific `service --help` is served by `external-agent/rfs-cli/service.md`; provider entry help remains a separate operation.
+The optional RFS CLI exposes `service list`, `service manifest ID`, `service skill ID` and `service download --out-folder FOLDER ID`, reusing the existing RFS endpoints above. `service --help` loads the CLI presentation of `/skill/services`; provider entry help remains a separate operation. The HTTP presentation includes a complete in-process lease example, while the CLI never prints or exports a lease.
 
 Download saves and extracts the complete archive to `FOLDER/ID/`, not a flattened directory or a credentials file. It uses private staging and publishes only a validated complete extraction, refuses an existing target and uses an exclusive same-ID lock. Archive path confinement reuses existing filesystem helpers; links, special/encrypted entries, duplicate/case-colliding paths, wrong roots, invalid sizes/CRC and over-limit archives fail explicitly. Limits are 64 MiB compressed, 128 MiB expanded, 4096 entries and 4096 filesystem paths including implicit directories. Handled failures clean staging/lock; forced termination may leave artifacts requiring manual inspection. Success prints the final absolute directory. Download never executes Package code, obtains leases or stores configuration credentials. Agent-facing Package selection and provider execution boundaries are unchanged.
 

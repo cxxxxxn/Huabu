@@ -16,7 +16,7 @@ If `HUABU_RFS_ENTRY` is present and you have compatible Node (24.16+), prefer th
 node "$HUABU_RFS_ENTRY" get-skill
 ```
 
-PowerShell: `node "$env:HUABU_RFS_ENTRY" get-skill`. This returns basic CLI usage and the current Space guide in one call. Use `COMMAND --help` for a command's workflow and `get-skill ID` for focused Skills. Global `--help` also attempts to load the root guide, but local-only help after a live failure does not mean Space instructions were loaded.
+PowerShell: `node "$env:HUABU_RFS_ENTRY" get-skill`. This returns basic CLI usage and the CLI presentation of the current Space guide in one call. Use `COMMAND --help` for command usage and `get-skill ID` for focused Skills. Global `--help` also attempts to load the root guide, but local-only help after a live failure does not mean Space instructions were loaded.
 
 Huabu provides the JS entry, not Node. Do not install or provision a runtime merely to access the Space. Without a compatible runtime or entry, use authenticated native HTTP:
 

@@ -22,7 +22,7 @@ describe('isPublicRfsSkillBootstrapRequest', () => {
   });
 
   it('does not exempt invalid credentials, nested skills, or other methods', () => {
-    for (const skill of ['rfs', 'rfs-query', 'rfs-service']) {
+    for (const skill of ['agents', 'layout', 'services']) {
       expect(
         isPublicRfsSkillBootstrapRequest({
           method: 'GET',

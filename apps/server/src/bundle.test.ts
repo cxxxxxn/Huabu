@@ -94,7 +94,8 @@ describe('server bundle runtime', () => {
       );
       const original = ' {"type":"FUTURE","unknown":true}\n';
       const mockServer = createServer((request, response) => {
-        if (request.url === '/rfs/space/skill/rfs') {
+        if (request.url === '/rfs/space/skill') {
+          expect(request.headers['x-huabu-skill-client']).toBe('rfs-cli');
           response.end(
             '# CLI root guide\n\n# Space-specific Skills\nUse team vocabulary.',
           );
