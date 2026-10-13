@@ -20,7 +20,7 @@ To use the configured default Profile, send the first prompt directly. This crea
 huabu-rfs agent create --text-file ./prompt.txt
 ```
 
-The response is SSE. Its `created` event contains the new `nodeId`, `threadId`, effective `profileId`, and parent-connection result. Save the `threadId`.
+The response is standard SSE streamed unchanged to stdout. It begins with `: threadId <id>` and a `created` event whose JSON data contains the new `nodeId`, `threadId`, effective `profileId`, and parent-connection result. In the default final mode, subsequent `data:` frames contain the final answer. Ignore heartbeat comments, and treat `event: error` as Agent failure. Save the `threadId`.
 
 Use JSON to choose a Profile, position, working directory, stable initial instructions, or optional parent conversation:
 

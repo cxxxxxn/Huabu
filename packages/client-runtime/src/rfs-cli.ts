@@ -12,9 +12,8 @@ export interface InputOptions {
 }
 
 export interface DownloadOptions {
-  output?: string;
-  dumpHeader?: string;
-  ifNoneMatch?: string;
+  output: string;
+  ifRevision?: string;
 }
 
 export interface UploadOptions {
@@ -63,9 +62,7 @@ export function createRfsProgram(
     })
     .addHelpText(
       'after',
-      '\nRequired environment: HUABU_RFS_URL, AGENTLET_TOKEN.\n' +
-        'Node is selected by the Agent, not provided by Huabu.\n' +
-        'Operation response bodies and SSE are raw; exit 0 is HTTP success/normal EOF, not business success.\n' +
+      '\nOperation response bodies and SSE are raw; exit 0 means delivery completed, not business success.\n' +
         'No redirects, retries, reconnects or remote cancellation.\n' +
         'Start with get-skill; use COMMAND --help for usage and live contracts when applicable.\n',
     );
@@ -120,16 +117,15 @@ export function createRfsProgram(
   const download = guide(
     program
       .command('download <logicalPath>')
-      .description('Download raw bytes and optional metadata')
-      .option(
+      .description('Download a file and stream metadata/progress as NDJSON')
+      .requiredOption(
         '--output <path>',
         'Replace a local file only after a complete successful transfer',
       )
       .option(
-        '--dump-header <path>',
-        'Write semantic HTTP status and metadata headers',
-      )
-      .option('--if-none-match <etag>', 'Preserve cached content on 304'),
+        '--if-revision <revision>',
+        'Keep the output file when its Huabu revision is unchanged',
+      ),
   );
   download.action((path: string) =>
     actions.download(path, download.opts<DownloadOptions>()),

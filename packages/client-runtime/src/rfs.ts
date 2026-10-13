@@ -3,7 +3,7 @@
 
 import { once } from 'node:events';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rename, rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -11,7 +11,7 @@ import { pathToFileURL } from 'node:url';
 
 import { CommanderError } from 'commander';
 
-import { RFS_SKILL_CLIENT_HEADER } from '@huabu/shared';
+import { RFS_HEADERS, RFS_SKILL_CLIENT_HEADER } from '@huabu/shared';
 import { serviceParamsSchema } from '@huabu/shared/service-package';
 
 import {
@@ -102,6 +102,7 @@ async function deliver(
   destination: Writable,
   end: boolean,
   maximumBytes = Infinity,
+  onChunk?: (received: number) => void,
 ) {
   async function* bytes() {
     if (!response.body) return;
@@ -114,6 +115,7 @@ async function deliver(
         received += result.value.byteLength;
         if (received > maximumBytes)
           throw new Error('Service archive exceeds download size limit');
+        onChunk?.(received);
         yield result.value;
       }
     } finally {
@@ -126,6 +128,54 @@ async function deliver(
   }
   await pipeline(Readable.from(bytes()), destination, { end });
 }
+
+function downloadRevision(response: Response): string | undefined {
+  const etag = response.headers.get('etag');
+  if (!etag) return undefined;
+  const strong = etag.startsWith('W/') ? etag.slice(2) : etag;
+  return strong.startsWith('"') && strong.endsWith('"')
+    ? strong.slice(1, -1)
+    : strong;
+}
+
+function downloadMetadata(response: Response) {
+  const length = response.headers.get('content-length');
+  const size = length === null ? undefined : Number(length);
+  const revision = downloadRevision(response);
+  const contentType = response.headers.get('content-type');
+  const id = response.headers.get(RFS_HEADERS.nodeId);
+  const type = response.headers.get(RFS_HEADERS.nodeType);
+  const label = response.headers.get(RFS_HEADERS.nodeLabel);
+  const src = response.headers.get(RFS_HEADERS.src);
+  const locked = response.headers.get(RFS_HEADERS.locked);
+  const edges = response.headers.get(RFS_HEADERS.edges);
+  const node =
+    id && type
+      ? {
+          id,
+          type,
+          ...(label === null ? {} : { label: decodeURIComponent(label) }),
+          ...(src === null ? {} : { src }),
+          ...(locked === null ? {} : { locked: locked === 'true' }),
+          ...(edges === null ? {} : { edges: JSON.parse(edges) as unknown }),
+        }
+      : undefined;
+  return {
+    ...(size !== undefined && Number.isSafeInteger(size) && size >= 0
+      ? { size }
+      : {}),
+    ...(revision === undefined ? {} : { revision }),
+    ...(contentType === null ? {} : { contentType }),
+    ...(node === undefined ? {} : { node }),
+  };
+}
+
+function cliErrorBody(body: string): string {
+  return body
+    .replace('curl -fsS "$HUABU_RFS_URL/skill"', 'huabu-rfs get-skill')
+    .replace('curl -fsS \\"$HUABU_RFS_URL/skill\\"', 'huabu-rfs get-skill');
+}
+
 function streamBody(source: Readable): ReadableStream<Uint8Array> {
   const iterator = source[Symbol.asyncIterator]();
   return new ReadableStream({
@@ -169,6 +219,7 @@ export async function runRfs(args: string[], io: RfsIO = {}): Promise<number> {
   let temporary: string | undefined;
   const diagnostic = (message: string) =>
     stderr.write(`huabu-rfs: ${message}\n`);
+  const event = (value: object) => stdout.write(`${JSON.stringify(value)}\n`);
   let code = 0;
   interface Request {
     path: string;
@@ -211,16 +262,29 @@ export async function runRfs(args: string[], io: RfsIO = {}): Promise<number> {
     };
     const response = await fetch(`${config.base}${request.path}`, init);
     const download = request.download;
-    if (download?.dumpHeader) {
-      const lines = [
-        `HTTP ${response.status} ${response.statusText}`,
-        ...Array.from(response.headers, ([key, value]) => `${key}: ${value}`),
-        '',
-        '',
-      ];
-      await writeFile(download.dumpHeader, lines.join('\r\n'));
+    if (download && response.status === 304) {
+      event({
+        event: 'not_modified',
+        output: resolve(download.output),
+        ...downloadMetadata(response),
+      });
+      return;
     }
-    if (download && response.status === 304) return;
+    if (!response.ok) {
+      const body = cliErrorBody(
+        Buffer.from(await response.arrayBuffer()).toString(),
+      );
+      if (download)
+        diagnostic(`Download failed (status ${response.status}): ${body}`);
+      else {
+        stdout.write(body);
+        diagnostic(
+          `Request failed (status ${response.status}); response body is on stdout.`,
+        );
+      }
+      code = 1;
+      return;
+    }
     if (response.ok && request.service) {
       const target = await installServicePackage(
         request.service.id,
@@ -235,22 +299,50 @@ export async function runRfs(args: string[], io: RfsIO = {}): Promise<number> {
         signal,
       );
       stdout.write(`${target}\n`);
-    } else if (response.ok && download?.output) {
+    } else if (download) {
       const target = resolve(download.output);
+      const metadata = downloadMetadata(response);
       temporary = await mkdtemp(join(dirname(target), '.huabu-rfs-'));
-      await deliver(
-        response,
-        createWriteStream(join(temporary, 'body'), { flags: 'wx' }),
-        true,
-      );
-      await rename(join(temporary, 'body'), target);
+      let received = 0;
+      event({
+        event: 'download_started',
+        output: target,
+        ...metadata,
+      });
+      const progress = setInterval(() => {
+        event({
+          event: 'download_progress',
+          output: target,
+          received,
+          ...('size' in metadata ? { size: metadata.size } : {}),
+        });
+      }, 5000);
+      progress.unref();
+      try {
+        await deliver(
+          response,
+          createWriteStream(join(temporary, 'body'), { flags: 'wx' }),
+          true,
+          Infinity,
+          (value) => {
+            received = value;
+          },
+        );
+        await rename(join(temporary, 'body'), target);
+      } finally {
+        clearInterval(progress);
+      }
+      event({
+        event: 'download_completed',
+        output: target,
+        received,
+        ...metadata,
+      });
     } else {
       if (response.ok && request.usage) stdout.write(request.usage);
       await deliver(response, stdout, false);
     }
-    if (!response.ok)
-      diagnostic(`HTTP ${response.status}; response body is on stdout.`);
-    code = response.ok ? 0 : 1;
+    code = 0;
   }
   async function post(
     path: string,
@@ -341,26 +433,17 @@ export async function runRfs(args: string[], io: RfsIO = {}): Promise<number> {
       execute: (options) => post('/execute', options, true, true),
       download: async (path, options) => {
         const url = `/download/${path.split('/').map(segment).join('/')}`;
-        if (options.output === '' || options.dumpHeader === '')
-          throw new Error('Output paths must be nonempty');
-        if (
-          options.output &&
-          options.dumpHeader &&
-          resolve(options.output) === resolve(options.dumpHeader)
-        )
-          throw new Error(
-            '--output and --dump-header must use different paths',
-          );
+        if (!options.output) throw new Error('--output must be nonempty');
         await send({
           path: url,
           download: options,
           headers:
-            options.ifNoneMatch === undefined
+            options.ifRevision === undefined
               ? undefined
               : {
                   'If-None-Match': header(
-                    options.ifNoneMatch,
-                    '--if-none-match',
+                    JSON.stringify(options.ifRevision),
+                    '--if-revision',
                   ),
                 },
         });

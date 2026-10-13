@@ -12,12 +12,13 @@ import { join } from 'node:path';
 import { PassThrough, Readable, Writable } from 'node:stream';
 import { crc32 } from 'node:zlib';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { runRfs } from '../src/rfs.js';
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const action of cleanup.splice(0).reverse()) await action();
 });
 async function server(
@@ -214,8 +215,9 @@ describe('optional raw RFS client', () => {
     ['agent', 'prompt', '--text', 'x'],
     ['agent', 'prompt', 't', '--text', 'x', '--no-start'],
     ['agent', 'profiles', '--json', '{}'],
-    ['download', '../file'],
-    ['download', 'nodes//file'],
+    ['download', '../file', '--output', 'file'],
+    ['download', 'nodes//file', '--output', 'file'],
+    ['download', 'nodes/file'],
     ['upload', 'a/b', '--file', '-'],
     ['upload', 'a'],
     ['capabilities'],
@@ -359,64 +361,150 @@ describe('optional raw RFS client', () => {
       expect((await call(args, env)).code).toBe(1);
   });
 
-  it('replaces only a complete download, dumps metadata, and preserves cached target on 304', async () => {
+  it('streams download metadata as NDJSON, replaces only a complete file, and preserves cached output', async () => {
     const folder = await directory();
     const target = join(folder, 'body');
-    const headers = join(folder, 'headers');
+    const timer = setTimeout(() => {}, 60_000);
+    timer.unref();
+    vi.spyOn(globalThis, 'setInterval').mockImplementation((callback) => {
+      callback();
+      return timer;
+    });
     await writeFile(target, 'old');
     const env = await server((request, response) => {
       expect(request.url).toBe('/rfs/space/download/nodes/a%20%2520.md');
       response.setHeader('etag', '"revision"');
       response.setHeader('x-huabu-node-id', 'node-1');
-      if (request.headers['if-none-match']) {
+      response.setHeader('x-huabu-node-type', 'note');
+      response.setHeader('x-huabu-node-label', 'My%20note');
+      response.setHeader(
+        'x-huabu-node-edges',
+        '{"parents":["frame-1"],"children":[]}',
+      );
+      response.setHeader('content-type', 'application/octet-stream');
+      if (request.headers['if-none-match'] === '"revision"') {
         response.writeHead(304);
         response.end();
-      } else response.end(Buffer.from([0, 255, 10]));
+      } else {
+        response.setHeader('content-length', '3');
+        response.end(Buffer.from([0, 255, 10]));
+      }
     });
-    const args = [
-      'download',
-      'nodes/a %20.md',
-      '--output',
-      target,
-      '--dump-header',
-      headers,
-    ];
-    expect((await call(args, env)).code).toBe(0);
+    const args = ['download', 'nodes/a %20.md', '--output', target];
+    const downloaded = await call(args, env);
+    expect(downloaded.code).toBe(0);
     expect(await readFile(target)).toEqual(Buffer.from([0, 255, 10]));
-    expect(await readFile(headers, 'utf8')).toContain('etag: "revision"');
-    expect(await readFile(headers, 'utf8')).toContain(
-      'x-huabu-node-id: node-1',
-    );
     expect(
-      (await call([...args, '--if-none-match', '"revision"'], env)).code,
-    ).toBe(0);
+      downloaded.stdout
+        .toString()
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line)),
+    ).toEqual([
+      {
+        event: 'download_started',
+        output: target,
+        size: 3,
+        revision: 'revision',
+        contentType: 'application/octet-stream',
+        node: {
+          id: 'node-1',
+          type: 'note',
+          label: 'My note',
+          edges: { parents: ['frame-1'], children: [] },
+        },
+      },
+      {
+        event: 'download_progress',
+        output: target,
+        received: 0,
+        size: 3,
+      },
+      {
+        event: 'download_completed',
+        output: target,
+        received: 3,
+        size: 3,
+        revision: 'revision',
+        contentType: 'application/octet-stream',
+        node: {
+          id: 'node-1',
+          type: 'note',
+          label: 'My note',
+          edges: { parents: ['frame-1'], children: [] },
+        },
+      },
+    ]);
+    const cached = await call([...args, '--if-revision', 'revision'], env);
+    expect(cached.code).toBe(0);
     expect(await readFile(target)).toEqual(Buffer.from([0, 255, 10]));
-    expect(await readFile(headers, 'utf8')).toContain('HTTP 304');
-    expect(await readdir(folder)).toEqual(['body', 'headers']);
+    expect(JSON.parse(cached.stdout.toString())).toEqual({
+      event: 'not_modified',
+      output: target,
+      revision: 'revision',
+      contentType: 'application/octet-stream',
+      node: {
+        id: 'node-1',
+        type: 'note',
+        label: 'My note',
+        edges: { parents: ['frame-1'], children: [] },
+      },
+    });
+    expect(await readdir(folder)).toEqual(['body']);
   });
 
-  it('preserves target on truncated transport and reports error bodies only on stdout', async () => {
+  it('announces a download before body completion and preserves the target on failure', async () => {
     const folder = await directory();
     const target = join(folder, 'body');
     await writeFile(target, 'old');
-    let partial = true;
+    let finish!: () => void;
+    const observed = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
     const env = await server((_request, response) => {
-      if (partial) {
-        response.setHeader('content-length', '100');
+      response.setHeader('content-length', '100');
+      response.flushHeaders();
+      void observed.then(() => {
         response.write('partial');
-        setTimeout(() => response.destroy(), 10);
-      } else {
-        response.writeHead(403);
-        response.end('raw HTTP error');
-      }
+        response.destroy();
+      });
     });
     const args = ['download', 'nodes/a', '--output', target];
-    expect((await call(args, env)).code).toBe(1);
+    const stdout = output();
+    const pending = runRfs(args, {
+      env,
+      stdout: stdout.stream,
+      stderr: output().stream,
+    });
+    await vi.waitFor(() =>
+      expect(stdout.text()).toContain('"event":"download_started"'),
+    );
     expect(await readFile(target, 'utf8')).toBe('old');
-    partial = false;
-    const result = await call(args, env);
+    finish();
+    expect(await pending).toBe(1);
+    expect(await readFile(target, 'utf8')).toBe('old');
+    expect(stdout.text()).not.toContain('"event":"download_completed"');
+    expect(await readdir(folder)).toEqual(['body']);
+  });
+
+  it('keeps download error bodies off stdout and adapts the recovery command', async () => {
+    const folder = await directory();
+    const target = join(folder, 'body');
+    await writeFile(target, 'old');
+    const env = await server((_request, response) => {
+      response.writeHead(403, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          message:
+            'Denied. To see how to use this Space, run: curl -fsS "$HUABU_RFS_URL/skill"',
+        }),
+      );
+    });
+    const result = await call(['download', 'nodes/a', '--output', target], env);
     expect(result.code).toBe(1);
-    expect(result.stdout.toString()).toBe('raw HTTP error');
+    expect(result.stdout.length).toBe(0);
+    expect(result.stderr).toContain('huabu-rfs get-skill');
+    expect(result.stderr).not.toContain('HUABU_RFS_URL');
     expect(await readFile(target, 'utf8')).toBe('old');
     expect(await readdir(folder)).toEqual(['body']);
   });
@@ -490,6 +578,8 @@ describe('optional raw RFS client', () => {
       expect(result.stdout.toString()).toContain('service');
       expect(result.stdout.toString()).toContain('# Space Override');
       expect(result.stdout.toString()).toContain('Use team glossary.');
+      expect(result.stdout.toString()).not.toContain('HUABU_RFS_URL');
+      expect(result.stdout.toString()).not.toContain('AGENTLET_TOKEN');
     },
   );
 
@@ -501,6 +591,22 @@ describe('optional raw RFS client', () => {
     const result = await call(['get-skill'], env);
     expect(result.code).toBe(1);
     expect(result.stdout.toString()).toBe('authentication failed');
+  });
+
+  it('adapts Server recovery guidance to the CLI without exposing connection environment', async () => {
+    const env = await server((_request, response) => {
+      response.writeHead(400, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          message:
+            'Invalid query. To see how to use this Space, run: curl -fsS "$HUABU_RFS_URL/skill"',
+        }),
+      );
+    });
+    const result = await call(['query', '--json', '{}'], env);
+    expect(result.code).toBe(1);
+    expect(result.stdout.toString()).toContain('huabu-rfs get-skill');
+    expect(result.stdout.toString()).not.toContain('HUABU_RFS_URL');
   });
 
   it('downloads a complete Service into FOLDER/ID without leasing or executing it', async () => {

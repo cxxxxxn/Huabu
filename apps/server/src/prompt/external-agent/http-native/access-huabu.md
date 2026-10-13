@@ -308,11 +308,7 @@ cd image-gen
 
 Every archive contains one top-level directory named after the Service, so extracting `image-gen.zip` creates `image-gen/` rather than placing files directly in the current directory. `service.yaml` and every file declared by `package.files` are included; undeclared development files are not.
 
-Read the extracted `SKILL.md` before using the Package. Load the focused Services guide for optional entry execution, custom provider operations and private configuration leases.
-
-Without Node, JS entries cannot run, but Service leases remain language-independent. Load authenticated `GET skill/services` for the complete discovery, download, entry and in-memory lease workflow.
-
-Never print or persist leased credentials or send them to unrelated recipients; only the intended provider receives the credential necessary for the operation. A Service Package without `SKILL.md` is intentionally unavailable for direct External Agent use; do not construct provider calls from its Settings manifest.
+Read the extracted `SKILL.md` before using the Package. Load authenticated `GET skill/services` for complete discovery, download, entry, custom operation, and private lease guidance.
 
 ## Advanced workflows
 
@@ -322,7 +318,7 @@ Load these authenticated guides only when the request needs them:
 - `GET skill/tasks` — durable long-horizon Tasks and Runs.
 - `GET skill/agents` — available Profiles, Agent creation, launch configuration, continued conversations, and recursive delegation.
 - `GET skill/interactive-views` — durable sandboxed HTML Views with Host-owned state, data, navigation, and Agent actions.
-- `GET skill/services` — Service discovery, Package download and private configuration leases for custom business processes.
+- `GET skill/services` — Service discovery, Package download, entries, custom operations, and private configuration leases.
 
 ```bash
 curl -fsS -H "$AUTH" "$HUABU_RFS_URL/skill/tasks"

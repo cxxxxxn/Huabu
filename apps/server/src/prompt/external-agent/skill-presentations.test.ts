@@ -44,5 +44,9 @@ describe('external Agent Skill presentations', () => {
         headings(httpDirectory, name),
       );
     }
+    const cliRoot = readFileSync(join(cliDirectory, 'access-huabu.md'), 'utf8');
+    expect(cliRoot).not.toMatch(
+      /HUABU_RFS_URL|AGENTLET_TOKEN|HUABU_THREAD_ID|HUABU_RFS_ENTRY/,
+    );
   });
 });
