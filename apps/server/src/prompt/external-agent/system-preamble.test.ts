@@ -10,9 +10,7 @@ describe('external-agent bootstrap routing', () => {
     const preamble = renderExternalAgentSystemPreamble();
     expect(preamble).toContain('node "$HUABU_RFS_ENTRY" get-skill');
     expect(preamble).toContain('node "$env:HUABU_RFS_ENTRY" get-skill');
-    expect(preamble).toContain(
-      'Space-specific `skill.md` override and live Skill Frames',
-    );
+    expect(preamble).toContain('live Space Skill Frames');
     expect(preamble).toContain('COMMAND --help');
     expect(preamble).toContain('"$HUABU_RFS_URL/skill"');
     expect(preamble).toContain('local-only help');

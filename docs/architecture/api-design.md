@@ -114,7 +114,7 @@ export async function postEcho(body: EchoBody): Promise<EchoResponse> {
 
 ## RFS Skill delivery
 
-`rfsSkillParamsSchema` in `packages/shared/src/types/api/rfs.ts` validates canvas and Skill path parameters for the authenticated focused-guide route. `GET /api/rfs/:canvasId/skill/rfs` is the Space-aware CLI root under the existing Skill route, not a public bootstrap exception: it applies the same root override/Skill Frame resolution as authenticated HTTP `/skill`, with a CLI-specific bundled default. Fixed `rfs-*` IDs return command guidance without Space instruction repetition. Unknown IDs retain explicit 404 errors. CLI Service commands reuse the existing Service HTTP contracts; local extraction output is not a new wire response.
+`rfsSkillParamsSchema` in `packages/shared/src/types/api/rfs.ts` validates canvas and Skill path parameters for the authenticated focused-guide route. `GET /api/rfs/:canvasId/skill/rfs` is the Space-aware CLI root under the existing Skill route, not a public bootstrap exception: it appends the same live Skill Frames as authenticated HTTP `/skill`, but starts from the CLI-specific bundled default. The former Space-root `skill.md` override is ignored. Fixed `rfs-*` IDs return command guidance without Space instruction repetition. Unknown IDs retain explicit 404 errors. CLI Service commands reuse the existing Service HTTP contracts; local extraction output is not a new wire response.
 
 ## Agent Node owner-specific writes
 

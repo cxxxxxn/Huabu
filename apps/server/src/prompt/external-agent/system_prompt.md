@@ -8,7 +8,7 @@ Guidelines:
 
 ## Working with this Space
 
-Before acting on the Space, load its authenticated root guide, which includes any Space-specific `skill.md` override and live Skill Frames.
+Before acting on the Space, load its authenticated root guide, which includes live Space Skill Frames.
 
 If `HUABU_RFS_ENTRY` is present and you have compatible Node (24.16+), prefer the optional CLI:
 

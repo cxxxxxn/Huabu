@@ -96,7 +96,7 @@ describe('server bundle runtime', () => {
       const mockServer = createServer((request, response) => {
         if (request.url === '/rfs/space/skill/rfs') {
           response.end(
-            '# Space override\n\n# Space-specific Skills\nUse team vocabulary.',
+            '# CLI root guide\n\n# Space-specific Skills\nUse team vocabulary.',
           );
           return;
         }

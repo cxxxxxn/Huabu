@@ -269,11 +269,11 @@ describe('GET /api/rfs/:canvasId/skill', () => {
     }
   });
 
-  it('returns only the bundled root guide without authorization', async () => {
+  it('ignores a retired Space skill.md for anonymous and authenticated roots', async () => {
     seedNote('c1', 'node-1', 'Anchor', 'content');
     writeFileSync(
       join(diskDirOf('c1'), 'skill.md'),
-      '# Private Space Override',
+      '# Retired Space Override',
       'utf8',
     );
     const app = await buildApp();
@@ -289,8 +289,9 @@ describe('GET /api/rfs/:canvasId/skill', () => {
       });
 
       expect(anonymous.body).toMatch(/Accessing this Huabu Space/);
-      expect(anonymous.body).not.toContain('Private Space Override');
-      expect(authenticated.body).toContain('Private Space Override');
+      expect(authenticated.body).toMatch(/Accessing this Huabu Space/);
+      expect(anonymous.body).not.toContain('Retired Space Override');
+      expect(authenticated.body).not.toContain('Retired Space Override');
     } finally {
       await app.close();
     }
@@ -320,7 +321,7 @@ describe('GET /api/rfs/:canvasId/skill', () => {
     }
   });
 
-  it('appends Skill Frames after a legacy Space guide override', async () => {
+  it('appends Skill Frames to the bundled guide despite a retired skill.md', async () => {
     seedInstructionFrame('c1', 'skill', 'Use the team glossary.');
     writeFileSync(
       join(diskDirOf('c1'), 'skill.md'),
@@ -335,10 +336,10 @@ describe('GET /api/rfs/:canvasId/skill', () => {
         headers: { authorization: '******' },
       });
 
-      expect(response.body).toContain('# Legacy Space Guide');
+      expect(response.body).not.toContain('# Legacy Space Guide');
       expect(response.body).toContain('# Space-specific Skills');
       expect(response.body).toContain('Use the team glossary.');
-      expect(response.body).not.toMatch(/Accessing this Huabu Space/i);
+      expect(response.body).toMatch(/Accessing this Huabu Space/i);
     } finally {
       await app.close();
     }
@@ -395,7 +396,7 @@ describe('GET /api/rfs/:canvasId/skill', () => {
     }
   });
 
-  it('serves the CLI root default and shares authenticated override/Skill Frames with HTTP', async () => {
+  it('serves distinct CLI/HTTP defaults with shared live Skill Frames', async () => {
     seedInstructionFrame('c1', 'skill', 'Use the CLI team glossary.');
     const app = await buildApp();
     const headers = { authorization: 'Bearer token' };
@@ -411,11 +412,6 @@ describe('GET /api/rfs/:canvasId/skill', () => {
       );
       expect(initial.body).toContain('Use the CLI team glossary.');
       expect(initial.body).not.toContain('curl -fsS');
-      writeFileSync(
-        join(diskDirOf('c1'), 'skill.md'),
-        '# Shared override',
-        'utf8',
-      );
       const cli = await app.inject({
         method: 'GET',
         url: '/rfs/c1/skill/rfs',
@@ -426,12 +422,12 @@ describe('GET /api/rfs/:canvasId/skill', () => {
         url: '/rfs/c1/skill',
         headers,
       });
-      expect(cli.body).toBe(http.body);
-      expect(cli.body).toContain('# Shared override');
+      expect(cli.body).toContain('# Working with this Space through Huabu RFS');
+      expect(http.body).toContain('# Accessing this Huabu Space');
+      expect(cli.body).not.toBe(http.body);
+      expect(cli.body).toContain('Use the CLI team glossary.');
+      expect(http.body).toContain('Use the CLI team glossary.');
       expect(cli.body).toContain('# Space-specific Skills');
-      expect(cli.body).not.toContain(
-        '# Working with this Space through Huabu RFS',
-      );
     } finally {
       await app.close();
     }

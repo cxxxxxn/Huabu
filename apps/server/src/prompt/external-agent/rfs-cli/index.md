@@ -10,6 +10,6 @@ For cross-command workflows, use `get-skill ID`: `layout` for structured layouts
 
 For provider work, start with `service --help`, inspect `service list`, read the selected Package with `service skill ID`, and download it with `service download ID --out-folder FOLDER`. Read its `SKILL.md` before running or modifying an optional entry; provider execution is not part of this client.
 
-This default guide is replaced by a Space `skill.md` override when present. Live Skill Frames follow the applicable guide. Argument-free `get-skill` and global `--help` include the same Space-aware root guide with local CLI usage. Focused Skills and command help do not repeatedly append Space instructions.
+Live Skill Frames follow this default guide. Argument-free `get-skill` and global `--help` include the same Space-aware root guide with local CLI usage. Focused Skills and command help do not repeatedly append Space instructions.
 
 {{include:external-agent/rfs-cli/common.md}}

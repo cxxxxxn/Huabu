@@ -18,8 +18,8 @@
  *   canvas-internal agent.
  * - `POST agent` — create one visible Agent Node and optionally start it.
  * - `POST agent/:threadId/prompt` — submit a turn to an existing Agent.
- * - `GET  skill` — pull the full RFS usage guide (per-canvas `skill.md` override
- *   or the bundled default).
+ * - `GET  skill` — pull the bundled RFS usage guide with live Space Skill
+ *   Frames.
  *
  * Auth for every endpoint is a per-request `Authorization: Bearer $AGENTLET_TOKEN`
  * header. Errors use the canonical {@link ApiErrorBody}; on `4xx`/`5xx` the
