@@ -119,12 +119,19 @@ console.log(JSON.stringify({origin: process.env.HUABU_PUBLIC_ORIGIN, token: proc
 `,
           { mode: 0o700 },
         );
+        const script = join(folder, 'connection.sh');
+        const parentScript = join(folder, 'parent-env.js');
+        writeFileSync(
+          parentScript,
+          "console.log(JSON.stringify({origin: process.env.HUABU_PUBLIC_ORIGIN, token: process.env.HUABU_CONNECTION_TOKEN}));\n",
+        );
+        writeFileSync(
+          script,
+          `${result.content}\n"$HUABU_NODE_EXECUTABLE" "$HUABU_PARENT_SCRIPT"\n`,
+        );
         const resultText = execFileSync(
           'sh',
-          [
-            '-c',
-            `${result.content}\n"${process.execPath}" -e 'console.log(JSON.stringify({origin:process.env.HUABU_PUBLIC_ORIGIN,token:process.env.HUABU_CONNECTION_TOKEN}))'`,
-          ],
+          [script],
           {
             encoding: 'utf8',
             env: {
@@ -132,6 +139,8 @@ console.log(JSON.stringify({origin: process.env.HUABU_PUBLIC_ORIGIN, token: proc
               PATH: `${folder}:${process.env.PATH}`,
               HUABU_PUBLIC_ORIGIN: 'before-origin',
               HUABU_CONNECTION_TOKEN: 'before-token',
+              HUABU_NODE_EXECUTABLE: process.execPath,
+              HUABU_PARENT_SCRIPT: parentScript,
             },
           },
         );

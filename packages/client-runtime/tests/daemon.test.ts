@@ -172,9 +172,10 @@ describe('device-local runtime bootstrap', () => {
       'export {};',
     );
     const ready = join(repoRoot, 'ready');
+    rmSync(ready, { force: true });
     writeFileSync(
       join(repoRoot, 'external/agentlet/packages/local/dist/index.js'),
-      `process.on('SIGTERM', () => process.exit(9)); require('node:fs').writeFileSync(${JSON.stringify(ready)}, 'ready'); setTimeout(() => process.exit(66), 5000);`,
+      "process.on('SIGTERM', () => process.exit(9)); require('node:fs').writeFileSync(require('node:path').join(__dirname, '../../../../../ready'), 'ready'); setTimeout(() => process.exit(66), 5000);",
     );
     vi.stubEnv('HUABU_PUBLIC_ORIGIN', 'https://host.test');
     vi.stubEnv('HUABU_CONNECTION_TOKEN', 'token');
@@ -197,6 +198,7 @@ describe('device-local runtime bootstrap', () => {
     } finally {
       handler('SIGTERM');
       await running;
+      rmSync(ready, { force: true });
     }
   });
   it('only advertises actual artifacts and never provides Node coordinates', () => {
