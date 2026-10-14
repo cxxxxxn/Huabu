@@ -574,6 +574,108 @@ test.describe('canvas mouse mode', () => {
     await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);
   });
 
+  for (const type of ['note', 'sketch'] as const) {
+    test(`Lasso starts inside a selected ${type} and retains a densely sampled loop`, async ({
+      page,
+    }) => {
+      const center = await paneCenter(page);
+      if (type === 'note') {
+        await page.mouse.move(center.x - 160, center.y - 40);
+        await pasteNote(page, 'A Note surface can start a Lasso.');
+        await page.keyboard.press('s');
+      } else {
+        const toolbar = page.locator(
+          '[data-canvas-main-toolbar], .react-flow__panel.bottom.center',
+        );
+        await toolbar.getByRole('button', { name: /^Sketch/ }).click();
+        await page.mouse.move(center.x - 120, center.y - 60);
+        await page.mouse.down();
+        await page.mouse.move(center.x - 120, center.y + 60, { steps: 12 });
+        await page.mouse.move(center.x + 120, center.y + 60, { steps: 24 });
+        await page.mouse.move(center.x + 120, center.y - 60, { steps: 12 });
+        await page.mouse.up();
+        await page.keyboard.press('s');
+        await page.mouse.move(center.x, center.y + 60);
+        await expect(page.locator('.react-flow__node-sketch')).toHaveAttribute(
+          'data-sketch-hover',
+          'true',
+        );
+        await page.mouse.click(center.x, center.y + 60);
+      }
+      const node = page.locator(`.react-flow__node-${type}`);
+      await expect(node).toBeVisible();
+      await expect(node).toHaveClass(/\bselected\b/);
+      await page.keyboard.press('l');
+      const before = await node.boundingBox();
+      if (!before) throw new Error('Lasso source node has no bounds');
+      const start = {
+        x: before.x + before.width / 2,
+        y: before.y + before.height / 2,
+      };
+      await expect(node).toHaveCSS('cursor', 'crosshair');
+      expect(
+        await page.evaluate(
+          ({ x, y, type }) =>
+            Boolean(
+              document
+                .elementFromPoint(x, y)
+                ?.closest(`.react-flow__node-${type}`),
+            ),
+          { ...start, type },
+        ),
+      ).toBe(true);
+      const path = [
+        start,
+        { x: before.x + before.width + 20, y: start.y },
+        {
+          x: before.x + before.width + 20,
+          y: before.y + before.height + 30,
+        },
+        { x: before.x - 20, y: before.y + before.height + 30 },
+        { x: before.x - 20, y: start.y },
+        start,
+      ];
+      await page.mouse.move(start.x, start.y);
+      await page.mouse.down();
+      for (let index = 1; index < path.length; index++) {
+        const previous = path[index - 1];
+        const next = path[index];
+        await page.mouse.move(next.x, next.y, {
+          steps: Math.ceil(
+            Math.hypot(next.x - previous.x, next.y - previous.y) / 2,
+          ),
+        });
+      }
+      await page.mouse.up();
+      const region = page.locator('[data-stroke-selection-region]');
+      await expect(region).toBeVisible();
+      if (type === 'sketch') {
+        await expect(
+          page.locator('[data-sketch-stroke-emphasis="selected"]'),
+        ).toBeVisible();
+        await expect(node).not.toHaveClass(/\bselected\b/);
+      } else {
+        await expect(node).toHaveClass(/\bselected\b/);
+      }
+      const after = await node.boundingBox();
+      if (!after) throw new Error('Lasso source node lost its bounds');
+      expect(after.x).toBeCloseTo(before.x, 0);
+      expect(after.y).toBeCloseTo(before.y, 0);
+
+      const regionBefore = await region.boundingBox();
+      if (!regionBefore) throw new Error('Retained Lasso has no bounds');
+      await page.mouse.move(start.x, start.y + 15);
+      await page.mouse.down();
+      await page.mouse.move(start.x + 40, start.y + 45, { steps: 10 });
+      await page.mouse.up();
+      await expect(region).toBeVisible();
+      const regionAfter = await region.boundingBox();
+      if (!regionAfter) throw new Error('Moved Lasso has no bounds');
+      expect(regionAfter.x - regionBefore.x).toBeCloseTo(40, 0);
+      expect(regionAfter.y - regionBefore.y).toBeCloseTo(30, 0);
+    });
+  }
+
   test('lassoed Ink creates one Question and clears after acceptance', async ({
     page,
   }) => {

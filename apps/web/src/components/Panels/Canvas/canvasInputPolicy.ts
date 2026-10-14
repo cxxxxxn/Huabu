@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 import { isVideoControlTarget } from '@/components/Nodes/video/videoInteraction';
+import { isKeyboardInteractiveTarget } from '@/hooks/shortcuts/isKeyboardInteractiveTarget';
 
 import type { EffectiveInputMode } from '@/store/toolStore';
 
@@ -56,8 +57,7 @@ export function canStartRetainedSelectionMove(target: Element | null): boolean {
 
 /**
  * True when the pointer target is empty canvas: inside the React Flow pane
- * but not over a panel, node, edge, or handle. Shared by click-to-place
- * creation and lasso start so both agree on what "empty canvas" means.
+ * but not over a panel, node, edge, or handle.
  */
 export function isEmptyPaneTarget(target: Element | null): boolean {
   return Boolean(
@@ -68,14 +68,6 @@ export function isEmptyPaneTarget(target: Element | null): boolean {
 /**
  * True when the pointer target is a frame's own background — i.e. the
  * topmost node under the pointer is a frame (not one of its children).
- *
- * A frame is a solid container node, so a pointerdown inside it (or one that
- * drills through a framed sketch's transparent `pointer-events: none` bbox
- * and lands on the frame beneath) targets the frame element rather than the
- * empty pane. Treating the frame background as a valid surface lets the
- * lasso begin inside a frame; on its own this is not enough — React Flow
- * node dragging must also be off in lasso mode (see `nodesDraggable`), or the
- * frame is grabbed and moved before the lasso can claim the gesture.
  */
 export function isFrameBackgroundTarget(target: Element | null): boolean {
   const node = target?.closest(REACT_FLOW_NODE);
@@ -83,12 +75,17 @@ export function isFrameBackgroundTarget(target: Element | null): boolean {
 }
 
 /**
- * Valid surface for STARTING a lasso: empty canvas, or a frame's own
- * background (so a lasso can select the frame's contents). Node interiors
- * (except frames) and panels are excluded.
+ * Nodes are drawing surfaces under Lasso, but their controls keep native input.
+ * Placement deliberately retains the narrower empty-pane policy.
  */
 export function isLassoStartTarget(target: Element | null): boolean {
-  return isEmptyPaneTarget(target) || isFrameBackgroundTarget(target);
+  return (
+    !isPanelTarget(target) &&
+    !isNodeControlTarget(target) &&
+    !isKeyboardInteractiveTarget(target) &&
+    !target?.closest('.react-flow__edge') &&
+    (isEmptyPaneTarget(target) || isNodeTarget(target))
+  );
 }
 
 // Toolbar layout, tool availability, and node-drag affordances follow the

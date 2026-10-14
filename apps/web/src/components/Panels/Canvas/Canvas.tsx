@@ -923,7 +923,11 @@ const CanvasContent: React.FC<CanvasProps> = ({
   lassoHandlersRef.current = lassoPointerHandlers;
   // Stroke-move gesture (drag inside the retained lasso region). Claims a
   // pointerdown before the lasso when it lands inside the selection polygon.
-  const strokeMoveHandlers = useSketchStrokeMove({ rfInstanceRef });
+  const strokeMoveHandlers = useSketchStrokeMove({
+    rfInstanceRef,
+    wrapperRef,
+    scopeKey: canvasId,
+  });
   const strokeMoveHandlersRef = useRef(strokeMoveHandlers);
   strokeMoveHandlersRef.current = strokeMoveHandlers;
   const toolRef = useRef(tool);
@@ -991,15 +995,7 @@ const CanvasContent: React.FC<CanvasProps> = ({
       ),
       createHandlerOwnerRecognizer(
         'lasso',
-        () => ({
-          onPointerDown: (e) =>
-            lassoHandlersRef.current.onPointerDown(toReact(e)),
-          onPointerMove: (e) =>
-            lassoHandlersRef.current.onPointerMove(toReact(e)),
-          onPointerUp: (e) => lassoHandlersRef.current.onPointerUp(toReact(e)),
-          onPointerCancel: (e) =>
-            lassoHandlersRef.current.onPointerCancel(toReact(e)),
-        }),
+        () => lassoHandlersRef.current,
         (event, ctx) =>
           useToolStore.getState().pendingNodeType === null &&
           toolRef.current === 'lasso' &&

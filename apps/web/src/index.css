@@ -415,16 +415,9 @@ body,
   cursor: crosshair !important;
 }
 
-/*
- * Lasso tool: show the crosshair only where a lasso can actually START —
- * the empty pane and a frame's own background (both `isLassoStartTarget`).
- * Other nodes keep their normal cursor (a note reads as click-to-select,
- * not lasso). The retained selection loop advertises its own `move`
- * cursor for dragging the selection. Nodes are not draggable in lasso
- * mode (see `nodesDraggable`), so no grab affordance is lost.
- */
+/* Lasso can start on node surfaces as well as empty canvas. */
 .canvas-lasso .react-flow__pane,
-.canvas-lasso .react-flow__node-frame {
+.canvas-lasso .react-flow__node {
   cursor: crosshair !important;
 }
 
