@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { act } from 'react';
+import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -11,12 +11,14 @@ import { useGesturePreviewStore } from '@/store/gesturePreviewStore';
 import { createAreaSelectionSession } from './areaSelectionSession';
 import { useCanvasLasso } from './useCanvasLasso';
 
+import type { EffectiveInputMode } from '@/store/toolStore';
 import type {
   Edge,
   EdgeChange,
   Node,
   NodeChange,
   ReactFlowInstance,
+  XYPosition,
 } from '@xyflow/react';
 
 const mocks = vi.hoisted(() => ({
@@ -78,22 +80,44 @@ const instanceRef = {
 function Harness({
   active = true,
   scopeKey = 'canvas',
+  inputMode = 'mouse',
+  native = false,
 }: {
   active?: boolean;
   scopeKey?: string;
+  inputMode?: EffectiveInputMode;
+  native?: boolean;
 }) {
   latest = useCanvasLasso({
     active,
     scopeKey,
     wrapperRef,
     rfInstanceRef: instanceRef,
-    inputMode: 'mouse',
+    inputMode,
   });
+  useEffect(() => {
+    if (!native) return;
+    const element = wrapper();
+    const down = (event: PointerEvent) =>
+      latest.pointerHandlers.onPointerDown(event);
+    const move = (event: PointerEvent) =>
+      latest.pointerHandlers.onPointerMove(event);
+    const up = (event: PointerEvent) =>
+      latest.pointerHandlers.onPointerUp(event);
+    element.addEventListener('pointerdown', down, true);
+    element.addEventListener('pointermove', move, true);
+    element.addEventListener('pointerup', up, true);
+    return () => {
+      element.removeEventListener('pointerdown', down, true);
+      element.removeEventListener('pointermove', move, true);
+      element.removeEventListener('pointerup', up, true);
+    };
+  }, [native]);
   return (
     <div
       ref={wrapperRef}
       className="react-flow__pane"
-      {...latest.pointerHandlers}
+      {...(native ? {} : latest.pointerHandlers)}
     />
   );
 }
@@ -106,23 +130,37 @@ function dispatch(
   type: string,
   x: number,
   y: number,
-  extra: PointerEventInit = {},
+  extra: PointerEventInit & {
+    coalesced?: XYPosition[];
+    target?: Element;
+  } = {},
 ) {
-  act(() =>
-    wrapper().dispatchEvent(
-      new PointerEvent(type, {
-        bubbles: true,
-        pointerType: 'mouse',
-        pointerId: 1,
-        isPrimary: true,
-        button: 0,
-        buttons: 1,
-        clientX: x,
-        clientY: y,
-        ...extra,
-      }),
-    ),
-  );
+  const { coalesced, target = wrapper(), ...init } = extra;
+  const event = new PointerEvent(type, {
+    bubbles: true,
+    pointerType: 'mouse',
+    pointerId: 1,
+    isPrimary: true,
+    button: 0,
+    buttons: 1,
+    clientX: x,
+    clientY: y,
+    ...init,
+  });
+  Object.defineProperty(event, 'getCoalescedEvents', {
+    value: coalesced
+      ? () =>
+          coalesced.map(
+            (point) =>
+              new PointerEvent(type, {
+                pointerId: event.pointerId,
+                clientX: point.x,
+                clientY: point.y,
+              }),
+          )
+      : undefined,
+  });
+  act(() => target.dispatchEvent(event));
 }
 function draw() {
   dispatch('pointerdown', 0, 0);
@@ -211,6 +249,148 @@ afterEach(() => {
 });
 
 describe('lasso shared selection lifecycle', () => {
+  it.each(['note', 'image', 'sketch', 'frame'])(
+    'starts inside a %s node and captures selection without moving it',
+    (type) => {
+      const node = document.createElement('div');
+      node.className = `react-flow__node react-flow__node-${type}`;
+      const surface = document.createElement('span');
+      node.append(surface);
+      wrapper().append(node);
+      const positions = mocks.nodes.map((node) => node.position);
+      dispatch('pointerdown', 0, 0, { target: surface });
+      dispatch('pointermove', 80, 0);
+      dispatch('pointermove', 80, 80);
+      dispatch('pointermove', 0, 80);
+      expect(latest.isActive).toBe(true);
+      dispatch('pointerup', 0, 0);
+      expect(selected()).toEqual(['note']);
+      expect(useGesturePreviewStore.getState().sketchStrokeSelection).toEqual({
+        ink: ['inside'],
+      });
+      expect(mocks.nodes.map((node) => node.position)).toEqual(positions);
+    },
+  );
+
+  it('retains a dense loop made entirely of sub-4px moves', () => {
+    dispatch('pointerdown', 0, 0);
+    for (let x = 2; x <= 80; x += 2) dispatch('pointermove', x, 0);
+    for (let y = 2; y <= 80; y += 2) dispatch('pointermove', 80, y);
+    for (let x = 78; x >= 0; x -= 2) dispatch('pointermove', x, 80);
+    for (let y = 78; y >= 0; y -= 2) dispatch('pointermove', 0, y);
+    dispatch('pointerup', 0, 0);
+    expect(selected()).toEqual(['note']);
+    expect(useGesturePreviewStore.getState().sketchStrokeSelection).toEqual({
+      ink: ['inside'],
+    });
+    expect(
+      useGesturePreviewStore.getState().sketchSelectionPolygon,
+    ).toHaveLength(161);
+  });
+
+  it.each([false, true])(
+    'preserves coalesced concave turns and correct membership (native=%s)',
+    (native) => {
+      act(() => root.render(<Harness native={native} />));
+      mocks.nodes.push({
+        id: 'lobe',
+        type: 'note',
+        position: { x: 60, y: 30 },
+        measured: { width: 5, height: 5 },
+        data: {},
+      });
+      const points = [
+        { x: 0, y: 0 },
+        { x: 80, y: 0 },
+        { x: 80, y: 80 },
+        { x: 50, y: 80 },
+        { x: 50, y: 15 },
+        { x: 15, y: 15 },
+        { x: 15, y: 80 },
+        { x: 0, y: 80 },
+      ];
+      const preview = vi.spyOn(
+        useGesturePreviewStore.getState(),
+        'setSketchStrokeSelection',
+      );
+      dispatch('pointerdown', 0, 0);
+      dispatch('pointermove', 0, 80, { coalesced: points.slice(1) });
+      expect(preview).toHaveBeenCalledTimes(1);
+      expect(selected()).toEqual(['lobe']);
+      expect(useGesturePreviewStore.getState().sketchStrokeSelection).toEqual(
+        {},
+      );
+      expect(latest.previewPath).toContain('L 50 15 L 15 15');
+      dispatch('pointerup', 0, 80);
+      expect(useGesturePreviewStore.getState().sketchSelectionPolygon).toEqual(
+        points,
+      );
+      expect(mocks.select).toHaveBeenCalledExactlyOnceWith(['lobe']);
+      preview.mockRestore();
+    },
+  );
+
+  it.each(['missing', 'empty'] as const)(
+    'uses dispatched coordinates when coalesced samples are %s',
+    (support) => {
+      dispatch('pointerdown', 0, 0);
+      const extra = support === 'empty' ? { coalesced: [] } : {};
+      dispatch('pointermove', 80, 0, extra);
+      dispatch('pointermove', 80, 80, extra);
+      dispatch('pointermove', 0, 80, extra);
+      dispatch('pointerup', 1, 79);
+      expect(useGesturePreviewStore.getState().sketchSelectionPolygon).toEqual([
+        { x: 0, y: 0 },
+        { x: 80, y: 0 },
+        { x: 80, y: 80 },
+        { x: 0, y: 80 },
+        { x: 1, y: 79 },
+      ]);
+    },
+  );
+
+  it('locks on a coalesced excursion even when the endpoint returns to the start', () => {
+    act(() => root.render(<Harness inputMode="finger" />));
+    dispatch('pointerdown', 0, 0, { pointerType: 'touch' });
+    dispatch('pointermove', 2, 1, { pointerType: 'touch' });
+    expect(latest.isActive).toBe(false);
+    expect(selected()).toEqual(['old']);
+    dispatch('pointermove', 0, 0, {
+      pointerType: 'touch',
+      coalesced: [
+        { x: 80, y: 0 },
+        { x: 80, y: 80 },
+        { x: 0, y: 80 },
+      ],
+    });
+    expect(latest.isActive).toBe(true);
+    dispatch('pointerup', 0, 0, { pointerType: 'touch' });
+    expect(selected()).toEqual(['note']);
+    expect(useGesturePreviewStore.getState().sketchSelectionPolygon).toEqual([
+      { x: 0, y: 0 },
+      { x: 2, y: 1 },
+      { x: 80, y: 0 },
+      { x: 80, y: 80 },
+      { x: 0, y: 80 },
+      { x: 0, y: 0 },
+    ]);
+  });
+
+  it('keeps sampled points aligned through auto-pan and ignores another pointer', () => {
+    draw();
+    dispatch('pointermove', 500, 500, { pointerId: 2 });
+    act(() => latest.shiftScreenPoints(10, 20));
+    dispatch('pointermove', 10, 100, { coalesced: [] });
+    dispatch('pointerup', 10, 20);
+    expect(useGesturePreviewStore.getState().sketchSelectionPolygon).toEqual([
+      { x: 10, y: 20 },
+      { x: 90, y: 20 },
+      { x: 90, y: 100 },
+      { x: 10, y: 100 },
+      { x: 10, y: 20 },
+    ]);
+  });
+
   it('keeps rectangle Sketch selection at whole-node granularity through the same session', () => {
     useGesturePreviewStore.getState().clearSketchStrokeSelection();
     const session = createAreaSelectionSession();

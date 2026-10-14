@@ -574,6 +574,210 @@ test.describe('canvas mouse mode', () => {
     await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);
   });
 
+  test('Lasso preserves Audio pointer seeking and keyboard focus with or without a retained region', async ({
+    page,
+  }) => {
+    const sampleRate = 8000;
+    const dataSize = sampleRate * 20 * 2;
+    const wav = Buffer.alloc(44 + dataSize);
+    wav.write('RIFF', 0);
+    wav.writeUInt32LE(36 + dataSize, 4);
+    wav.write('WAVEfmt ', 8);
+    wav.writeUInt32LE(16, 16);
+    wav.writeUInt16LE(1, 20);
+    wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(sampleRate, 24);
+    wav.writeUInt32LE(sampleRate * 2, 28);
+    wav.writeUInt16LE(2, 32);
+    wav.writeUInt16LE(16, 34);
+    wav.write('data', 36);
+    wav.writeUInt32LE(dataSize, 40);
+    const canvasId = page.url().split('/canvas/')[1]?.split(/[?#]/)[0];
+    const response = await page.request.post(
+      `/api/canvas/${canvasId}/execute`,
+      {
+        data: {
+          commands: [
+            {
+              type: 'CREATE_NODES',
+              nodes: [
+                {
+                  nodeType: 'audio',
+                  position: { x: 400, y: 300 },
+                  size: { width: 360, height: 100 },
+                  data: {
+                    label: 'Lasso seek regression',
+                    src: `data:audio/wav;base64,${wav.toString('base64')}`,
+                  },
+                },
+              ],
+            },
+          ],
+          originator: { source: 'agent', threadId: 'e2e-lasso-audio-seek' },
+        },
+      },
+    );
+    expect(response.ok(), await response.text()).toBe(true);
+    const node = page.locator('.react-flow__node-audio');
+    const slider = node.getByRole('slider');
+    await expect(slider).toHaveAttribute('aria-valuemax', '20');
+    await page.keyboard.press('l');
+    await expect(page.locator('.canvas-lasso')).toBeVisible();
+    const region = page.locator('[data-stroke-selection-region]');
+    for (const retained of [false, true]) {
+      if (retained) {
+        const bounds = await node.boundingBox();
+        if (!bounds) throw new Error('Audio node has no bounds');
+        const path = [
+          { x: bounds.x - 30, y: bounds.y - 30 },
+          { x: bounds.x + bounds.width + 30, y: bounds.y - 30 },
+          {
+            x: bounds.x + bounds.width + 30,
+            y: bounds.y + bounds.height + 30,
+          },
+          { x: bounds.x - 30, y: bounds.y + bounds.height + 30 },
+          { x: bounds.x - 30, y: bounds.y - 30 },
+        ];
+        await page.mouse.move(path[0].x, path[0].y);
+        await page.mouse.down();
+        for (const point of path.slice(1)) {
+          await page.mouse.move(point.x, point.y, { steps: 6 });
+        }
+        await page.mouse.up();
+        await expect(region).toBeVisible();
+      }
+      const regionBefore = retained
+        ? await region.evaluate((element) => element.outerHTML)
+        : null;
+      const bounds = await slider.boundingBox();
+      const bar = await slider.locator('span').nth(10).boundingBox();
+      if (!bounds || !bar) throw new Error('Audio seek bar has no bounds');
+      const x = bar.x + bar.width / 2;
+      const expectedTime = ((x - bounds.x) / bounds.width) * 20;
+      await page.mouse.click(x, bar.y + bar.height / 2);
+      await expect(slider).toBeFocused();
+      const currentTime = () =>
+        node.locator('audio').evaluate((audio) => audio.currentTime);
+      await expect.poll(currentTime).toBeCloseTo(expectedTime, 1);
+      await page.keyboard.press('ArrowRight');
+      await expect.poll(currentTime).toBeCloseTo(expectedTime + 5, 1);
+      await page.keyboard.press('ArrowLeft');
+      await expect.poll(currentTime).toBeCloseTo(expectedTime, 1);
+      await expect(page.locator('.canvas-lasso')).toBeVisible();
+      if (retained) {
+        await expect(region).toBeVisible();
+        expect(await region.evaluate((element) => element.outerHTML)).toBe(
+          regionBefore,
+        );
+        await expect(node).toHaveClass(/\bselected\b/);
+      } else {
+        await expect(region).toHaveCount(0);
+      }
+    }
+  });
+
+  for (const type of ['note', 'sketch'] as const) {
+    test(`Lasso starts inside a selected ${type} and retains a densely sampled loop`, async ({
+      page,
+    }) => {
+      const center = await paneCenter(page);
+      if (type === 'note') {
+        await page.mouse.move(center.x - 160, center.y - 40);
+        await pasteNote(page, 'A Note surface can start a Lasso.');
+        await page.keyboard.press('s');
+      } else {
+        const toolbar = page.locator(
+          '[data-canvas-main-toolbar], .react-flow__panel.bottom.center',
+        );
+        await toolbar.getByRole('button', { name: /^Sketch/ }).click();
+        await page.mouse.move(center.x - 120, center.y - 60);
+        await page.mouse.down();
+        await page.mouse.move(center.x - 120, center.y + 60, { steps: 12 });
+        await page.mouse.move(center.x + 120, center.y + 60, { steps: 24 });
+        await page.mouse.move(center.x + 120, center.y - 60, { steps: 12 });
+        await page.mouse.up();
+        await page.keyboard.press('s');
+        await page.mouse.move(center.x, center.y + 60);
+        await expect(page.locator('.react-flow__node-sketch')).toHaveAttribute(
+          'data-sketch-hover',
+          'true',
+        );
+        await page.mouse.click(center.x, center.y + 60);
+      }
+      const node = page.locator(`.react-flow__node-${type}`);
+      await expect(node).toBeVisible();
+      await expect(node).toHaveClass(/\bselected\b/);
+      await page.keyboard.press('l');
+      const before = await node.boundingBox();
+      if (!before) throw new Error('Lasso source node has no bounds');
+      const start = {
+        x: before.x + before.width / 2,
+        y: before.y + before.height / 2,
+      };
+      await expect(node).toHaveCSS('cursor', 'crosshair');
+      expect(
+        await page.evaluate(
+          ({ x, y, type }) =>
+            Boolean(
+              document
+                .elementFromPoint(x, y)
+                ?.closest(`.react-flow__node-${type}`),
+            ),
+          { ...start, type },
+        ),
+      ).toBe(true);
+      const path = [
+        start,
+        { x: before.x + before.width + 20, y: start.y },
+        {
+          x: before.x + before.width + 20,
+          y: before.y + before.height + 30,
+        },
+        { x: before.x - 20, y: before.y + before.height + 30 },
+        { x: before.x - 20, y: start.y },
+        start,
+      ];
+      await page.mouse.move(start.x, start.y);
+      await page.mouse.down();
+      for (let index = 1; index < path.length; index++) {
+        const previous = path[index - 1];
+        const next = path[index];
+        await page.mouse.move(next.x, next.y, {
+          steps: Math.ceil(
+            Math.hypot(next.x - previous.x, next.y - previous.y) / 2,
+          ),
+        });
+      }
+      await page.mouse.up();
+      const region = page.locator('[data-stroke-selection-region]');
+      await expect(region).toBeVisible();
+      if (type === 'sketch') {
+        await expect(
+          page.locator('[data-sketch-stroke-emphasis="selected"]'),
+        ).toBeVisible();
+        await expect(node).not.toHaveClass(/\bselected\b/);
+      } else {
+        await expect(node).toHaveClass(/\bselected\b/);
+      }
+      const after = await node.boundingBox();
+      if (!after) throw new Error('Lasso source node lost its bounds');
+      expect(after.x).toBeCloseTo(before.x, 0);
+      expect(after.y).toBeCloseTo(before.y, 0);
+
+      const regionBefore = await region.boundingBox();
+      if (!regionBefore) throw new Error('Retained Lasso has no bounds');
+      await page.mouse.move(start.x, start.y + 15);
+      await page.mouse.down();
+      await page.mouse.move(start.x + 40, start.y + 45, { steps: 10 });
+      await page.mouse.up();
+      await expect(region).toBeVisible();
+      const regionAfter = await region.boundingBox();
+      if (!regionAfter) throw new Error('Moved Lasso has no bounds');
+      expect(regionAfter.x - regionBefore.x).toBeCloseTo(40, 0);
+      expect(regionAfter.y - regionBefore.y).toBeCloseTo(30, 0);
+    });
+  }
+
   test('lassoed Ink creates one Question and clears after acceptance', async ({
     page,
   }) => {

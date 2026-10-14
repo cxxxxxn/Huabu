@@ -28,9 +28,10 @@ import type { EffectiveInputMode } from '@/store/toolStore';
 import type { SelectionArea } from '@/utils/selectionGeometry';
 import type { ReactFlowInstance, XYPosition } from '@xyflow/react';
 
-const MIN_POINT_DISTANCE = 4;
 const MIN_LASSO_POINTS = 3;
 const MIN_LASSO_SPAN = 10;
+
+type LassoPointerEvent = PointerEvent | ReactPointerEvent<HTMLDivElement>;
 
 interface UseCanvasLassoOptions {
   active: boolean;
@@ -41,23 +42,24 @@ interface UseCanvasLassoOptions {
 }
 
 function appendPoint(points: XYPosition[], next: XYPosition) {
-  if (points.length === 0) return [next];
-  const last = points[points.length - 1];
-  if (Math.hypot(last.x - next.x, last.y - next.y) >= MIN_POINT_DISTANCE) {
-    return [...points, next];
+  const last = points.at(-1);
+  if (!last || last.x !== next.x || last.y !== next.y) {
+    points.push(next);
   }
-  return points.length === 1
-    ? [points[0], next]
-    : [...points.slice(0, -1), next];
 }
 
 function hasEnoughArea(points: XYPosition[]) {
-  const xs = points.map((point) => point.x);
-  const ys = points.map((point) => point.y);
-  return (
-    Math.max(...xs) - Math.min(...xs) >= MIN_LASSO_SPAN &&
-    Math.max(...ys) - Math.min(...ys) >= MIN_LASSO_SPAN
-  );
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const point of points) {
+    minX = Math.min(minX, point.x);
+    minY = Math.min(minY, point.y);
+    maxX = Math.max(maxX, point.x);
+    maxY = Math.max(maxY, point.y);
+  }
+  return maxX - minX >= MIN_LASSO_SPAN && maxY - minY >= MIN_LASSO_SPAN;
 }
 
 export function useCanvasLasso({
@@ -76,7 +78,7 @@ export function useCanvasLasso({
   optionsRef.current = { active, scopeKey };
   const pendingRef = useRef<{
     pointerId: number;
-    start: XYPosition;
+    points: XYPosition[];
     captureTarget: HTMLDivElement;
     scopeKey: string | null;
     selection: ReturnType<typeof createAreaSelectionSession>;
@@ -161,7 +163,7 @@ export function useCanvasLasso({
   }, [active, cancel, wrapperRef]);
 
   const onPointerDown = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
+    (event: LassoPointerEvent) => {
       if (!active || useGesturePreviewStore.getState().inkSubmissionPreparing)
         return false;
       if (event.button !== 0 || !event.isPrimary) return false;
@@ -173,6 +175,8 @@ export function useCanvasLasso({
       )
         return false;
       if (!isLassoStartTarget(event.target as HTMLElement)) return false;
+      const wrapper = wrapperRef.current;
+      if (!wrapper) return false;
       const start = { x: event.clientX, y: event.clientY };
       if (
         !beginCanvasGesture(
@@ -186,41 +190,50 @@ export function useCanvasLasso({
       }
       event.preventDefault();
       event.stopPropagation();
-      event.currentTarget.setPointerCapture(event.pointerId);
-      event.currentTarget.focus({ preventScroll: true });
+      wrapper.setPointerCapture(event.pointerId);
+      wrapper.focus({ preventScroll: true });
       suppressClick();
       pendingRef.current = {
         pointerId: event.pointerId,
-        start,
-        captureTarget: event.currentTarget,
+        points: [start],
+        captureTarget: wrapper,
         scopeKey,
         selection: createAreaSelectionSession(true),
         nodesSelectionActive: flowStore.getState().nodesSelectionActive,
       };
       return true;
     },
-    [active, flowStore, inputMode, scopeKey, suppressClick],
+    [active, flowStore, inputMode, scopeKey, suppressClick, wrapperRef],
   );
 
   const onPointerMove = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
+    (event: LassoPointerEvent) => {
       const pending = pendingRef.current;
       if (!pending || pending.pointerId !== event.pointerId) return;
       if (!optionsRef.current.active || !(event.buttons & 1)) {
         cancel();
         return;
       }
-      const next = { x: event.clientX, y: event.clientY };
-      if (updateCanvasGesture(event.pointerId, next) !== 'locked') return;
+      const nativeEvent = 'nativeEvent' in event ? event.nativeEvent : event;
+      const samples = nativeEvent.getCoalescedEvents?.() ?? [];
+      const points = [...(pointsRef.current ?? pending.points)];
+      let locked = false;
+      // The endpoint may duplicate the final coalesced sample; appendPoint deduplicates it.
+      for (const sample of [...samples, nativeEvent]) {
+        const next = { x: sample.clientX, y: sample.clientY };
+        appendPoint(points, next);
+        if (updateCanvasGesture(event.pointerId, next) === 'locked') {
+          locked = true;
+        }
+      }
+      pending.points = points;
+      if (!locked) return;
       if (!pointsRef.current) {
         flowStore.setState({
           userSelectionActive: true,
           nodesSelectionActive: false,
         });
       }
-      const points = pointsRef.current
-        ? appendPoint(pointsRef.current, next)
-        : [pending.start, next];
       pointsRef.current = points;
       setScreenPoints(points);
       pending.selection.preview(selectionArea(points));
@@ -229,7 +242,7 @@ export function useCanvasLasso({
   );
 
   const onPointerUp = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
+    (event: LassoPointerEvent) => {
       const pending = pendingRef.current;
       if (
         !pending ||
@@ -245,16 +258,17 @@ export function useCanvasLasso({
         return;
       }
       const points = pointsRef.current;
-      const finalPoints = points
-        ? appendPoint(points, { x: event.clientX, y: event.clientY })
-        : [];
+      const finalPoints = points ? [...points] : [];
+      if (points) {
+        appendPoint(finalPoints, { x: event.clientX, y: event.clientY });
+      }
       pending.selection.commit(selectionArea(finalPoints));
       finish(false);
     },
     [cancel, finish, selectionArea],
   );
   const onPointerCancel = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
+    (event: LassoPointerEvent) => {
       if (pendingRef.current?.pointerId === event.pointerId) cancel();
     },
     [cancel],

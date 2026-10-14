@@ -24,6 +24,8 @@ import {
 import useCanvasStore from '@/store/canvasStore';
 import { useGesturePreviewStore } from '@/store/gesturePreviewStore';
 
+import { useAreaSelectionClickGuard } from './useAreaSelectionClickGuard';
+
 import type { FrameFitPreview } from '@/store/gesturePreviewStore';
 import type { CanvasCommand, CanvasNodeId } from '@huabu/shared';
 import type { NestableNode } from '@huabu/shared/canvas-engine';
@@ -231,9 +233,14 @@ function updateFrameDropPreviewForStrokeDrag(
  */
 export function useSketchStrokeMove({
   rfInstanceRef,
+  wrapperRef,
+  scopeKey,
 }: {
   rfInstanceRef: MutableRefObject<ReactFlowInstance | null>;
+  wrapperRef: MutableRefObject<HTMLDivElement | null>;
+  scopeKey: string | null;
 }) {
+  const suppressClick = useAreaSelectionClickGuard(wrapperRef, scopeKey);
   const dragRef = useRef<{
     pointerId: number;
     startFlow: { x: number; y: number };
@@ -330,6 +337,9 @@ export function useSketchStrokeMove({
       ) {
         return false;
       }
+      event.preventDefault();
+      event.stopPropagation();
+      suppressClick();
       dragRef.current = {
         pointerId: event.pointerId,
         startFlow: inst.screenToFlowPosition({
@@ -354,7 +364,7 @@ export function useSketchStrokeMove({
         .setSketchStrokeMoveCarriedNodeIds(Array.from(carriedSketchNodeIds));
       return true;
     },
-    [rfInstanceRef],
+    [rfInstanceRef, suppressClick],
   );
 
   const cancel = useCallback((event: PointerEvent) => {

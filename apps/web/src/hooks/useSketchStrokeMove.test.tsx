@@ -34,10 +34,15 @@ const screenToFlowPosition = vi.fn(({ x, y }: { x: number; y: number }) => ({
 const rfInstanceRef = {
   current: { screenToFlowPosition } as unknown as ReactFlowInstance,
 };
+const wrapperRef = { current: null as HTMLDivElement | null };
 
 function Harness() {
-  handlers = useSketchStrokeMove({ rfInstanceRef });
-  return null;
+  handlers = useSketchStrokeMove({
+    rfInstanceRef,
+    wrapperRef,
+    scopeKey: 'canvas',
+  });
+  return <div ref={wrapperRef} />;
 }
 
 beforeEach(async () => {
@@ -58,6 +63,40 @@ afterEach(async () => {
 });
 
 describe('useSketchStrokeMove', () => {
+  it('consumes compatibility events after a claimed move and releases suppression on a new press', () => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) throw new Error('Retained selection wrapper is not mounted');
+    const onMouseDown = vi.fn();
+    const onClick = vi.fn();
+    container.addEventListener('mousedown', onMouseDown);
+    container.addEventListener('click', onClick);
+    const down = new PointerEvent('pointerdown', {
+      pointerId: 1,
+      pointerType: 'mouse',
+      cancelable: true,
+    });
+    expect(handlers?.onPointerDown(down)).toBe(true);
+    expect(down.defaultPrevented).toBe(true);
+    wrapper.dispatchEvent(
+      new MouseEvent('mousedown', { bubbles: true, button: 0 }),
+    );
+    expect(onMouseDown).not.toHaveBeenCalled();
+    handlers?.onPointerCancel(
+      new PointerEvent('pointercancel', { pointerId: 1 }),
+    );
+    wrapper.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, detail: 1 }),
+    );
+    expect(onClick).not.toHaveBeenCalled();
+    wrapper.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    wrapper.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, detail: 1 }),
+    );
+    expect(onClick).toHaveBeenCalledOnce();
+    container.removeEventListener('mousedown', onMouseDown);
+    container.removeEventListener('click', onClick);
+  });
+
   it('does not claim a retained-region move while Ink submission is preparing', () => {
     useGesturePreviewStore.getState().setInkSubmissionPreparing(true);
 
