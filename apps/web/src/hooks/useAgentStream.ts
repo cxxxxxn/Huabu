@@ -12,6 +12,7 @@ import {
   selectThreadDraft,
   selectThreadMessages,
   selectThreadQuotedComments,
+  selectThreadExcludeCanvasSelection,
   useChatStore,
 } from '@/store/chatStore';
 import { usePreviewWorkspaceStore } from '@/store/previewWorkspace/store';
@@ -81,6 +82,10 @@ export function useAgentStream(
       )
         return;
       const draft = selectThreadDraft(chat, session.threadId);
+      const excludeCanvasSelection = selectThreadExcludeCanvasSelection(
+        chat,
+        session.threadId,
+      );
       const pending = selectThreadPendingAttachments(chat, session.threadId);
       const excerpt = chat.selectionAttachment;
       const previousMessageId = selectThreadMessages(chat, session.threadId).at(
@@ -104,7 +109,12 @@ export function useAgentStream(
                 }),
               )
             : undefined,
-          sources: captureAgentTurnSources(session),
+          sources: captureAgentTurnSources(
+            session,
+            excludeCanvasSelection
+              ? { nodeIds: [], strokeSelection: {} }
+              : undefined,
+          ),
           attachments: [...pending, ...(excerpt ? [excerpt] : [])],
         });
         let draftConsumed = true;
@@ -118,6 +128,8 @@ export function useAgentStream(
             draft,
             quotedComments,
           );
+          if (restored && excludeCanvasSelection)
+            current.setExcludeCanvasSelection(session.threadId, true);
           if (!restored && !started) {
             const messages = selectThreadMessages(current, session.threadId);
             const lastMessage = messages.at(-1);
@@ -139,6 +151,7 @@ export function useAgentStream(
           }
         };
         chat.consumeDraft(session.threadId, draft, quotedComments);
+        chat.setExcludeCanvasSelection(session.threadId, false);
         const result = await dispatchAgentTurn(prepared, {
           canDispatch,
           onStarted: () => {

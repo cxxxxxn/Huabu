@@ -44,6 +44,8 @@ export interface ChatThreadState {
   /** Free-form composer text; quoted comments are staged separately. */
   draft: string;
   pendingQuotedComments: DraftQuotedComment[];
+  /** Omit live Canvas node and stroke selection from the next composer send. */
+  excludeCanvasSelection: boolean;
   /** Whether history has been fetched from the server at least once. */
   historyLoaded: boolean;
   /** Exclusive cursor for the next older server history page. */
@@ -219,6 +221,7 @@ export interface ChatState {
 
   /** Set free-form draft text without modifying staged quoted comments. */
   setDraft: (threadId: string, text: string) => void;
+  setExcludeCanvasSelection: (threadId: string, excluded: boolean) => void;
   addQuotedComment: (threadId: string, comment: QuotedComment) => void;
   setQuotedComments: (threadId: string, comments: QuotedComment[]) => void;
   updateQuotedComment: (
@@ -275,6 +278,7 @@ const EMPTY_THREAD: ChatThreadState = {
   messages: EMPTY_MESSAGES,
   draft: '',
   pendingQuotedComments: [],
+  excludeCanvasSelection: false,
   historyLoaded: false,
   historyBefore: null,
   hasOlderHistory: false,
@@ -628,6 +632,15 @@ export const useChatStore = create<ChatState>()(
           return patchThread(state, threadId, { draft: text });
         }),
 
+      setExcludeCanvasSelection: (threadId, excluded) =>
+        set((state) => {
+          if (threadOf(state, threadId).excludeCanvasSelection === excluded)
+            return {};
+          return patchThread(state, threadId, {
+            excludeCanvasSelection: excluded,
+          });
+        }),
+
       addQuotedComment: (threadId, comment) =>
         set((state) =>
           patchThread(state, threadId, {
@@ -805,6 +818,11 @@ export const selectThreadMessages = (
 /** A thread's composer draft ('' when none). */
 export const selectThreadDraft = (state: ChatState, threadId: string): string =>
   threadOf(state, threadId).draft;
+
+export const selectThreadExcludeCanvasSelection = (
+  state: ChatState,
+  threadId: string,
+): boolean => threadOf(state, threadId).excludeCanvasSelection;
 
 export const selectThreadQuotedComments = (
   state: ChatState,

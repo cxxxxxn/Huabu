@@ -867,6 +867,8 @@
     "addAdjacentNodeSource": "将另一栏节点添加为来源",
     "addNodeSource": "添加 {{name}}",
     "includedWithMessage": "随消息发送",
+    "excludeSelectedNodes": "本次不附带",
+    "restoreSelectedNodes": "重新附带",
     "selectedNodes_one": "{{count}} 个已选节点",
     "selectedNodes_other": "{{count}} 个已选节点",
     "mentionNodes": "当前 Space 中的节点",

@@ -19,6 +19,8 @@ Types live in [packages/shared/src/types/agent/context.ts](../../packages/shared
 
 Chat is deliberately thin: everything else (geometry / edges / content / screenshot) is fetched by the agent via tools. Web assembly: `getAgentChatContext()` ([canvasStore.ts](../../apps/web/src/store/canvasStore.ts)).
 
+The Chat composer lets users omit live Canvas selection from the next text message without changing Canvas node or stroke selection. The included selected-node chip has a leading remove action; after removal, it keeps its count as a dashed `+` candidate button, reusing the adjacent-preview source button's styling and whole-button add interaction without strikethrough text. Clicking it includes the entire current selection again, whereas the adjacent-preview candidate adds one explicit node source. The in-memory exclusion flag belongs to the thread and is consumed with its submitted draft; a rejected submission restores it when the original draft is restored. `useAgentStream` passes an explicit empty node/stroke selection to `captureAgentTurnSources` before preparing the immutable turn, so built-in and external Agents receive `canvasContext.selectedNodes: []`, with no automatic selected-node visual inputs or selected-source transcript metadata. Retry uses the original message's captured source metadata rather than the current Canvas selection. Explicit attachments, excerpts, quoted comments, anchor/neighbourhood context, and prior conversation history are unaffected; explicit Ink-intent submission still requires its selected strokes and does not consume this composer flag.
+
 ---
 
 ## 2. Chat path: the conversation module

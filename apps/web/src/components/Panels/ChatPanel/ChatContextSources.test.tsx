@@ -13,6 +13,7 @@ import zh from '@/i18n/resources/zh-CN/common.json';
 import useCanvasStore from '@/store/canvasStore';
 import {
   selectThreadPendingAttachments,
+  selectThreadExcludeCanvasSelection,
   useChatStore,
 } from '@/store/chatStore';
 import { useGesturePreviewStore } from '@/store/gesturePreviewStore';
@@ -173,7 +174,9 @@ describe('ChatContextSources', () => {
     expect(
       button('Pin this excerpt to this chat').querySelector('svg.lucide-pin'),
     ).not.toBeNull();
-    expect(container.querySelectorAll('svg:not(.lucide-pin)')).toHaveLength(0);
+    expect(
+      container.querySelectorAll('svg:not(.lucide-pin):not(.lucide-x)'),
+    ).toHaveLength(0);
     expect(included?.textContent).not.toContain('Plus');
     expect(
       container.querySelectorAll('[data-context-attachment] button'),
@@ -214,6 +217,99 @@ describe('ChatContextSources', () => {
     render({ owner: { ...session, threadId: 'other-thread' } });
     expect(container.textContent).toContain('Next passage');
     expect(container.textContent).not.toContain(excerpt.content);
+  });
+
+  it('omits and restores selection for this thread without changing Canvas selection or attachments', () => {
+    setNodes([
+      node('selected', { selected: true }),
+      node('ink', { type: 'sketch' }),
+    ]);
+    useGesturePreviewStore.setState({
+      sketchStrokeSelection: { ink: ['stroke-1'] },
+    });
+    useChatStore.getState().addPendingAttachment(session.threadId, excerpt);
+    const onActionComplete = vi.fn();
+    const onCommit = vi.fn();
+    render({ onActionComplete, onCommit });
+    const nodes = useCanvasStore.getState().nodes;
+    const strokes = useGesturePreviewStore.getState().sketchStrokeSelection;
+    const excludeLabel = 'Exclude from this message';
+    const restoreLabel = 'Include in this message';
+    act(() => button(excludeLabel).click());
+    expect(
+      selectThreadExcludeCanvasSelection(
+        useChatStore.getState(),
+        session.threadId,
+      ),
+    ).toBe(true);
+    expect(container.textContent).toContain('2 selected nodes');
+    expect(
+      container.querySelector('[data-context-selection] .line-through'),
+    ).toBeNull();
+    expect(
+      button(restoreLabel).querySelector('svg.lucide-plus'),
+    ).not.toBeNull();
+    expect(button(restoreLabel).textContent).toBe('2 selected nodes');
+    expect(button(restoreLabel).classList.contains('border-dashed')).toBe(true);
+    expect(button(restoreLabel).classList.contains('bg-transparent')).toBe(
+      true,
+    );
+    expect(
+      container.querySelector('[data-context-selection] svg.lucide-x'),
+    ).toBeNull();
+    expect(useCanvasStore.getState().nodes).toBe(nodes);
+    expect(useGesturePreviewStore.getState().sketchStrokeSelection).toBe(
+      strokes,
+    );
+    expect(
+      selectThreadPendingAttachments(useChatStore.getState(), session.threadId),
+    ).toEqual([excerpt]);
+    expect(onActionComplete).toHaveBeenCalledOnce();
+    expect(onCommit).not.toHaveBeenCalled();
+
+    render({ owner: { ...session, threadId: 'other-thread' } });
+    expect(button(excludeLabel)).toBeDefined();
+    expect(container.querySelector('.line-through')).toBeNull();
+    render();
+    act(() => button(restoreLabel).click());
+    expect(
+      selectThreadExcludeCanvasSelection(
+        useChatStore.getState(),
+        session.threadId,
+      ),
+    ).toBe(false);
+    expect(container.querySelector('.line-through')).toBeNull();
+    expect(
+      container.querySelector('[data-context-selection] svg.lucide-plus'),
+    ).toBeNull();
+    expect(button(excludeLabel).querySelector('svg.lucide-x')).not.toBeNull();
+  });
+
+  it('allows explicitly adding a selected adjacent node when automatic selection is excluded', () => {
+    setNodes([node('Adjacent note', { selected: true })]);
+    render({ adjacentNodeSourceId: 'Adjacent note' });
+    expect(container.querySelector('.border-dashed')).toBeNull();
+    act(() => button('Exclude from this message').click());
+    expect(button('Include in this message').className).toBe(
+      button('Add Adjacent note').className,
+    );
+    act(() => button('Add Adjacent note').click());
+    expect(
+      selectThreadPendingAttachments(useChatStore.getState(), session.threadId),
+    ).toEqual([
+      {
+        type: 'text',
+        source: 'selection',
+        originNodeId: 'Adjacent note',
+        label: 'Adjacent note',
+      },
+    ]);
+    expect(
+      selectThreadExcludeCanvasSelection(
+        useChatStore.getState(),
+        session.threadId,
+      ),
+    ).toBe(true);
   });
 
   it('offers one leading action: pin the temporary excerpt, then remove it', () => {

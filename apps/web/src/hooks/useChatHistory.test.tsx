@@ -130,6 +130,7 @@ function seedStore(isStreaming: boolean) {
         messages: [{ id: 'm1', role: 'user', content: 'hi' }],
         draft: '',
         pendingQuotedComments: [],
+        excludeCanvasSelection: false,
         historyLoaded: true,
         historyBefore: null,
         hasOlderHistory: false,

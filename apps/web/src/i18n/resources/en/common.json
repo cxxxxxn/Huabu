@@ -867,6 +867,8 @@
     "addAdjacentNodeSource": "Add the node from the other pane as a source",
     "addNodeSource": "Add {{name}}",
     "includedWithMessage": "Included with your message",
+    "excludeSelectedNodes": "Exclude from this message",
+    "restoreSelectedNodes": "Include in this message",
     "selectedNodes_one": "{{count}} selected node",
     "selectedNodes_other": "{{count}} selected nodes",
     "mentionNodes": "Nodes in this Space",
