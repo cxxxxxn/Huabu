@@ -52,7 +52,11 @@ export function isNodeControlTarget(target: Element | null): boolean {
 
 /** Whether a retained Lasso move may claim this pointer target. */
 export function canStartRetainedSelectionMove(target: Element | null): boolean {
-  return !isNodeControlTarget(target);
+  return (
+    !isPanelTarget(target) &&
+    !isNodeControlTarget(target) &&
+    !isKeyboardInteractiveTarget(target)
+  );
 }
 
 /**
@@ -80,9 +84,7 @@ export function isFrameBackgroundTarget(target: Element | null): boolean {
  */
 export function isLassoStartTarget(target: Element | null): boolean {
   return (
-    !isPanelTarget(target) &&
-    !isNodeControlTarget(target) &&
-    !isKeyboardInteractiveTarget(target) &&
+    canStartRetainedSelectionMove(target) &&
     !target?.closest('.react-flow__edge') &&
     (isEmptyPaneTarget(target) || isNodeTarget(target))
   );

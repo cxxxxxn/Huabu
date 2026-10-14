@@ -4,7 +4,7 @@
 import { isEditableTarget } from './isEditableTarget';
 
 const INTERACTIVE_TARGET_SELECTOR =
-  'input, textarea, button, a[href], select, [contenteditable="true"], [role="textbox"], [role="button"], [role="menuitem"], [data-keyboard-interactive]';
+  'input, textarea, button, a[href], select, [contenteditable="true"], [role="textbox"], [role="button"], [role="menuitem"], [role="slider"], [data-keyboard-interactive]';
 
 /** Shared keyboard ownership for editors, native controls, and their descendants. */
 export function isKeyboardInteractiveTarget(

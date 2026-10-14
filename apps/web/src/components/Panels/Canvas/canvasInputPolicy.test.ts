@@ -106,7 +106,7 @@ describe('canvas input policy', () => {
     expect(isNodePlacementTap(0, 0, 8, 0, 8)).toBe(false);
   });
 
-  it.each(['note', 'image', 'sketch', 'frame', 'text'])(
+  it.each(['note', 'image', 'sketch', 'frame', 'text', 'audio'])(
     'allows Lasso on a %s surface without relaxing placement',
     (type) => {
       const pane = document.createElement('div');
@@ -119,6 +119,7 @@ describe('canvas input policy', () => {
       pane.append(node);
 
       expect(isLassoStartTarget(surface)).toBe(true);
+      expect(canStartRetainedSelectionMove(surface)).toBe(true);
       expect(isLassoStartTarget(node)).toBe(true);
       expect(isLassoStartTarget(pane)).toBe(true);
       expect(isEmptyCanvasPlacementTarget(surface)).toBe(false);
@@ -143,6 +144,7 @@ describe('canvas input policy', () => {
     '<div role="textbox"><span></span></div>',
     '<div role="button"><span></span></div>',
     '<div role="menuitem"><span></span></div>',
+    '<div role="slider" tabindex="0"><span aria-hidden="true"></span></div>',
     '<div data-keyboard-interactive><span></span></div>',
   ])('does not start Lasso on a node control: %s', (html) => {
     const node = document.createElement('div');
@@ -153,6 +155,23 @@ describe('canvas input policy', () => {
     expect(isLassoStartTarget(target)).toBe(false);
     for (const descendant of node.querySelectorAll('*')) {
       expect(isLassoStartTarget(descendant)).toBe(false);
+    }
+  });
+
+  it.each([
+    '<div role="slider" tabindex="0"><span aria-hidden="true"></span></div>',
+    '<input type="range">',
+    '<button><span></span></button>',
+    '<a href="/"><span></span></a>',
+    '<div contenteditable="true"><span></span></div>',
+    '<div class="react-flow__panel"><span></span></div>',
+    '<div data-video-controls="true"><video></video></div>',
+  ])('reserves controls inside retained Lasso regions: %s', (html) => {
+    const node = document.createElement('div');
+    node.className = 'react-flow__node react-flow__node-audio';
+    node.innerHTML = html;
+    for (const descendant of node.querySelectorAll('*')) {
+      expect(canStartRetainedSelectionMove(descendant)).toBe(false);
     }
   });
 
