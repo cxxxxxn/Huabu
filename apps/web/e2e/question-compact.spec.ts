@@ -310,11 +310,11 @@ test(
     await expect(
       fixture.locator('[data-id="error"] .question-conversation-card'),
     ).toHaveAttribute('data-state', 'error');
-    // Only the unauthored natural-width fixture adopts 440. Existing widths
+    // Only the unauthored natural-width fixture adopts 400. Existing widths
     // remain meaningful, including deliberately narrow wrapping coverage.
     await expect(fixture.locator('[data-id="idle"]')).toHaveCSS(
       'width',
-      '440px',
+      '400px',
     );
     await expect(unread).toHaveCSS('width', '280px');
     await expect(fixture.locator('[data-id="narrow"]')).toHaveCSS(
@@ -778,7 +778,7 @@ test('real Canvas C questions preserve authored width and open without moving co
   );
   if (!naturalNode || !authoredNode)
     throw new Error('Missing real Canvas Questions');
-  expect(Number(naturalNode.style?.width)).toBe(440);
+  expect(Number(naturalNode.style?.width)).toBe(400);
   expect(Number(authoredNode.style?.width)).toBe(400);
   await page.addInitScript((id) => {
     if (window !== window.top) return;
@@ -798,7 +798,7 @@ test('real Canvas C questions preserve authored width and open without moving co
   const authored = page.locator(
     `.react-flow__node[data-id="${authoredNode.id}"]`,
   );
-  await expect(natural).toHaveCSS('width', '440px');
+  await expect(natural).toHaveCSS('width', '400px');
   await expect(authored).toHaveCSS('width', '400px');
   await expectNearC(natural);
   await expectNearC(authored);
