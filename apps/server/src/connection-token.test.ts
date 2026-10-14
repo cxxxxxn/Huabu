@@ -123,27 +123,23 @@ console.log(JSON.stringify({origin: process.env.HUABU_PUBLIC_ORIGIN, token: proc
         const parentScript = join(folder, 'parent-env.js');
         writeFileSync(
           parentScript,
-          "console.log(JSON.stringify({origin: process.env.HUABU_PUBLIC_ORIGIN, token: process.env.HUABU_CONNECTION_TOKEN}));\n",
+          'console.log(JSON.stringify({origin: process.env.HUABU_PUBLIC_ORIGIN, token: process.env.HUABU_CONNECTION_TOKEN}));\n',
         );
         writeFileSync(
           script,
           `${result.content}\n"$HUABU_NODE_EXECUTABLE" "$HUABU_PARENT_SCRIPT"\n`,
         );
-        const resultText = execFileSync(
-          'sh',
-          [script],
-          {
-            encoding: 'utf8',
-            env: {
-              ...process.env,
-              PATH: `${folder}:${process.env.PATH}`,
-              HUABU_PUBLIC_ORIGIN: 'before-origin',
-              HUABU_CONNECTION_TOKEN: 'before-token',
-              HUABU_NODE_EXECUTABLE: process.execPath,
-              HUABU_PARENT_SCRIPT: parentScript,
-            },
+        const resultText = execFileSync('sh', [script], {
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            PATH: `${folder}:${process.env.PATH}`,
+            HUABU_PUBLIC_ORIGIN: 'before-origin',
+            HUABU_CONNECTION_TOKEN: 'before-token',
+            HUABU_NODE_EXECUTABLE: process.execPath,
+            HUABU_PARENT_SCRIPT: parentScript,
           },
-        );
+        });
         const [child, parent] = resultText
           .trim()
           .split('\n')
