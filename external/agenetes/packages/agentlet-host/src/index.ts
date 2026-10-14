@@ -91,6 +91,8 @@ export interface MountAgenetesOptions {
    * owns this knowledge; this package never resolves paths.
    */
   daemonEntryPath: string;
+  /** Opaque, non-secret bootstrap values forwarded through Agentlet's generic CLI. */
+  bootstrapEnv?: Readonly<Record<string, string>>;
   /** Resolve the host-owned process limit on each supervised daemon start. */
   getMaxAgents?: () => number;
   /**
@@ -142,6 +144,7 @@ export function mountAgenetes(
 
   getDaemonSupervisor().attach(app, {
     daemonEntryPath: opts.daemonEntryPath,
+    bootstrapEnv: opts.bootstrapEnv,
     dataDir: opts.dataDir,
     getMaxAgents: opts.getMaxAgents,
     hostEnvPrefix: opts.hostEnvPrefix,

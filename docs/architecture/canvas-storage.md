@@ -28,7 +28,7 @@ The recent-conversation GET includes its Space existence check inside that same 
     skills/<id>/SKILL.md          # user / memory-agent authored skills
   <canvasDir>/                    # dir name = safe(title)
     space.json                   # { canvasId, title, version, state:{nodes,edges,...}, createdAt, updatedAt }
-    skill.md                      # optional legacy per-Space RFS root-guide override (blob area `guide`)
+    skill.md                      # retired RFS override; ignored, retained only for cleanup compatibility
     nodes/
       <safe(label)>.md            # frontmatter: id/type/label/src/... + content(markdown body)
     .artifacts/                   # Disk BlobStore mapping for this Space
@@ -116,7 +116,7 @@ SQLite uses Node's built-in `node:sqlite`, which requires the `node:` prefix. Th
     blobs/                        # Disk *blob* store; override with HUABU_BLOB_ROOT
       <workspaceId>/
         <canvasId>/
-          skill.md                # blob area `guide`
+          skill.md                # retired guide blob retained only for cleanup compatibility
           .artifacts/             # blob area `artifacts`
           .memory/space.md        # blob area `memory`
           .upload/                # blob area `uploads`
@@ -254,12 +254,9 @@ Web undo/redo resurrection must acknowledge the restored topology before writing
 
 The content queue's generation-checked restored-content success callback notifies the preprocessing queue that waiting work may proceed. Structure acknowledgement alone is not sufficient: preprocessing remains blocked during the restored content PUT and after a failed write until Retry succeeds. The preprocessing queue owns whether interrupted or newly requested work is pending; storage does not decide this or automatically reprocess completed nodes. See the authoritative [client responsibility boundary](./node-preprocessing.md#client-responsibility-boundary).
 
-Standalone content PUT and preprocessing persist call
-`updateNode(SpaceNodes, ...)`. The Canvas-domain promise-chain mutex remains
-per Space and stays held across the repository's asynchronous read and CAS put.
-The caller still owns field-merging policy; authored-content revisions remain
-`nodeRevisionOf({ content, src })`, and a stale baseline still maps to the same
-`NODE_CONTENT_CONFLICT` response.
+For optimistic Question creation, the canonical create command writes the initial sidecar and the web content queue suppresses its generic new-node PUT. A genuine edit made before acknowledgement waits for the tracked create command rather than assuming the sidecar is absent. Question content requests may contain only the locally dirty sidecar fields; the route preserves omitted fields from the existing record, while authored-content CAS remains based only on `nodeRevisionOf({ content, src })`. The web fences PUT results with its authoritative-baseline generation: if Canvas Sync seeds a newer revision while a request is in flight, the older success cannot regress the baseline or label and an older conflict is retried instead of surfacing a false `NODE_CONTENT_CONFLICT`.
+
+Standalone content PUT and preprocessing persist call `updateNode(SpaceNodes, ...)`. The Canvas-domain promise-chain mutex remains per Space and stays held across the repository's asynchronous read and CAS put. The caller still owns field-merging policy; authored-content revisions remain `nodeRevisionOf({ content, src })`, and a genuinely stale baseline still maps to the same `NODE_CONTENT_CONFLICT` response.
 
 Executor and revert batches already hold that mutex for their whole command
 batch, so they make one `SpaceHandle.write(...)` call instead of

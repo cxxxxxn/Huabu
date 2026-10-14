@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { cpSync } from 'node:fs';
+import { cpSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
@@ -15,12 +15,12 @@ import { prepareVideoMedia } from './scripts/prepare-video-media.mjs';
 // asset lookups need file-relative `__dirname` / `__filename`.
 const BANNER = {
   js:
-    `import { createRequire as __createRequire } from 'module';\n` +
-    `import { fileURLToPath as __fileURLToPath } from 'url';\n` +
-    `import { dirname as __pathDirname } from 'path';\n` +
-    `const require = __createRequire(import.meta.url);\n` +
-    `const __filename = __fileURLToPath(import.meta.url);\n` +
-    `const __dirname = __pathDirname(__filename);`,
+    `import { createRequire as __huabuCreateRequire } from 'module';\n` +
+    `import { fileURLToPath as __huabuFileURLToPath } from 'url';\n` +
+    `import { dirname as __huabuPathDirname } from 'path';\n` +
+    `const require = __huabuCreateRequire(import.meta.url);\n` +
+    `const __filename = __huabuFileURLToPath(import.meta.url);\n` +
+    `const __dirname = __huabuPathDirname(__filename);`,
 };
 
 // @resvg/resvg-wasm ships its WebAssembly as `index_bg.wasm`. The agent
@@ -64,8 +64,8 @@ export default defineConfig([
     // Many bundled CJS packages call require('fs'), require('path'), etc.
     // In an ESM output file, `require` is not defined. This banner injects a
     // real `require` function so those CJS-style dynamic requires work correctly.
-    // Using __createRequire alias to avoid conflicts with any bundled source that
-    // also imports createRequire (e.g., pdf.loader.ts).
+    // Namespace banner-only aliases because esbuild cannot rename raw banner
+    // declarations when bundled source emits the same import alias.
     banner: BANNER,
     esbuildOptions(options) {
       options.platform = 'node';
@@ -80,6 +80,19 @@ export default defineConfig([
       const dst = path.resolve('dist-bundle/prompt');
       cpSync(src, dst, { recursive: true });
       console.log(`[tsup] copied prompt templates -> ${dst}`);
+      const servicesSrc = path.resolve('src/services');
+      const servicesDst = path.resolve('dist-bundle/services');
+      cpSync(servicesSrc, servicesDst, { recursive: true });
+      console.log(`[tsup] copied Service packages -> ${servicesDst}`);
+      cpSync(
+        path.resolve('../../packages/client-runtime/dist'),
+        path.resolve('dist-bundle/client-runtime'),
+        { recursive: true },
+      );
+      writeFileSync(
+        path.resolve('dist-bundle/client-runtime/package.json'),
+        '{"type":"module"}\n',
+      );
       // @resvg/resvg-wasm — copied next to server.js so the
       // snapshot_nodes tool's bundle-layout fallback finds it via
       // bundled server module's file URL.
@@ -121,6 +134,12 @@ export default defineConfig([
     banner: BANNER,
     esbuildOptions(options) {
       options.platform = 'node';
+    },
+    async onSuccess() {
+      writeFileSync(
+        path.resolve('dist-bundle/agentlet/package.json'),
+        '{"type":"module"}\n',
+      );
     },
   },
 ]);

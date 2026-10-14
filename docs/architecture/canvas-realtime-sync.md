@@ -90,20 +90,18 @@ batch — there is no per-caller broadcast flag. This unifies all writers:
 
 Loading a Space may attempt to persist a legacy Hug Frame header adjustment before displaying the adjusted geometry. This optional layout write is not a prerequisite for reading the Space: if it fails (including version conflicts or Agent execution-record validation), loading completes with the original loaded geometry, content, edges, and snapshot version. The failure is logged without a blocking or persistent toast, and neither the rejected geometry nor its warmup hints are automatically resubmitted by the load path. Normal save validation and SSE reconciliation remain in force; this fallback does not repair missing execution records or force an overwrite.
 
-`applyDeltasFromAgent` filters incoming deltas against the set of nodes with
-un-persisted local content edits (`nodeContentQueue.pendingNodeIds()` —
-debounced-but-unsaved plus in-flight PUTs):
+`applyDeltasFromAgent` filters incoming deltas against nodes with un-persisted local content edits (`nodeContentQueue.pendingNodeIds()` — debounced-but-unsaved plus in-flight PUTs). The queue also exposes the exact pending sidecar fields for Question reconciliation:
 
 ```
 INSERT_NODE (new id)     → apply unless a local pending Question creation was undone/deleted
-REPLACE_NODE changing content / DELETE_NODE on a dirty id → SKIP (keep the human's unsaved edit)
+REPLACE_NODE changing a pending Question field → keep that local field, apply independent remote fields, report the overlap
+REPLACE_NODE changing content on another dirty node / DELETE_NODE on a dirty id → SKIP (keep the human's unsaved edit)
 REPLACE_NODE changing only non-content fields on a dirty id → apply while preserving local content fields
 otherwise                → apply
 ```
 
-- Resolution is deterministic **local-first**: a skipped node keeps the human's
-  value, and its post-effects (preprocessing / fit) are skipped too. `version`
-  still advances to `toVersion` so the next autosave doesn't 409.
+- Resolution is deterministic **local-first**: a skipped field or node keeps the human's value, and skipped node post-effects (preprocessing / fit) are skipped too. `version` still advances to `toVersion` so the next autosave does not 409.
+- Question sidecar reconciliation is field-aware. A pending body edit no longer blocks an independent generated label, and a pending manual label no longer blocks the server-seeded first prompt or lifecycle metadata. The eventual Question PUT contains only locally pending fields, so it cannot write an old label back while saving a body edit. Same-field overlap remains local-first, is reported through the existing amber skipped-write surface, and adopts the remote authored-content revision before retrying the local value.
 - Coarse `REPLACE_NODE` deltas include the server's full node even when only a lifecycle field such as Question `status` or `viewed` changed. Markdown-sidecar fields are compared by value, including nested `keywords` and `provenance` metadata, rather than object identity or object property order after JSON transport. When the remote delta leaves every markdown-sidecar field unchanged, the applier overlays the locally pending content fields onto the incoming node and applies the remaining update. This avoids treating the initiating tab's own lifecycle broadcast as an edit conflict without allowing stale server content to overwrite the local edit.
 - **Baseline rebase (no false conflict):** for a skipped `REPLACE_NODE`, the
   applier adopts the agent's just-written revision as that node's content-CAS
@@ -120,7 +118,7 @@ otherwise                → apply
 - Structure-save acknowledgements reconcile monotonically with Canvas Sync: a delayed HTTP success cannot lower the local version, and a delayed 409 whose reported server version has already arrived over SSE is retried against that fresh baseline instead of opening the global conflict state. If the 409 arrives first, the client records its server version; a later SSE update that reaches that version clears the warning and schedules the latest structure for retry.
 - **Scope:** content only. Same-node _structure_ conflicts (geometry / parent)
   stay coarse — there is no per-node structure-dirty tracking yet.
-- **Mixed Question content/FSM deltas:** when a dirty node rejects incoming authored content, its authoritative binding, invocation, attention, and association metadata still applies. The local content, existing amber conflict notice, skipped change-card state, and content-CAS baseline rebase remain intact. Geometry and deletion conflict policy is unchanged; this is not general field-level merging.
+- **Mixed Question content/FSM deltas:** when a pending field rejects an overlapping remote authored value, authoritative binding, invocation, attention, association metadata, and independent sidecar fields still apply. The local overlapping value, existing amber conflict notice, skipped change-card state, and content-CAS baseline rebase remain intact. Geometry and deletion conflict policy is unchanged; this field-level exception is specific to Question sidecar reconciliation, not general structure merging.
 
 Skipped ids flow back through `canvasSyncStore` into `acpThreadChangesStore`
 (`conflictedByThread`) and surface as:
@@ -229,7 +227,9 @@ The auto-accept preference still suppresses new Agent review records only. It do
 
 The sync route subscribes before reading the initial Canvas version, buffers updates committed during that read, sends the snapshot first, and then flushes the buffered updates. This closes the snapshot/subscribe loss window while preserving snapshot-before-update ordering.
 
-The server emits a heartbeat comment every 15 seconds. `canvasSyncStore.connect()` treats non-OK responses, malformed events, network errors, and unexpected EOF as failures and reconnects with exponential backoff capped at 10 seconds. An intentional Canvas switch or disconnect aborts the current request and pending delay, while every successful event resets the backoff. The reconnect snapshot/version handshake remains the convergence mechanism.
+The server emits a heartbeat comment every 15 seconds. Canvas Sync applies a 45-second byte-activity watchdog to the shared SSE reader; every received chunk, including a heartbeat comment that does not produce an application event, resets the timeout. Three missed heartbeat windows terminate a silently stalled or half-open stream so the existing retry loop can recover without a manual page refresh. The timeout is opt-in and does not affect other SSE consumers.
+
+`canvasSyncStore.connect()` treats inactivity timeouts, non-OK responses, malformed events, network errors, and unexpected EOF as failures and reconnects with exponential backoff capped at 10 seconds. An intentional Canvas switch or disconnect aborts the current request and pending delay, while every successful event resets the backoff. The reconnect snapshot/version handshake remains the convergence mechanism.
 
 ## Known reliability gap
 

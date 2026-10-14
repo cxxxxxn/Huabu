@@ -5,6 +5,7 @@ export const SECRET_IDS = {
   imageApiKey: 'llm:image:api-key',
   tavilyApiKey: 'integration:tavily:api-key',
   rapidApiKey: 'integration:rapidapi:api-key',
+  // Retained for historical encrypted records, never used for connection auth.
   agentletConnectionToken: 'integration:agentlet:connection-token',
   inkOcrApiKey: 'integration:azure-vision:api-key',
   inkOcrConfig: 'integration:azure-vision:config',

@@ -3,7 +3,8 @@
 // Licensed under the MIT license.
 
 /**
- * postinstall hook — make the `bin/` wrappers (`agentlet` and
+ * Legacy explicit opt-in helper, no longer called by install or startup.
+ * It makes the `bin/` wrappers (`agentlet` and
  * `start-agentlet-daemon`) discoverable on the user's PATH so first-time
  * setup is "pnpm install && pnpm dev" instead of "pnpm install, then
  * manually edit your shell rc, then pnpm dev". We add the whole `bin/`

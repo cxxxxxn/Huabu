@@ -130,32 +130,14 @@ export type AcpDaemonRestartResponse = AcpAgentletRestartResponse;
 export const acpAgentCliInfoSchema = z.object({
   id: z.string().min(1),
   displayName: z.string().min(1),
-  binary: z.string().min(1),
-  acpArgs: z.array(z.string()),
-  /** `position` preserves CLIs whose global options precede ACP arguments. */
-  autoApprove: z
-    .object({
-      args: z.array(z.string()),
-      position: z.enum(['before-acp', 'after-acp']),
-    })
-    .nullable(),
+  status: z.enum(['ready', 'adapter-missing', 'not-found']),
   version: z.string().optional(),
-  installed: z.boolean(),
   installHint: z.string(),
-  executablePath: z.string().optional(),
   workingDirPath: z.string().optional(),
-  launchVersion: z.literal(1).optional(),
-  launchPreviewVersion: z.literal(1).optional(),
-  capabilities: z
-    .object({
-      autoApprove: z.enum(['supported', 'unsupported', 'unknown']),
-      modelOverride: z.enum(['supported', 'unsupported', 'unknown']),
-      sessionPersistence: z.enum(['supported', 'unsupported', 'unknown']),
-      customLaunchCommand: z
-        .enum(['supported', 'unsupported', 'unknown'])
-        .optional(),
-    })
-    .optional(),
+  capabilities: z.object({
+    autoApprove: z.boolean(),
+    customLaunchCommand: z.boolean(),
+  }),
   diagnostics: z
     .array(z.object({ code: z.string(), message: z.string() }))
     .optional(),
@@ -544,27 +526,20 @@ export const acpAgentletStatusSchema = agentletStatusSchema;
 /** @deprecated Use {@link acpAgentletStatusSchema} instead. */
 export const acpDaemonStatusSchema = acpAgentletStatusSchema;
 
-export const connectionTokenSourceSchema = z.enum([
-  'stored',
-  'environment',
-  'generated',
-]);
+export const connectionTokenSourceSchema = z.enum(['environment', 'generated']);
 export type ConnectionTokenSource = z.infer<typeof connectionTokenSourceSchema>;
 
-export const connectionTokenConfigSchema = z.object({
-  source: connectionTokenSourceSchema,
-  writable: z.boolean(),
-});
-export type ConnectionTokenConfig = z.infer<typeof connectionTokenConfigSchema>;
-
-export const connectionTokenUpdateSchema = z.object({
-  token: z.string().trim().min(1).max(512).nullable(),
-});
-export type ConnectionTokenUpdate = z.infer<typeof connectionTokenUpdateSchema>;
-
-export const agentletConnectionCommandRequestSchema = z.object({
-  origin: z.url().max(2048),
-});
+export const connectionShellSchema = z.enum(['posix', 'powershell']);
+export type ConnectionShell = z.infer<typeof connectionShellSchema>;
+export const connectionCopyFormatSchema = z.enum(['command', 'env-file']);
+export type ConnectionCopyFormat = z.infer<typeof connectionCopyFormatSchema>;
+export const agentletConnectionCommandRequestSchema = z
+  .object({
+    origin: z.url().max(2048),
+    shell: connectionShellSchema,
+    format: connectionCopyFormatSchema,
+  })
+  .strict();
 export type AgentletConnectionCommandRequest = z.infer<
   typeof agentletConnectionCommandRequestSchema
 >;
@@ -578,7 +553,8 @@ export type AgentletConnectionCommandWarning = z.infer<
 >;
 
 export const agentletConnectionCommandResponseSchema = z.object({
-  command: z.string().min(1),
+  content: z.string().min(1),
+  source: connectionTokenSourceSchema,
   warnings: z.array(agentletConnectionCommandWarningSchema),
 });
 export type AgentletConnectionCommandResponse = z.infer<

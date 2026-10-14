@@ -44,8 +44,7 @@ The remote host supplies the Gateway WebSocket URL and authentication token:
 
 ```bash
 agentlet daemon \
-  --server "wss://host.example/api/bridge" \
-  --token "$AGENTLET_TOKEN"
+  --server "wss://host.example/api/bridge"
 ```
 
 For local development only, `ws://` can be enabled explicitly:
@@ -53,7 +52,6 @@ For local development only, `ws://` can be enabled explicitly:
 ```bash
 agentlet daemon \
   --server "ws://127.0.0.1:3001/api/bridge" \
-  --token "development-token" \
   --allow-insecure
 ```
 
@@ -68,34 +66,35 @@ Important options:
 | `--heartbeat <seconds>` | WebSocket ping interval; `0` disables heartbeats. |
 | `--log-level <level>` | `debug`, `info`, `warn`, or `error`. |
 | `--log-file <path>` | Optional JSON-lines log destination. |
+| `--env-inject <KEY=VALUE>` | Repeatable non-secret, opaque bootstrap value forwarded to every spawned agent. |
+
+Set `AGENTLET_TOKEN` in the daemon's environment before running these examples. The generic `--token` option remains available, but environment credentials avoid putting the token in process arguments. A rejected control handshake exits nonzero; an ordinary shutdown exits zero.
 
 The control and session connections use the same `agentletId`. Each spawned ACP session has its own `sessionId` and WebSocket, so control-channel and session-channel failures remain independent. The machine control channel reconnects automatically; a closed session channel stops that session's relay and is not automatically reconnected.
 
 ## Harness discovery
 
-The daemon advertises `capabilities.harnessDiscovery: { version: 1 }`. Gateways may call `server/discoverHarnesses` with `{}` for read-only discovery or `{ "prepareWorkspaces": true }` for automatic provisioning. The response includes every static catalogue entry, installation state, resolved executable path, optional version, and diagnostics. No remote candidates, commands, IDs, or roots are accepted.
+The daemon advertises `capabilities.harnessDiscovery: { version: 2 }`. Gateways may call `server/discoverHarnesses` with `{}` for read-only discovery or `{ "prepareWorkspaces": true }` for automatic provisioning. The response includes every registered Definition with static identity, boolean capabilities, `ready`, `adapter-missing`, or `not-found` status, optional version, workspace, and diagnostics. No remote candidates, commands, IDs, or roots are accepted.
 
-Detected catalogue entries include `launchVersion: 1` as the explicit opt-in for hosts provisioning structured Profiles or presenting the structured editor only when the located executable supports shell-free launch. Windows opts in native `.exe`/`.com` executables, not npm `.cmd`/`.bat` shims or other script wrappers; shim entries remain installed and retain their legacy command recipe. Missing binaries and older daemon responses omit the field as well. This discovery hint does not replace the Gateway's independent handshake capability check at spawn.
+Windows discovery scans all `where.exe` results and accepts absolute `.exe`, `.com`, `.cmd`, and `.bat` candidates, so an extensionless POSIX npm shim does not hide a later shell-resolvable wrapper. Unix discovery requires an absolute `which` result. Version probing uses the Windows command shell for wrappers and shell-free invocation on Unix. Discovery models the target platform shell but does not promise interactive aliases or startup-script behavior.
 
 Discovery uses bounded, shell-free PATH and optional version probes. It does not start ACP sessions, install packages, provision credentials, or copy prompts or skills. An optional version-probe failure does not change a successfully detected executable into a missing binary.
 
-Only explicit workspace preparation creates `~/.agentlet/workspace/<catalogue-id>` on the daemon machine, and only for installed binaries. Existing contents are retained. Failed creation produces a diagnostic without a fallback directory. Agent Team runtime packages, setup commands, and Team RPCs are retired; manifests remain historical data only.
+Only explicit workspace preparation creates `~/.agentlet/workspace/<definition-id>` on the daemon machine, and only for ready known harnesses. Existing contents are retained. Failed creation produces a diagnostic without a fallback directory. Agent Team runtime packages, setup commands, and Team RPCs are retired; manifests remain historical data only.
 
 ## Protocol lifecycle
 
 ### Typed harness launch
 
-The daemon advertises `capabilities.harnessLaunch: { version: 1 }` independently of discovery. A host must gate structured spawning on that capability. `sessionSpec` accepts exactly one of the legacy trusted `command` string or `launch: { kind: 'acp-harness', harnessId, options?: { autoApprove?: boolean } }`. The structured path validates the daemon's own catalogue, rejects unknown options and unsupported approval presets, and spawns executable/argv without a shell. The legacy command path is unchanged. Editable display metadata never chooses an executable.
+The daemon advertises `capabilities.harnessLaunch: { version: 2 }` independently of discovery. A host must gate structured spawning on that capability. `sessionSpec` accepts exactly one of the legacy trusted `command` string or `launch: { kind: 'acp-harness', harnessId, options?: { autoApprove?: boolean } }`. The structured path validates the daemon's own registry, rejects unknown options and unsupported approval presets, and compiles trusted fixed tokens plus bounded options into a terminal-style shell command. The legacy command path remains explicit user-authorized shell input. Editable display metadata never chooses a command.
 
-Every Profile selects a wrapper from its launch identity alone: `acp-harness` selects `harnessId`, and legacy `acp-command` selects the special `custom` wrapper. Metadata and command text never infer a known wrapper, and old records are not converted. Each wrapper implements `detect()`, `describeCapabilities()`, and `buildLaunch()`. Discovery appends a manually selectable `custom` descriptor (`installed: false`) that never probes executables or prepares a workspace; hosts must exclude it from automatic provisioning.
+Every Profile selects a Definition from its launch identity alone: `acp-harness` selects `harnessId`, and legacy `acp-command` selects the special `custom` Definition. Metadata and command text never infer a known harness, and old records are not converted. Each Definition implements `discover()` and `compile()`. Custom reports ready for manual selection, never probes executables or prepares a workspace, and hosts exclude it from automatic provisioning.
 
-`@agentlet/protocol` exports `CUSTOM_COMMAND_WRAPPER_ID = 'custom'` and the frozen `CUSTOM_COMMAND_CAPABILITIES` object as canonical constants. Hosts may reuse these when projecting a manual Custom descriptor for older daemons without duplicating capability policy or implying preview RPC support.
+`@agentlet/protocol` exports `CUSTOM_COMMAND_WRAPPER_ID = 'custom'` and the frozen `CUSTOM_COMMAND_CAPABILITIES` object as canonical constants. Hosts may reuse these when projecting the manual Custom descriptor without duplicating capability policy.
 
-`Harness.get(id).describeCapabilities()` reports `supported`, `unsupported`, or `unknown` for `autoApprove`, `modelOverride`, `sessionPersistence`, and `customLaunchCommand`, scoped specifically to the ACP entry. The new `customLaunchCommand` field is optional on the wire for older daemons. Custom supports only `customLaunchCommand`; its other capabilities are unsupported. Known wrappers reject custom command overrides. `buildLaunch()` returns `{ kind: 'exec', executable, argv, env }` for known wrappers and `{ kind: 'shell', command }` for explicit custom commands. A known wrapper's optional model intent remains `initialPreferences.model` for existing ACP controls, never a launch option or guessed CLI argument. Known model override and session-persistence control remain unknown until verified; native print transports and adapter no-save flags are not inferred.
+Definition capabilities are the booleans `autoApprove` and `customLaunchCommand`. Custom supports only `customLaunchCommand`; known Definitions reject custom command overrides. `compile()` returns `{ kind: 'shell', command }`. A known harness's optional model intent remains `initialPreferences.model` for existing ACP controls, never a launch option or guessed CLI argument.
 
-The read-only `server/buildHarnessLaunch` RPC accepts exactly `{ launch: AgentProfileLaunch }` and uses the same wrapper compiler as runtime launch. It returns the exec/shell discriminated result, performs no executable probes, process spawning, or workspace preparation, and does not assert installation or authentication. The daemon advertises `capabilities.harnessLaunchPreview: { version: 1 }` and discovery entries include `launchPreviewVersion: 1`. Hosts must gate this RPC independently from spawning and display the daemon result rather than compile argv locally. Malformed input and unsupported options fail with `-32602`.
-
-A successful structured spawn returns `launchPlan: { version: 1, executable, argv, env }`. A host can persist and send that plan with subsequent spawns; the daemon compares it against its locally resolved plan and refuses catalogue drift instead of executing caller-supplied arguments. This pins the catalogue command recipe, not the installed binary version, PATH resolution, inherited environment, credentials, or runtime reachback environment. Structured launch requires an executable that the OS can spawn without a shell; shell-only wrappers such as Windows `.cmd` shims are not converted into shell commands.
+Compilation occurs inside `server/spawn`; there is no preview RPC. Known commands are generated only from trusted Definition tokens and bounded options, while Custom commands remain user-authorized shell code. Historical `launchPlan` input is schema-validated then ignored, and spawn does not return a new plan. Runtime and recovery therefore compile the frozen launch intent with the target Agentlet's current Definition.
 
 ```text
 agentlet daemon
@@ -116,17 +115,31 @@ The complete daemon/Gateway wire behavior is documented in [`spec/protocol.md`](
 
 ## Agent Reachback
 
-The host may push scripts or other resources through `server/sendResource`. The daemon resolves destinations against its environment registry, writes the resource locally, and injects the same environment into spawned processes.
+The host may push scripts or other resources through `server/sendResource`. The daemon interpolates destinations against its explicit bootstrap map, writes the resource locally, and injects that map into spawned processes. It does not provision a default reachback directory or infer bootstrap values from its ambient environment.
+
+```bash
+agentlet daemon --server "wss://host.example/api/bridge" \
+  --env-inject TOOL_ENTRY="/device/tools/entry.js" \
+  --env-inject AGENTLET_REACHBACK_DIR="/device/resources"
+```
+
+The bootstrap map defaults to empty. The equivalent programmatic option is `bootstrapEnv`. Values are copied and frozen at construction, split at the first `=` by the CLI, and remain opaque: spaces, empty values, additional equals signs, and relative paths are preserved without expansion or path resolution. Keys must match `[A-Za-z_][A-Za-z0-9_]*`; NUL, duplicate keys, and `AGENTLET_TOKEN` declarations are rejected without printing values. Do not pass credentials through `--env-inject`, because arguments are visible to other processes.
+
+Bootstrap overrides inherited values. A session that declares any bootstrap key or `AGENTLET_TOKEN` is rejected before process launch, even if its value is identical. Windows matching is case-insensitive and the final child environment removes inherited case variants; Unix matching is case-sensitive. Ordinary session values, including `AGENTLET_SERVER`, retain their override behavior. This protects launch configuration, not the executing agent's ability to change its own environment.
+
+Hosts previously relying on automatic `AGENTLET_REACHBACK_DIR` must supply it explicitly; ambient values are no longer an interpolation registry and no path is automatically resolved.
 
 The standard environment includes:
 
 | Variable | Purpose |
 | --- | --- |
-| `AGENTLET_REACHBACK_DIR` | Directory containing host-provided resources. |
+| `AGENTLET_REACHBACK_DIR` | Optional host-defined bootstrap value, with no built-in default or path interpretation. |
 | `AGENTLET_SERVER` | Gateway URL supplied to the daemon. |
 | `AGENTLET_TOKEN` | Authentication token available to host-provided reachback tools. |
 
 Agentlet transports opaque resources and environment values; it does not interpret the host-specific tool protocol.
+
+Host-specific Service clients and SDKs are not shipped or automatically configured by Agentlet. Hosts provide their own entry coordinates through generic bootstrap.
 
 ## Repository layout
 

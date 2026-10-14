@@ -24,16 +24,18 @@ describe('process transport selection', () => {
     }))
   })
 
-  it('never interpolates structured executable paths or argument values', () => {
-    const executable = '/path with spaces/adapter'
-    const argv = ['literal argument', '$(not-run); | &', '"quoted"']
-    new AgentProcess({
-      command: 'display-only',
-      launchPlan: { version: 1, executable, argv, env: {} },
-      cwd: '/work',
-    }).start()
-    expect(spawn).toHaveBeenCalledWith(executable, argv, expect.objectContaining({
-      shell: false, cwd: '/work', stdio: ['pipe', 'pipe', 'pipe'],
+  it('executes a compiled known-harness command through the platform shell', () => {
+    const command = 'copilot --acp --allow-all'
+    new AgentProcess({ command, cwd: '/work' }).start()
+    expect(spawn).toHaveBeenCalledWith(command, expect.objectContaining({
+      shell: true, cwd: '/work', stdio: ['pipe', 'pipe', 'pipe'],
     }))
+  })
+
+  it('does not reintroduce ambient values after the managed environment has been finalized', () => {
+    const env = { AGENTLET_TOKEN: 'authoritative', TOOL: 'entry' }
+    new AgentProcess({ command: 'agent --acp', env, inheritEnv: false }).start()
+    expect(spawn).toHaveBeenCalledWith('agent --acp', expect.objectContaining({ env }))
+    expect(vi.mocked(spawn).mock.calls[0]?.[1]?.env).toBe(env)
   })
 })

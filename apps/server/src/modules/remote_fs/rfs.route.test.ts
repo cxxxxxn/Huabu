@@ -18,6 +18,7 @@ import { join } from 'node:path';
 
 import fastify from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import yauzl from 'yauzl';
 
 import {
   AGENT_CANVAS_COMMAND_TYPES,
@@ -35,6 +36,11 @@ const agentMocks = vi.hoisted(() => ({
   handleRun: vi.fn(),
 }));
 
+const serviceMocks = vi.hoisted(() => ({
+  lease: vi.fn(),
+  list: vi.fn(),
+}));
+
 vi.mock('../agent/agent.service.js', () => ({
   runAgent: agentMocks.runAgent,
 }));
@@ -47,6 +53,14 @@ vi.mock('../agent/agenetes/drivers.js', () => ({
   },
 }));
 
+vi.mock('../services/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof ServiceModule>();
+  return {
+    ...actual,
+    serviceProvisioner: serviceMocks,
+  };
+});
+
 import rfsRoutes from './rfs.route.js';
 import { toSafeFilename } from '../../utils/naming.js';
 import { agentNodeService } from '../agent/agent-node.service.js';
@@ -56,6 +70,7 @@ import {
   agentThreadService,
 } from '../agent/agent-thread.service.js';
 import * as selectableProfiles from '../agent/selectable-agent-profile.js';
+import { ServiceProvisionError } from '../services/index.js';
 import { getCanvasStore, resetStorageCache, space } from '../storage/index.js';
 import {
   RunCompletionError,
@@ -66,6 +81,7 @@ import { taskService } from '../task/task.service.js';
 import { setWorkspacePath } from '../workspace.js';
 
 import type { FixedAgentNodeTarget } from '../agent/agent-thread-resolver.js';
+import type * as ServiceModule from '../services/index.js';
 import type { CanvasNodeId } from '@huabu/shared';
 
 /**
@@ -87,6 +103,25 @@ async function buildApp() {
   await app.register(rfsRoutes, { prefix: '/rfs' });
   await app.ready();
   return app;
+}
+
+async function zipEntries(buffer: Buffer): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    yauzl.fromBuffer(buffer, { lazyEntries: true }, (error, zip) => {
+      if (error || !zip) {
+        reject(error ?? new Error('Failed to open ZIP'));
+        return;
+      }
+      const entries: string[] = [];
+      zip.on('entry', (entry) => {
+        entries.push(entry.fileName);
+        zip.readEntry();
+      });
+      zip.on('end', () => resolve(entries));
+      zip.on('error', reject);
+      zip.readEntry();
+    });
+  });
 }
 
 /**
@@ -172,6 +207,8 @@ beforeEach(() => {
   agentMocks.record.mockReset();
   agentMocks.get.mockReset();
   agentMocks.handleRun.mockReset();
+  serviceMocks.lease.mockReset();
+  serviceMocks.list.mockReset();
   agentMocks.runAgent.mockImplementation(async function* () {
     yield { type: 'done', data: { message: 'first answer' } };
     return [];
@@ -199,7 +236,8 @@ describe('GET /api/rfs/:canvasId/skill', () => {
         );
       }
       expect(res.body).toContain('/capabilities/commands/$COMMAND');
-      expect(res.body).toContain('$HUABU_RFS_URL/skill/tasks');
+      expect(res.body).toContain('/services');
+      expect(res.body).toContain('GET skill/services');
       expect(res.body).toContain('**parent-local**');
       expect(res.body).toContain('read-only `absolutePosition`');
       expect(res.body).toContain(
@@ -208,6 +246,23 @@ describe('GET /api/rfs/:canvasId/skill', () => {
       expect(res.body).toContain(
         `${getNodeDefaultSize('note').height}px nominal layout height`,
       );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('serves the anonymous CLI root from the same endpoint by header', async () => {
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/skill',
+        headers: { 'x-huabu-skill-client': 'rfs-cli' },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers.vary).toBe('X-Huabu-Skill-Client');
+      expect(response.body).toContain('huabu-rfs query --help');
+      expect(response.body).not.toContain('# Space-specific Skills');
     } finally {
       await app.close();
     }
@@ -230,11 +285,11 @@ describe('GET /api/rfs/:canvasId/skill', () => {
     }
   });
 
-  it('returns only the bundled root guide without authorization', async () => {
+  it('ignores a retired Space skill.md for anonymous and authenticated roots', async () => {
     seedNote('c1', 'node-1', 'Anchor', 'content');
     writeFileSync(
       join(diskDirOf('c1'), 'skill.md'),
-      '# Private Space Override',
+      '# Retired Space Override',
       'utf8',
     );
     const app = await buildApp();
@@ -250,8 +305,9 @@ describe('GET /api/rfs/:canvasId/skill', () => {
       });
 
       expect(anonymous.body).toMatch(/Accessing this Huabu Space/);
-      expect(anonymous.body).not.toContain('Private Space Override');
-      expect(authenticated.body).toContain('Private Space Override');
+      expect(authenticated.body).toMatch(/Accessing this Huabu Space/);
+      expect(anonymous.body).not.toContain('Retired Space Override');
+      expect(authenticated.body).not.toContain('Retired Space Override');
     } finally {
       await app.close();
     }
@@ -281,7 +337,7 @@ describe('GET /api/rfs/:canvasId/skill', () => {
     }
   });
 
-  it('appends Skill Frames after a legacy Space guide override', async () => {
+  it('appends Skill Frames to the bundled guide despite a retired skill.md', async () => {
     seedInstructionFrame('c1', 'skill', 'Use the team glossary.');
     writeFileSync(
       join(diskDirOf('c1'), 'skill.md'),
@@ -296,10 +352,10 @@ describe('GET /api/rfs/:canvasId/skill', () => {
         headers: { authorization: '******' },
       });
 
-      expect(response.body).toContain('# Legacy Space Guide');
+      expect(response.body).not.toContain('# Legacy Space Guide');
       expect(response.body).toContain('# Space-specific Skills');
       expect(response.body).toContain('Use the team glossary.');
-      expect(response.body).not.toMatch(/Accessing this Huabu Space/i);
+      expect(response.body).toMatch(/Accessing this Huabu Space/i);
     } finally {
       await app.close();
     }
@@ -324,6 +380,10 @@ describe('GET /api/rfs/:canvasId/skill', () => {
         method: 'GET',
         url: '/rfs/c1/skill/interactive-views',
       });
+      const services = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/skill/services',
+      });
       const unknown = await app.inject({
         method: 'GET',
         url: '/rfs/c1/skill/not-a-skill',
@@ -338,10 +398,114 @@ describe('GET /api/rfs/:canvasId/skill', () => {
       expect(tasks.body).toContain('# Durable Tasks and Runs');
       expect(agents.body).toContain('# Creating and Prompting Agents');
       expect(interactiveViews.body).toContain('# Building Interactive Views');
+      expect(services.statusCode).toBe(200);
+      expect(services.body).toContain('# Using Huabu Services');
+      expect(services.body).toContain('withServiceContext');
+      expect(services.body).toContain('urllib.request');
       expect(interactiveViews.body).toContain('huabu.view.connect');
       expect(unknown.statusCode).toBe(404);
       expect(unknown.json()).toMatchObject({ code: 'skill_not_found' });
       expect(traversal.statusCode).toBe(404);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('selects HTTP/CLI presentations by header and shares Skill Frames', async () => {
+    seedInstructionFrame('c1', 'skill', 'Use the CLI team glossary.');
+    const app = await buildApp();
+    const headers = { authorization: 'Bearer token' };
+    try {
+      const initial = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/skill',
+        headers: { ...headers, 'x-huabu-skill-client': 'rfs-cli' },
+      });
+      expect(initial.statusCode).toBe(200);
+      expect(initial.body).toContain('# Accessing this Huabu Space');
+      expect(initial.body).toContain('huabu-rfs query --help');
+      expect(initial.body).toContain('Use the CLI team glossary.');
+      expect(initial.body).not.toContain('curl -fsS');
+      const cli = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/skill',
+        headers: { ...headers, 'x-huabu-skill-client': 'rfs-cli' },
+      });
+      const http = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/skill',
+        headers,
+      });
+      expect(cli.body).toContain('# Accessing this Huabu Space');
+      expect(cli.body).toContain('huabu-rfs query --help');
+      expect(http.body).toContain('# Accessing this Huabu Space');
+      expect(cli.body).not.toBe(http.body);
+      expect(cli.headers.vary).toBe('X-Huabu-Skill-Client');
+      expect(cli.body).toContain('Use the CLI team glossary.');
+      expect(http.body).toContain('Use the CLI team glossary.');
+      expect(cli.body).toContain('# Space-specific Skills');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it.each([
+    ['agents', '# Creating and Prompting Agents'],
+    ['layout', '# Advanced Space Layout'],
+    ['services', '# Using Huabu Services'],
+  ])(
+    'loads focused CLI Skill %s without Space instructions',
+    async (id, heading) => {
+      seedInstructionFrame('c1', 'skill', 'Private shared instructions.');
+      const app = await buildApp();
+      try {
+        const res = await app.inject({
+          method: 'GET',
+          url: `/rfs/c1/skill/${id}`,
+          headers: {
+            'x-huabu-skill-client': 'rfs-cli',
+            authorization: 'Bearer token',
+          },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.body).toContain(heading);
+        expect(res.body).not.toContain('{{include:');
+        expect(res.body).not.toContain('Private shared instructions.');
+      } finally {
+        await app.close();
+      }
+    },
+  );
+
+  it('does not expose Task/View Skills to the CLI presentation', async () => {
+    const app = await buildApp();
+    try {
+      for (const id of ['tasks', 'interactive-views']) {
+        const response = await app.inject({
+          method: 'GET',
+          url: `/rfs/c1/skill/${id}`,
+          headers: { 'x-huabu-skill-client': 'rfs-cli' },
+        });
+        expect(response.statusCode).toBe(404);
+        expect(response.json()).toMatchObject({ code: 'skill_not_found' });
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects unknown Skill clients instead of falling back', async () => {
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/skill',
+        headers: { 'x-huabu-skill-client': 'unknown' },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({
+        message: expect.stringContaining('Invalid Skill client'),
+      });
     } finally {
       await app.close();
     }
@@ -569,6 +733,158 @@ describe('Task RFS adapters', () => {
       expect(res.json().message).toContain('Run: run-partial.');
       expect(res.json().message).toContain('Root node: node-root.');
       expect(res.json().message).toContain('Root thread: thread-root.');
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('third-party Services', () => {
+  it('publishes discovery and package files without configuration secrets', async () => {
+    serviceMocks.list.mockReturnValue([
+      {
+        id: 'image-gen',
+        version: '1.0.0',
+        name: 'Image Generation',
+        description: 'Generate images.',
+        configured: true,
+        availableToExternalAgent: true,
+      },
+    ]);
+    const app = await buildApp();
+    try {
+      const discovery = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/services',
+      });
+      const manifest = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/services/image-gen/manifest',
+      });
+      const skill = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/services/image-gen/skill',
+      });
+      const packageDownload = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/download/services/image-gen.zip',
+      });
+
+      expect(discovery.statusCode).toBe(200);
+      expect(discovery.json()).toMatchObject({
+        services: [{ id: 'image-gen', configured: true }],
+      });
+      expect(manifest.statusCode).toBe(200);
+      expect(manifest.json()).toMatchObject({
+        id: 'image-gen',
+        storage: { namespace: 'llm.imageConfig' },
+      });
+      expect(skill.statusCode).toBe(200);
+      expect(skill.headers['content-type']).toMatch(/text\/markdown/);
+      expect(packageDownload.statusCode).toBe(200);
+      expect(packageDownload.headers['content-type']).toMatch(
+        /application\/zip/,
+      );
+      expect(packageDownload.headers['content-disposition']).toContain(
+        'image-gen-1.0.0.zip',
+      );
+      expect(packageDownload.headers['cache-control']).toBe(
+        'private, max-age=300',
+      );
+      expect((await zipEntries(packageDownload.rawPayload)).sort()).toEqual([
+        'image-gen/SKILL.md',
+        'image-gen/entry.mjs',
+        'image-gen/service.yaml',
+      ]);
+
+      const notModified = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/download/services/image-gen.zip',
+        headers: { 'if-none-match': packageDownload.headers.etag },
+      });
+      expect(notModified.statusCode).toBe(304);
+
+      for (const response of [discovery, manifest, skill, packageDownload]) {
+        expect(response.body).not.toContain('test-secret');
+        expect(response.body).not.toContain('api-key');
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects Package files that are absent or use invalid ids', async () => {
+    const app = await buildApp();
+    try {
+      const noSkill = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/services/ink-ocr/skill',
+      });
+      const noPackage = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/download/services/youtube-transcripts.zip',
+      });
+      const invalid = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/services/INVALID/manifest',
+      });
+
+      expect(noSkill.statusCode).toBe(404);
+      expect(noSkill.json()).toMatchObject({ code: 'skill_not_found' });
+      expect(noPackage.statusCode).toBe(403);
+      expect(noPackage.json()).toMatchObject({
+        code: 'service_not_agent_accessible',
+      });
+      expect(invalid.statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('returns a no-store lease and maps provisioning failures', async () => {
+    serviceMocks.lease.mockReturnValueOnce({
+      id: 'image-gen',
+      version: '1.0.0',
+      manifest: {
+        schema: 'huabu-service/v1',
+        id: 'image-gen',
+        version: '1.0.0',
+        name: 'Image Generation (AOAI)',
+        description: 'Generate images.',
+        storage: { namespace: 'llm.imageConfig' },
+        package: { files: ['SKILL.md', 'entry.mjs'] },
+        configuration: [],
+      },
+      config: { apiKey: 'test-secret' },
+    });
+    const app = await buildApp();
+    try {
+      const lease = await app.inject({
+        method: 'POST',
+        url: '/rfs/c1/services/image-gen/lease',
+      });
+      expect(lease.statusCode).toBe(200);
+      expect(lease.headers['cache-control']).toBe('no-store');
+      expect(lease.json()).toMatchObject({
+        id: 'image-gen',
+        manifest: { id: 'image-gen', version: '1.0.0' },
+        config: { apiKey: 'test-secret' },
+      });
+
+      serviceMocks.lease.mockImplementationOnce(() => {
+        throw new ServiceProvisionError(
+          'service_not_agent_accessible',
+          'Service is not available to External Agents',
+        );
+      });
+      const rejected = await app.inject({
+        method: 'POST',
+        url: '/rfs/c1/services/ink-ocr/lease',
+      });
+      expect(rejected.statusCode).toBe(403);
+      expect(rejected.json()).toMatchObject({
+        code: 'service_not_agent_accessible',
+      });
     } finally {
       await app.close();
     }

@@ -250,7 +250,6 @@
     "customAgent": "Custom agent",
     "customCommand": "Manual setup",
     "acpAgent": "ACP Agent",
-    "agent": "Agent",
     "launchCommand": "Launch command",
     "launchCommandHint": "Full command line the worker should spawn (binary + all flags). Use this for binaries that aren't on PATH or for additional arguments.",
     "autoApproveAllToolCalls": "Auto-approve all tool calls",
@@ -400,7 +399,21 @@
     "canaryState_running": "running",
     "canaryState_succeeded": "succeeded",
     "canaryState_failed": "failed",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "services": "Services",
+    "servicesDescription": "Configure the third-party services managed by Huabu. Services with an Agent interface can be loaded on demand by an authenticated external Agent.",
+    "agentDefaultsSaved": "Utility Agent settings saved",
+    "agentletHowToConnect": "How to connect",
+    "agentletHowToConnectDescription": "Run an additional Huabu Agentlet from a source checkout on the machine that will run your Agents. The embedded Agentlet connects automatically.",
+    "agentletSourceSetup": "Prepare Node.js 24 or newer and pnpm on that machine, then clone or reuse a Huabu source checkout:",
+    "agentletSourceRevision": "Use a Huabu revision matching your Server and containing the client runtime. Install its dependencies before copying the connection command; startup builds the runtime automatically.",
+    "agentletTargetShell": "Target shell",
+    "agentletShellPosix": "POSIX (Bash / Zsh)",
+    "agentletEnvFileCopy": "Copy connection env file",
+    "agentletEnvFileCopied": "Connection env file copied",
+    "agentletEnvFileInstructions": "Alternatively, save the copied env file privately (never commit it), then run pnpm start:daemon --env-file ./connection.env from the checkout. It contains only the public origin and token; operational options such as --max-agents remain CLI flags.",
+    "agentletGeneratedTokenWarning": "The Server uses HUABU_CONNECTION_TOKEN or a new random token per Server start. Without a configured token, copied connections must be refreshed after restart. Previously saved Settings overrides are ignored but retained. Keep copied commands and env files private.",
+    "agentletCommandCopiedGenerated": "Copied with this Server start's generated token. Refresh the connection after the Server restarts."
   },
   "status": {
     "loading": "Loading",
@@ -605,7 +618,7 @@
     "frameLayoutGrid": "Grid",
     "columns": "Columns",
     "rows": "Rows",
-    "gridRowsMin": "Rows (minimum \u2014 more are added when needed)",
+    "gridRowsMin": "Rows (minimum — more are added when needed)",
     "columnsRange": "Columns (1–{{max}})",
     "rowsRange": "Rows (1–{{max}})",
     "unframe": "Unframe",
@@ -780,7 +793,10 @@
       "spacePreview": "Space Shortcut",
       "sketch": "Sketch",
       "question": "Agent Node"
-    }
+    },
+    "searchCanvas": "Search this Space",
+    "closeSearch": "Close search",
+    "reorderNode": "Reorder {{label}}"
   },
   "chat": {
     "workingDirectoryOverride": "Working directory override",
@@ -1082,7 +1098,11 @@
     "updatedFiles_other": "Updated {{count}} files",
     "inspected": "Inspected",
     "read": "Read",
-    "invokedSkill": "Invoked skill: {{id}}"
+    "invokedSkill": "Invoked skill: {{id}}",
+    "inferredInkRequest": "Inferred Ink request: {{intent}}",
+    "fragmentQuoteLabel": "Quote from an earlier reply:",
+    "fragmentCommentLabel": "Comment:",
+    "fragmentContextLabel": "Nearby context ([…] marks the quoted passage):"
   },
   "toolbar": {
     "inkAgentPicker": {

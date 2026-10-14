@@ -1,4 +1,5 @@
 import { Command } from 'commander'
+import { parseBootstrapEnv } from './bootstrap-env.js'
 
 export interface AgentletOptions {
   server: string
@@ -13,6 +14,7 @@ export interface AgentletOptions {
 
   agentletId?: string
   maxAgents: number
+  bootstrapEnv?: Readonly<Record<string, string>>
 }
 
 /** Result of parsing the generic `agentlet daemon` command. */
@@ -51,6 +53,12 @@ export function parseCli(argv: string[]): CliResult {
     .option('--log-file <path>', 'Path to write structured log output (JSON lines)')
     .option('--heartbeat <seconds>', 'WebSocket ping interval in seconds (0 to disable)', '30')
     .option('--allow-insecure', 'Allow ws:// (non-TLS) connections (local development only)', false)
+    .option(
+      '--env-inject <KEY=VALUE>',
+      'Opaque non-secret agent bootstrap value (repeatable)',
+      (value: string, previous: string[]) => [...previous, value],
+      [],
+    )
     .action((opts) => {
       const token = opts.token || process.env['AGENTLET_TOKEN']
       if (!token) {
@@ -71,6 +79,7 @@ export function parseCli(argv: string[]): CliResult {
           logFile: opts.logFile,
           agentletId: opts.agentletId?.trim() || undefined,
           maxAgents: positiveSafeInteger(opts.maxAgents, '--max-agents'),
+          bootstrapEnv: parseBootstrapEnv(opts.envInject),
         },
       }
     })

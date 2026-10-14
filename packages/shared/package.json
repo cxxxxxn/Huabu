@@ -6,6 +6,10 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
+    "./service-package": {
+      "types": "./src/types/api/service-package.ts",
+      "import": "./src/types/api/service-package.ts"
+    },
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"

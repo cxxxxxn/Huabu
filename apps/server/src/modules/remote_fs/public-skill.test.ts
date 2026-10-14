@@ -22,6 +22,14 @@ describe('isPublicRfsSkillBootstrapRequest', () => {
   });
 
   it('does not exempt invalid credentials, nested skills, or other methods', () => {
+    for (const skill of ['agents', 'layout', 'services']) {
+      expect(
+        isPublicRfsSkillBootstrapRequest({
+          method: 'GET',
+          url: `/api/rfs/canvas-a/skill/${skill}`,
+        }),
+      ).toBe(false);
+    }
     expect(
       isPublicRfsSkillBootstrapRequest({
         method: 'GET',

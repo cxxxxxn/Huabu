@@ -59,16 +59,19 @@ flowchart LR
 
 ## 2. Environment Provisioning
 
-When the daemon spawns an agent process, it injects a set of **well-known environment variables** so the agent (and the Reachback tool it invokes) can locate its tools and authenticate back to the host. Precedence is `AGENTLET_SERVER` < daemon `envRegistry` < `sessionSpec.env`, with `AGENTLET_TOKEN` always set from the daemon's authenticated launch options.
+The daemon accepts repeatable `--env-inject KEY=VALUE` or an equivalent programmatic `bootstrapEnv` map. Bootstrap defaults to empty, is copied and frozen at construction, and is forwarded unchanged to every spawn and restart. Values are opaque: the CLI splits only at the first equals sign and does not trim, expand, or resolve them. Portable environment keys are required; NUL, duplicates, and bootstrap declarations of `AGENTLET_TOKEN` fail without exposing values.
+
+The final child environment combines ordinary inherited values and session overrides with authoritative bootstrap and daemon credentials. Any session declaration of a bootstrap key or `AGENTLET_TOKEN` fails before spawning, including equal values. Windows matching is case-insensitive and removes inherited case variants at the final merge; Unix is case-sensitive. `AGENTLET_SERVER` retains its ordinary session override behavior unless explicitly managed by bootstrap. Bootstrap does not change the daemon's own environment or sandbox running agents.
 
 | Variable | Provided by | Description |
 | -------- | ----------- | ----------- |
-| `AGENTLET_REACHBACK_DIR` | daemon `envRegistry` | Absolute path to the directory where Reachback tool scripts are saved. Defaults to `node_modules/.cache/agentlet/reachback`; overridable via the daemon's `process.env`. Resolved to an absolute path so agents with a different `cwd` still find it. |
+| `AGENTLET_REACHBACK_DIR` | explicit host bootstrap, if desired | Opaque host-defined location with no default, automatic path resolution, or ambient registry lookup. |
 | `AGENTLET_SERVER` | daemon `--server` | The daemon's control-channel WebSocket URL (e.g. `ws://127.0.0.1:3001/api/bridge`). Tools derive an HTTP base URL from this (`ws://`→`http://`, strip path) unless the host provides its own override. |
 | `AGENTLET_TOKEN` | daemon `--token` | Bearer token the tool attaches to every call back to the host. May double as user/session identity for per-token access scoping. |
-| _host-specific_ | `sessionSpec.env` | Any additional variables the host app passes at spawn time (e.g. a workspace/document ID). These override defaults but cannot replace the daemon-owned `AGENTLET_TOKEN`. |
+| _host-specific bootstrap_ | `--env-inject` or `bootstrapEnv` | Host-owned non-secret tool coordinates available to all spawned agents and resource interpolation. |
+| _host-specific session context_ | `sessionSpec.env` | Workload context that may override ordinary inherited values, but cannot declare a bootstrap key or daemon token. |
 
-The daemon maintains resource-directory variables in an `envRegistry` keyed by variable name. The registry is the single source of truth for `${ENV_VAR}` interpolation in resource destinations (§3). Spawned-agent environments combine the daemon's server URL and token with that registry and `sessionSpec.env`, so a token supplied through `--token` does not depend on also being present in the daemon process environment.
+Explicit bootstrap is the only source of `${ENV_VAR}` interpolation in resource destinations (§3). Empty values are valid; missing keys, including inherited keys and object prototype names, produce a non-fatal `resource_save_failed` diagnostic. Hosts that used the former implicit reachback directory must now provide it explicitly. Agentlet supplies no host-specific SDK or SDK location; these belong to host bootstrap.
 
 ## 3. Tool Distribution
 
@@ -84,7 +87,7 @@ The host app pushes its Reachback tool(s) through the Gateway **when the agentle
 
 `server/sendResource { destination, content }` is sent on the control channel.
 The `destination` supports `${ENV_VAR}` interpolation against the daemon's
-`envRegistry`, so the host references the well-known dir without knowing its
+explicit bootstrap map, so the host references its configured dir without knowing its
 absolute path on the remote machine:
 
 ```jsonc
@@ -99,6 +102,8 @@ absolute path on the remote machine:
 }
 ```
 
+For this example, launch the daemon with `--env-inject AGENTLET_REACHBACK_DIR=/absolute/resource/path`. The daemon does not create or resolve a default directory.
+
 The daemon resolves the destination, creates parent directories as needed,
 writes the file, and logs `resource_saved`. An unknown `${ENV_VAR}` is rejected;
 a write failure is logged as `resource_save_failed` (non-fatal). See
@@ -112,7 +117,7 @@ is injected into every spawned agent, the agent can invoke the tool by an
 env-relative path without any per-host configuration:
 
 ```bash
-node ${AGENTLET_REACHBACK_DIR}/<tool-script> <command> [args...]
+node "${AGENTLET_REACHBACK_DIR}/<tool-script>" <command> [args...]
 ```
 
 `server/sendResource` is **general-purpose** — it can place any
@@ -121,9 +126,7 @@ primary use today.
 
 ## 4. Transport Model (CLI-first)
 
-The Reachback Interface standardises on **distributing a CLI script** rather
-than, say, registering an MCP server, because it must work uniformly across
-heterogeneous agent harnesses and support long-running, streaming operations:
+The Reachback Interface supports optional CLI resource distribution without requiring it. A host may also expose language-independent HTTP access and let the agent choose its own client/runtime. Providing a script does not guarantee that the agent has the runtime required to execute it. The following comparison explains why a host might choose a CLI rather than an MCP server:
 
 | Consideration | MCP | CLI script (Reachback) |
 | ------------- | --- | ---------------------- |
@@ -154,7 +157,7 @@ To expose Reachback, a host application must:
 1. **Provide a tool script** that authenticates with `AGENTLET_TOKEN`, resolves
    its server base URL from `AGENTLET_SERVER` (or a host-specific override), and
    exposes whatever commands its agents need.
-2. **Push the script on connect/reconnect** via `server/sendResource` to `${AGENTLET_REACHBACK_DIR}/<tool-script>` from the embedding Gateway's connection callbacks.
+2. **Configure a non-secret location explicitly** through `--env-inject` or `bootstrapEnv`, then optionally push the script on connect/reconnect via `server/sendResource` to `${AGENTLET_REACHBACK_DIR}/<tool-script>`.
 3. **Serve the endpoints** the script calls, accepting `Authorization: Bearer
    ${AGENTLET_TOKEN}`.
 4. **(Recommended) Inject usage into the agent's system prompt** at spawn time
@@ -172,6 +175,7 @@ itself.
 | ------- | ------ |
 | `server/sendResource` params | [`SendResourceParams`](../packages/protocol/src/messages.ts) |
 | Wire contract & timing | [`protocol.md` §9 — Resource Distribution](protocol.md#resource-distribution) |
-| Env registry & spawn env | [`packages/local/src/agentlet.ts`](../packages/local/src/agentlet.ts) (`envRegistry`, `resolveDestination`, `handleSendResource`) |
+| Bootstrap validation, final merge & interpolation | [`packages/local/src/bootstrap-env.ts`](../packages/local/src/bootstrap-env.ts) |
+| Spawn and resource transport | [`packages/local/src/agentlet.ts`](../packages/local/src/agentlet.ts) |
 | Host integration (connection callbacks) | Embedding Gateway implementation |
 | Concrete host implementation | [Huabu — `docs/architecture/agent-reachback.md`](../../../docs/architecture/agent-reachback.md) |

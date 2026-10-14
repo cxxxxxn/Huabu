@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http'
 import { arch, hostname, platform } from 'node:os'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import {
@@ -67,7 +67,9 @@ describe('agentlet daemon integration', () => {
     fixtureDir = join(process.cwd(), `.agentlet-daemon-test-${randomUUID()}`)
     mkdirSync(fixtureDir)
     const mockAgentPath = join(fixtureDir, 'mock-acp-agent.cjs')
+    const envPath = join(fixtureDir, 'environment.json')
     writeFileSync(mockAgentPath, [
+      `require('node:fs').writeFileSync(${JSON.stringify(envPath)}, JSON.stringify({ entry: process.env.TOOL_ENTRY, token: process.env.AGENTLET_TOKEN, rfs: process.env.HUABU_RFS_URL, thread: process.env.HUABU_THREAD_ID }))`,
       "const readline = require('node:readline')",
       'const rl = readline.createInterface({ input: process.stdin })',
       "rl.on('line', (line) => {",
@@ -128,18 +130,24 @@ describe('agentlet daemon integration', () => {
     })
     await new Promise<void>((resolve) => httpServer?.listen(0, '127.0.0.1', resolve))
     const { port } = httpServer.address() as { port: number }
+    const bootstrapEnv = { TOOL_ENTRY: ' relative entry=a=b ', RESOURCE_DIR: fixtureDir }
     const daemon = new Agentlet({
       server: `ws://127.0.0.1:${port}/api/bridge`, token: 'test-token',
       reconnectMax: 1, bufferLimit: 1000, heartbeat: 0, allowInsecure: true,
       logLevel: 'error', agentletId: 'machine-a', maxAgents: 1,
+      bootstrapEnv,
     }, new Logger('error'))
+    bootstrapEnv.TOOL_ENTRY = 'must-not-change'
     await daemon.start()
     await waitUntil(() => controlHello !== undefined)
     expect(controlHello).toMatchObject({
       agentletId: 'machine-a',
       agentletProfile: {
         machine: { hostname: hostname(), platform: platform(), arch: arch() },
-        capabilities: { harnessDiscovery: { version: 1 } },
+        capabilities: {
+          harnessDiscovery: { version: 2 },
+          harnessLaunch: { version: 2 },
+        },
       },
     })
 
@@ -156,10 +164,28 @@ describe('agentlet daemon integration', () => {
       rootPath: fixtureDir,
     })).toMatchObject({ error: { code: -32602 } })
 
+    for (const [id, env] of [[20, { TOOL_ENTRY: ' relative entry=a=b ' }], [21, { AGENTLET_TOKEN: 'test-token' }]] as const) {
+      expect(await request(id, ServerMethods.SPAWN, {
+        appId: 'invalid-env', sessionSpec: { command: `node ${JSON.stringify(mockAgentPath)}`, env },
+      })).toMatchObject({ error: { code: -32602, message: expect.stringContaining('protected environment key') } })
+      expect(existsSync(envPath)).toBe(false)
+    }
+    controlSocket?.send(JSON.stringify({
+      jsonrpc: '2.0', method: ServerMethods.SEND_RESOURCE,
+      params: { destination: '${RESOURCE_DIR}/resource.txt', content: 'explicit resource' },
+    }))
+    await waitUntil(() => existsSync(join(fixtureDir!, 'resource.txt')))
+    expect(readFileSync(join(fixtureDir, 'resource.txt'), 'utf8')).toBe('explicit resource')
+
     expect(await request(10, ServerMethods.SPAWN, {
       appId: 'thread-a', workloadType: 'Job',
-      sessionSpec: { command: `node ${JSON.stringify(mockAgentPath)}` },
+      sessionSpec: { command: `node ${JSON.stringify(mockAgentPath)}`, env: {
+        HUABU_RFS_URL: 'http://host/rfs/space', HUABU_THREAD_ID: 'thread-a',
+      } },
     })).toMatchObject({ result: { sessionId: 'native-bootstrap', pid: expect.any(Number) } })
+    expect(JSON.parse(readFileSync(envPath, 'utf8'))).toEqual({
+      entry: ' relative entry=a=b ', token: 'test-token', rfs: 'http://host/rfs/space', thread: 'thread-a',
+    })
     expect(sessionSocket).toBeUndefined()
     await waitUntil(() => sessionHello !== undefined)
     expect(sessionHello).toMatchObject({
@@ -200,5 +226,34 @@ describe('agentlet daemon integration', () => {
     })).toMatchObject({ result: { sessionId: 'native-bootstrap', pid: expect.any(Number) } })
     expect(await request(15, ServerMethods.STOP, { sessionId: 'native-bootstrap' }))
       .toMatchObject({ result: { stopped: true } })
+    controlSocket?.send(JSON.stringify({ jsonrpc: '2.0', method: ServerMethods.SHUTDOWN }))
+    await waitUntil(() => (exitSpy?.mock.calls.length ?? 0) > 0)
+    expect(exitSpy).toHaveBeenCalledWith(0)
   }, 15_000)
+
+  it('exits nonzero when the control handshake is rejected', async () => {
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+    httpServer = createServer()
+    gateway = new WebSocketServer({ server: httpServer })
+    gateway.on('connection', socket => {
+      controlSocket = socket
+      socket.on('message', data => {
+        const message = JSON.parse(data.toString()) as JsonRpcMessage
+        if ('method' in message && message.method === AgentletMethods.HELLO) {
+          socket.send(JSON.stringify({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: 'Authentication rejected' } }))
+        }
+      })
+    })
+    await new Promise<void>(resolve => httpServer?.listen(0, '127.0.0.1', resolve))
+    const address = httpServer.address()
+    if (!address || typeof address === 'string') throw new Error('Missing test server address')
+    const daemon = new Agentlet({
+      server: `ws://127.0.0.1:${address.port}/bridge`, token: 'test-token',
+      reconnectMax: 1, bufferLimit: 1000, heartbeat: 0, allowInsecure: true,
+      logLevel: 'error', agentletId: 'machine-a', maxAgents: 1,
+    }, new Logger('error'))
+    await daemon.start()
+    await waitUntil(() => (exitSpy?.mock.calls.length ?? 0) > 0)
+    expect(exitSpy).toHaveBeenCalledWith(1)
+  })
 })

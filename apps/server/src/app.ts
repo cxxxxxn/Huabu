@@ -27,7 +27,7 @@ import {
   getAgentProfileRegistry,
   installAcpProfileCachePort,
   mountAgenetes,
-  resolveDaemonEntry,
+  resolveDaemonRuntime,
 } from './modules/agent/acp/index.js';
 import { initializeAgentDefaults } from './modules/agent/agent-defaults.js';
 import agentDefaultsRoutes from './modules/agent/agent-defaults.route.js';
@@ -55,6 +55,7 @@ import {
   resolveAllowedHostnames,
 } from './modules/security/index.js';
 import { createApplicationRateLimitOptions } from './modules/security/rate-limit.js';
+import serviceRoutes from './modules/services/services.route.js';
 import { closeStorage } from './modules/storage/index.js';
 import webRoutes from './modules/web/web.route.js';
 import {
@@ -236,7 +237,8 @@ app.addHook('preHandler', async (request, reply) => {
     !url.startsWith('/api/workspace') &&
     !url.startsWith('/api/deployment') &&
     !url.startsWith('/api/llm') &&
-    !url.startsWith('/api/integrations')
+    !url.startsWith('/api/integrations') &&
+    !url.startsWith('/api/services')
   ) {
     return reply.status(503).send({
       message:
@@ -257,6 +259,7 @@ app.register(artifactRoute, { prefix: '/api/canvas' });
 
 app.register(llmRoutes, { prefix: '/api/llm' });
 app.register(integrationsRoutes, { prefix: '/api/integrations' });
+app.register(serviceRoutes, { prefix: '/api/services' });
 app.register(deploymentRoutes, { prefix: '/api/deployment' });
 app.register(canaryRedeployRoutes, {
   prefix: '/api/deployment/canary',
@@ -272,8 +275,8 @@ app.register(rfsRoutes, { prefix: '/api/rfs' });
 // It mounts the stateless Gateway, forks & supervises the agentlet daemon,
 // and authenticates connections against the host-injected connection token.
 // The daemon owns the agent worker pool; the server tells it which agent CLI
-// to spawn (per user profile). The connection token never crosses the HTTP
-// boundary — it lives only in-process and on the loopback WS.
+// to spawn (per user profile). The token is revealed only by the explicit
+// owner-only no-store copy action and is never part of ordinary read models.
 //
 // L1 owns all deployment-layout knowledge and injects it downward:
 // the global connection token, the data directory, and the resolved
@@ -296,10 +299,17 @@ try {
     app.log.warn({ err }, '[acp] could not remove legacy acp-config.json');
   }
 }
+const daemonRuntime = resolveDaemonRuntime();
+if (!daemonRuntime.artifacts.serviceSdkEntry) {
+  app.log.warn(
+    '[acp] Service SDK artifact missing; direct HTTP remains available, rebuild client-runtime to use JS Service entries',
+  );
+}
 const agentletGateway = mountAgenetes(app, {
   connectionToken: getConnectionToken(),
   dataDir: getDataDir(),
-  daemonEntryPath: resolveDaemonEntry() ?? '',
+  daemonEntryPath: daemonRuntime.artifacts.daemonEntry ?? '',
+  bootstrapEnv: daemonRuntime.bootstrapEnv,
   getMaxAgents: () => getExternalAgentRuntimeConfig().maxAgents,
   // Host-namespaced env isolation: the agentlet daemon and every external
   // agent it spawns are host-agnostic and must receive their Huabu
@@ -341,10 +351,8 @@ app.addHook('onClose', async () => resetExternalNoteSessions());
 // a connection-holding backend will need — a pool nobody closes leaks on
 // every restart, and the lifecycle is where that is visible.
 app.addHook('onClose', async () => closeStorage());
-// Capture the bound TCP port for L1-owned reachback (RFS): the
-// canvas-scoped `HUABU_RFS_URL` base is built from this. RFS is
-// canvas-coupled and therefore a pure L1 concern, so the port lives in
-// L1 rather than being read back out of the L2 transport host.
+// Capture the bound TCP port for the local RFS reachback fallback. Public
+// deployments use their configured canonical origin instead.
 app.addHook('onListen', async () => {
   const addr = app.server.address();
   if (addr && typeof addr !== 'string') setHostServerPort(addr.port);

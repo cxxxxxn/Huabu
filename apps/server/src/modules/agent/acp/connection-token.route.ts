@@ -1,16 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import {
-  agentletConnectionCommandRequestSchema,
-  connectionTokenUpdateSchema,
-} from '@huabu/shared';
+import { agentletConnectionCommandRequestSchema } from '@huabu/shared';
 
 import {
   buildAgentletConnectionCommand,
-  getConnectionTokenConfig,
+  InvalidAgentletConnectionEnvFileError,
   InvalidAgentletConnectionOriginError,
-  setConnectionToken,
 } from '../../../connection-token.js';
 import { isOwnerRequest } from '../../security/owner.js';
 
@@ -18,44 +14,10 @@ import type {
   AgentletConnectionCommandRequest,
   AgentletConnectionCommandResponse,
   ApiResult,
-  ConnectionTokenConfig,
-  ConnectionTokenUpdate,
 } from '@huabu/shared';
 import type { FastifyPluginAsync } from 'fastify';
 
 const connectionTokenRoutes: FastifyPluginAsync = async (app) => {
-  app.get<{ Reply: ApiResult<ConnectionTokenConfig> }>(
-    '/connection-token',
-    async (request, reply) => {
-      if (!isOwnerRequest(request)) {
-        return reply.status(403).send({
-          message:
-            'Forbidden: connection token settings require owner authorization',
-        });
-      }
-      return getConnectionTokenConfig();
-    },
-  );
-
-  app.put<{
-    Body: ConnectionTokenUpdate;
-    Reply: ApiResult<ConnectionTokenConfig>;
-  }>('/connection-token', async (request, reply) => {
-    if (!isOwnerRequest(request)) {
-      return reply.status(403).send({
-        message:
-          'Forbidden: connection token settings require owner authorization',
-      });
-    }
-    const parsed = connectionTokenUpdateSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply
-        .status(400)
-        .send({ message: parsed.error.issues[0]?.message ?? 'Invalid body' });
-    }
-    return reply.send(await setConnectionToken(parsed.data.token));
-  });
-
   app.post<{
     Body: AgentletConnectionCommandRequest;
     Reply: ApiResult<AgentletConnectionCommandResponse>;
@@ -80,7 +42,7 @@ const connectionTokenRoutes: FastifyPluginAsync = async (app) => {
         .send({ message: 'Browser origin does not match request origin' });
     }
     try {
-      const response = buildAgentletConnectionCommand(parsed.data.origin);
+      const response = buildAgentletConnectionCommand(parsed.data);
       return reply
         .header('Cache-Control', 'no-store')
         .header('Pragma', 'no-cache')
@@ -89,6 +51,8 @@ const connectionTokenRoutes: FastifyPluginAsync = async (app) => {
       if (error instanceof InvalidAgentletConnectionOriginError) {
         return reply.status(400).send({ message: 'Invalid browser origin' });
       }
+      if (error instanceof InvalidAgentletConnectionEnvFileError)
+        return reply.status(400).send({ message: error.message });
       throw error;
     }
   });

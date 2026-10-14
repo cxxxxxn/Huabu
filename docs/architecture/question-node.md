@@ -106,10 +106,9 @@ The single-node toolbar exposes **Scale** as an absolute percentage of the defau
 
 ## 4. As a content node
 
-The question text lives in the markdown sidecar, so agents read it like any other
-text node — `read("nodes/<file>.md")` returns the body, and `get_space_outline`
-lists it as `type: 'question'`. No trigger needed; it is just canvas content that
-also happens to own a thread.
+The question text lives in the markdown sidecar, so agents read it like any other text node — `read("nodes/<file>.md")` returns the body, and `get_space_outline` lists it as `type: 'question'`. No trigger is needed; it is Canvas content that also owns a thread.
+
+Canonical Question creation owns the initial sidecar write. The web marks the optimistic node before inserting it into local state, so the generic content queue suppresses its otherwise redundant new-node PUT for both create-only and create-and-start flows. A real edit made before the create command acknowledges remains pending and waits for that same creation promise before writing; subsequent Canvas Sync content seeds the current sidecar revision, so the edit uses the authoritative baseline rather than the absent-file revision. This ordering prevents the optimistic creation path from competing with its own server command or overwriting the first prompt.
 
 The sidecar body holds only the **first** user prompt, so canvas search (Cmd+F)
 also has a dedicated **`conversation`** tier
