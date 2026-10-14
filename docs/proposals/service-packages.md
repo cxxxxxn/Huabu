@@ -4,6 +4,8 @@ Status: Accepted
 
 Last updated: 2026-10-10
 
+The SDK ownership recorded in this design has been superseded by #292: the implemented SDK lives in `packages/client-runtime` and uses `HUABU_SERVICE_SDK_URL`, with no legacy alias. See [current Service architecture](../architecture/service-packages.md); the original Agentlet SDK references below preserve design history rather than the current bootstrap contract.
+
 ## 摘要
 
 本 Proposal 定义统一的 Service Package，用一个受严格校验的 YAML Manifest 描述配置字段、存储 namespace 与精确发布文件，同时让 Internal Agent Tool、External Agent 与产品 Pipeline 保留适合各自信任边界的执行路径。

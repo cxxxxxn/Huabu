@@ -53,16 +53,7 @@ export type BlobBackendKind = 'disk' | 'azure';
 export interface SpaceBlobs {
   /** Artifacts the application writes and the client fetches by key. */
   readonly artifacts: BlobScope;
-  /**
-   * User-authored guide documents at the Space root.
-   *
-   * Bounded by {@link SPACE_GUIDE_BLOB_NAMES} rather than by a directory,
-   * because the area a user authors in *is* the Space root — which also holds
-   * storage's own record. An area that claimed the whole directory would list
-   * `space.json` and delete the Space on `deleteAll()`. Naming the members is
-   * what makes the boundary real, and a fixed set is a tighter namespace than
-   * a directory, not a looser one.
-   */
+  /** Retired root-guide blobs retained so Space deletion still cleans them. */
   readonly guide: BlobScope;
   /** The agent's private memory document for a Space. */
   readonly memory: BlobScope;
@@ -71,11 +62,8 @@ export interface SpaceBlobs {
 }
 
 /**
- * Every blob name the `guide` area may hold.
- *
- * Product vocabulary rather than adapter detail: these are the documents a
- * user is invited to author at the Space root, so the set belongs beside the
- * area it defines.
+ * Retired `guide` members kept in the storage contract for cleanup of existing
+ * Disk and remote data. Product code must not read them as active guidance.
  */
 export const SPACE_GUIDE_SKILL_NAME = 'skill.md';
 

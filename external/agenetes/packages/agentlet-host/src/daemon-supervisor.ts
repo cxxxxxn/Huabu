@@ -14,7 +14,7 @@
  *      token from {@link getDaemonAuth} and `child_process.fork` the
  *      agentlet daemon entry (an absolute path injected by the host)
  *      with `daemon --server ws://127.0.0.1:<port>/api/acp/agent
- *      --token <token> --allow-insecure`.
+ *      --allow-insecure`, with the credential in child `AGENTLET_TOKEN`.
  *   2. On clean exit (code 0, no shutdown signal) we treat it as the
  *      daemon following our own shutdown request and stay offline.
  *   3. On unexpected exit (non-zero code OR signal OR crash) we
@@ -226,6 +226,7 @@ export interface AttachOptions {
    * passes a ready absolute path — this package never resolves it.
    */
   daemonEntryPath: string;
+  bootstrapEnv?: Readonly<Record<string, string>>;
   /** Absolute directory for host-owned persistent state. */
   dataDir: string;
   /** Resolve the host-owned process limit each time the daemon starts. */
@@ -291,6 +292,7 @@ class DaemonSupervisor {
    * knowledge (dev vs bundled paths); this package never resolves it.
    */
   private daemonEntryPath = '';
+  private bootstrapEnv: Readonly<Record<string, string>> = {};
   /**
    * Absolute directory for host-owned persistent state, injected at
    * {@link attach} time. Used only for legacy-ticket cleanup here.
@@ -308,6 +310,7 @@ class DaemonSupervisor {
     if (this.app) return;
     this.app = app;
     this.daemonEntryPath = opts.daemonEntryPath;
+    this.bootstrapEnv = Object.freeze({ ...opts.bootstrapEnv });
     this.dataDir = opts.dataDir;
     this.getMaxAgents = opts.getMaxAgents;
     this.hostEnvPrefix = opts.hostEnvPrefix;
@@ -444,8 +447,10 @@ class DaemonSupervisor {
       'daemon',
       '--server',
       serverUrl,
-      '--token',
-      token,
+      ...Object.entries(this.bootstrapEnv).flatMap(([key, value]) => [
+        '--env-inject',
+        `${key}=${value}`,
+      ]),
       ...(maxAgents === undefined ? [] : ['--max-agents', String(maxAgents)]),
       '--allow-insecure',
     ];
@@ -453,6 +458,16 @@ class DaemonSupervisor {
     this.state.starting = true;
     this.state.nextRestartAt = null;
 
+    const childEnv = filterHostNamespacedEnv(
+      process.env,
+      this.hostEnvPrefix,
+      this.hostEnvAllowlist,
+    );
+    for (const key of Object.keys(childEnv)) {
+      const normalized = process.platform === 'win32' ? key.toUpperCase() : key;
+      if (normalized === 'AGENTLET_TOKEN') delete childEnv[key];
+    }
+    childEnv.AGENTLET_TOKEN = token;
     let child: ChildProcess;
     try {
       child = fork(entry, args, {
@@ -467,14 +482,7 @@ class DaemonSupervisor {
         // secrets and config never reach the daemon or the agents it
         // spawns; the daemon receives its coordinates via CLI args and
         // agents via explicit spawn `env` injection.
-        env: {
-          ...filterHostNamespacedEnv(
-            process.env,
-            this.hostEnvPrefix,
-            this.hostEnvAllowlist,
-          ),
-          AGENTLET_TOKEN: token,
-        },
+        env: childEnv,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

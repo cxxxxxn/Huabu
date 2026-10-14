@@ -1,31 +1,39 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  _resetConnectionTokenForTests,
+  buildAgentletConnectionCommand,
+  getConnectionToken,
+  initializeConnectionToken,
+} from './connection-token.js';
+import {
+  parseConnectionEnvFile,
+  readConnectionConfig,
+} from '../../../packages/client-runtime/src/daemon.js';
+
 const mocks = vi.hoisted(() => ({
-  persisted: null as string | null,
-  writable: true,
+  persisted: 'historical-stored-token',
+  getPersistedSecret: vi.fn(),
   setSecret: vi.fn(),
   setDaemonToken: vi.fn(),
   restart: vi.fn(),
   disconnect: vi.fn(),
-  maxAgents: 7,
 }));
-
 vi.mock('./security/secret-store.js', () => ({
-  getPersistedSecret: () => mocks.persisted,
-  isSecretStoreWritable: () => mocks.writable,
+  getPersistedSecret: mocks.getPersistedSecret,
   setSecret: mocks.setSecret,
 }));
-
 vi.mock('./modules/agent/acp/runtime-config.js', () => ({
-  getExternalAgentRuntimeConfig: () => ({
-    idleTimeoutSecs: 600,
-    maxAgents: mocks.maxAgents,
-  }),
+  getExternalAgentRuntimeConfig: () => ({ idleTimeoutSecs: 600, maxAgents: 7 }),
 }));
-
 vi.mock('@agenetes/agentlet-host', () => ({
   getDaemonAuth: () => ({ setDaemonToken: mocks.setDaemonToken }),
   getDaemonSupervisor: () => ({ restart: mocks.restart }),
@@ -34,130 +42,201 @@ vi.mock('@agenetes/agentlet-host', () => ({
   }),
 }));
 
-import {
-  _resetConnectionTokenForTests,
-  buildAgentletConnectionCommand,
-  getConnectionToken,
-  initializeConnectionToken,
-  setConnectionToken,
-} from './connection-token.js';
-
 beforeEach(() => {
   _resetConnectionTokenForTests();
-  mocks.persisted = null;
-  mocks.writable = true;
-  mocks.setSecret.mockResolvedValue(undefined);
   vi.clearAllMocks();
-  delete process.env.HUABU_CONNECTION_TOKEN;
-  delete process.env.HUABU_PUBLIC_ORIGIN;
+  mocks.getPersistedSecret.mockReturnValue(mocks.persisted);
+  vi.stubEnv('HUABU_CONNECTION_TOKEN', '');
+  vi.stubEnv('HUABU_PUBLIC_ORIGIN', '');
 });
+afterEach(() => vi.unstubAllEnvs());
 
-afterEach(() => {
-  delete process.env.HUABU_CONNECTION_TOKEN;
-  delete process.env.HUABU_PUBLIC_ORIGIN;
-});
+const request = {
+  origin: 'https://huabu.example.com',
+  shell: 'posix' as const,
+  format: 'command' as const,
+};
 
-describe('connection token resolution', () => {
-  it('prefers persisted, environment, then one generated fallback', () => {
-    mocks.persisted = 'stored-token';
-    expect(initializeConnectionToken()).toEqual({
-      source: 'stored',
-      writable: true,
-    });
-    expect(getConnectionToken()).toBe('stored-token');
-
-    _resetConnectionTokenForTests();
-    mocks.persisted = null;
-    process.env.HUABU_CONNECTION_TOKEN = 'environment-token';
-    expect(initializeConnectionToken().source).toBe('environment');
+describe('immutable connection token', () => {
+  it('ignores but does not delete historical persisted overrides', () => {
+    vi.stubEnv('HUABU_CONNECTION_TOKEN', 'environment-token');
+    initializeConnectionToken();
     expect(getConnectionToken()).toBe('environment-token');
-
-    _resetConnectionTokenForTests();
-    delete process.env.HUABU_CONNECTION_TOKEN;
-    expect(initializeConnectionToken().source).toBe('generated');
-    const generated = getConnectionToken();
-    expect(generated).toMatch(/^[0-9a-f]{64}$/);
-    expect(getConnectionToken()).toBe(generated);
+    expect(mocks.setDaemonToken).toHaveBeenCalledWith('environment-token');
+    expect(mocks.getPersistedSecret).not.toHaveBeenCalled();
+    expect(mocks.setSecret).not.toHaveBeenCalled();
+    expect(mocks.persisted).toBe('historical-stored-token');
   });
-
-  it('persists before switching auth and restarting connected agentlets', async () => {
+  it('generates one random token per boot and never switches after first use', () => {
+    const token = getConnectionToken();
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    vi.stubEnv('HUABU_CONNECTION_TOKEN', 'later-change');
     initializeConnectionToken();
-    await setConnectionToken('new-token');
-
-    expect(mocks.setSecret).toHaveBeenCalledWith(
-      'integration:agentlet:connection-token',
-      'new-token',
-    );
-    expect(mocks.setDaemonToken).toHaveBeenLastCalledWith('new-token');
-    expect(mocks.disconnect).toHaveBeenCalledWith('connection_token_changed');
-    expect(mocks.restart).toHaveBeenCalledOnce();
-    expect(getConnectionToken()).toBe('new-token');
-  });
-
-  it('keeps the active token when persistence fails', async () => {
-    process.env.HUABU_CONNECTION_TOKEN = 'old-token';
     initializeConnectionToken();
-    mocks.setSecret.mockRejectedValueOnce(new Error('write failed'));
-
-    await expect(setConnectionToken('new-token')).rejects.toThrow(
-      'write failed',
-    );
-    expect(getConnectionToken()).toBe('old-token');
-    expect(mocks.disconnect).not.toHaveBeenCalled();
+    expect(getConnectionToken()).toBe(token);
+    expect(mocks.setDaemonToken).toHaveBeenLastCalledWith(token);
     expect(mocks.restart).not.toHaveBeenCalled();
+    expect(mocks.disconnect).not.toHaveBeenCalled();
+    _resetConnectionTokenForTests();
+    vi.stubEnv('HUABU_CONNECTION_TOKEN', '  ');
+    expect(getConnectionToken()).not.toBe(token);
   });
-
-  it('clears to the environment fallback', async () => {
-    mocks.persisted = 'stored-token';
-    process.env.HUABU_CONNECTION_TOKEN = 'environment-token';
-    initializeConnectionToken();
-
-    await setConnectionToken(null);
-
+  it('keeps a captured env token when env changes, and normalizes surrounding whitespace consistently with the source daemon', () => {
+    vi.stubEnv('HUABU_CONNECTION_TOKEN', '  environment-token  ');
     expect(getConnectionToken()).toBe('environment-token');
-    expect(mocks.setDaemonToken).toHaveBeenLastCalledWith('environment-token');
+    expect(
+      readConnectionConfig({
+        repoRoot: '/nonexistent-huabu-checkout',
+        inherited: {
+          HUABU_PUBLIC_ORIGIN: request.origin,
+          HUABU_CONNECTION_TOKEN: '  environment-token  ',
+        },
+      }).token,
+    ).toBe(getConnectionToken());
+    vi.stubEnv('HUABU_CONNECTION_TOKEN', 'changed');
+    initializeConnectionToken();
+    expect(getConnectionToken()).toBe('environment-token');
   });
 });
 
-describe('Agentlet connection command', () => {
-  it('derives secure and insecure endpoints and reports warnings', () => {
-    process.env.HUABU_CONNECTION_TOKEN = "token'quoted";
-    initializeConnectionToken();
-
-    expect(buildAgentletConnectionCommand('https://huabu.example.com')).toEqual(
-      {
-        command:
-          "agentlet daemon --server 'wss://huabu.example.com/api/acp/agent' --max-agents 7 --token 'token'\"'\"'quoted'",
-        warnings: [],
-      },
-    );
-    expect(buildAgentletConnectionCommand('http://localhost:3001')).toEqual({
-      command:
-        "agentlet daemon --server 'ws://localhost:3001/api/acp/agent' --max-agents 7 --token 'token'\"'\"'quoted' --allow-insecure",
-      warnings: ['loopback', 'insecure'],
+describe('source-daemon copy text', () => {
+  it.skipIf(process.platform === 'win32')(
+    'uses invocation-scoped env without token argv, and preserves metacharacters in a real POSIX shell',
+    () => {
+      const token = 'quote\'"$HOME \\n `tick` # literal';
+      vi.stubEnv('HUABU_CONNECTION_TOKEN', token);
+      const result = buildAgentletConnectionCommand(request);
+      expect(result.source).toBe('environment');
+      expect(result.warnings).toEqual([]);
+      expect(result.content).toContain('pnpm start:daemon --max-agents 7');
+      expect(result.content).not.toContain('--token');
+      const folder = mkdtempSync(join(tmpdir(), 'huabu-command-'));
+      try {
+        writeFileSync(
+          join(folder, 'pnpm'),
+          `#!${process.execPath}
+console.log(JSON.stringify({origin: process.env.HUABU_PUBLIC_ORIGIN, token: process.env.HUABU_CONNECTION_TOKEN, args: process.argv.slice(2)}));
+`,
+          { mode: 0o700 },
+        );
+        const resultText = execFileSync(
+          'sh',
+          [
+            '-c',
+            `${result.content}\n"${process.execPath}" -e 'console.log(JSON.stringify({origin:process.env.HUABU_PUBLIC_ORIGIN,token:process.env.HUABU_CONNECTION_TOKEN}))'`,
+          ],
+          {
+            encoding: 'utf8',
+            env: {
+              ...process.env,
+              PATH: `${folder}:${process.env.PATH}`,
+              HUABU_PUBLIC_ORIGIN: 'before-origin',
+              HUABU_CONNECTION_TOKEN: 'before-token',
+            },
+          },
+        );
+        const [child, parent] = resultText
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line));
+        expect(child).toEqual({
+          origin: request.origin,
+          token,
+          args: ['start:daemon', '--max-agents', '7'],
+        });
+        expect(parent).toEqual({
+          origin: 'before-origin',
+          token: 'before-token',
+        });
+      } finally {
+        rmSync(folder, { recursive: true, force: true });
+      }
+    },
+  );
+  it('quotes PowerShell literally and restores both previous process env values in finally', () => {
+    vi.stubEnv('HUABU_CONNECTION_TOKEN', "token'$HOME`quoted");
+    const result = buildAgentletConnectionCommand({
+      ...request,
+      shell: 'powershell',
     });
+    expect(result.content).toContain(
+      "$env:HUABU_CONNECTION_TOKEN = 'token''$HOME`quoted'",
+    );
+    expect(result.content).toContain('} finally {');
+    expect(result.content).toContain(
+      "SetEnvironmentVariable('HUABU_PUBLIC_ORIGIN', $huabuPreviousOrigin, 'Process')",
+    );
+    expect(result.content).toContain(
+      "SetEnvironmentVariable('HUABU_CONNECTION_TOKEN', $huabuPreviousToken, 'Process')",
+    );
+    expect(result.content).not.toContain('--token');
   });
-
-  it('rejects origins with paths or unsupported protocols', () => {
+  it.each([
+    'simple',
+    "single'quote",
+    'both\'"quotes # with \\n data',
+    'with`backtick',
+    'all\'"`quotes',
+  ])(
+    'round-trips private env files through the real daemon parser: %s',
+    (token) => {
+      vi.stubEnv('HUABU_CONNECTION_TOKEN', token);
+      const result = buildAgentletConnectionCommand({
+        ...request,
+        format: 'env-file',
+      });
+      expect(parseConnectionEnvFile(result.content)).toEqual({
+        HUABU_PUBLIC_ORIGIN: request.origin,
+        HUABU_CONNECTION_TOKEN: token,
+      });
+      expect(result.content).not.toContain('--max-agents');
+    },
+  );
+  it('rejects an unrepresentable env file explicitly without blocking the command format', () => {
+    vi.stubEnv('HUABU_CONNECTION_TOKEN', 'all\'"`quotes # with comment');
     expect(() =>
-      buildAgentletConnectionCommand('https://example.com/path'),
-    ).toThrow('Origin must be an HTTP(S) origin without a path');
-    expect(() => buildAgentletConnectionCommand('file:///tmp/huabu')).toThrow(
-      'Origin must be an HTTP(S) origin without a path',
+      buildAgentletConnectionCommand({ ...request, format: 'env-file' }),
+    ).toThrow('use Copy connection command instead');
+    expect(buildAgentletConnectionCommand(request).content).toContain(
+      'pnpm start:daemon',
     );
   });
-
-  it('uses the configured public origin instead of the browser origin', () => {
-    process.env.HUABU_CONNECTION_TOKEN = 'token';
-    process.env.HUABU_PUBLIC_ORIGIN = 'https://public.huabu.example:8443/';
-    initializeConnectionToken();
-
-    expect(
-      buildAgentletConnectionCommand('http://localhost:5173'),
-    ).toMatchObject({
-      command:
-        "agentlet daemon --server 'wss://public.huabu.example:8443/api/acp/agent' --max-agents 7 --token 'token'",
-      warnings: [],
+  it('reports HTTP/loopback warnings and generated-token source', () => {
+    const result = buildAgentletConnectionCommand({
+      ...request,
+      origin: 'http://localhost:3001',
     });
+    expect(result.warnings).toEqual(['loopback', 'insecure']);
+    expect(result.source).toBe('generated');
+    expect(result.content).toContain(
+      "HUABU_PUBLIC_ORIGIN='http://localhost:3001'",
+    );
+  });
+  it('uses the configured public origin rather than the local browser origin', () => {
+    vi.stubEnv('HUABU_PUBLIC_ORIGIN', 'https://public.huabu.example:8443/');
+    const result = buildAgentletConnectionCommand({
+      ...request,
+      origin: 'http://localhost:5173',
+    });
+    expect(result.content).toContain(
+      "HUABU_PUBLIC_ORIGIN='https://public.huabu.example:8443'",
+    );
+    expect(result.warnings).toEqual([]);
+    expect(() =>
+      buildAgentletConnectionCommand({
+        ...request,
+        origin: 'file:///tmp/huabu',
+      }),
+    ).toThrow('Origin must be an HTTP(S) origin without a path');
+  });
+  it.each([
+    'https://example.com/path',
+    'file:///tmp/huabu',
+    'https://user:secret@example.com',
+    'https://example.com/?x=1',
+  ])('rejects invalid root origins: %s', (origin) => {
+    expect(() =>
+      buildAgentletConnectionCommand({ ...request, origin }),
+    ).toThrow('Origin must be an HTTP(S) origin without a path');
   });
 });

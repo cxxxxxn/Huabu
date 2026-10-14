@@ -101,29 +101,34 @@ describe('spawned agent environment', () => {
         'cli-token',
         { AGENTLET_REACHBACK_DIR: '/tmp/reachback' },
         { HUABU_RFS_URL: 'http://127.0.0.1:3001/api/rfs/canvas-1' },
+        {},
       ),
     ).toEqual({
       AGENTLET_SERVER: 'ws://127.0.0.1:3001/api/acp/agent',
       AGENTLET_TOKEN: 'cli-token',
-      AGENTLET_SERVICE_SDK_URL: expect.stringMatching(
-        /\/service-sdk\/index\.js$/,
-      ),
       AGENTLET_REACHBACK_DIR: '/tmp/reachback',
       HUABU_RFS_URL: 'http://127.0.0.1:3001/api/rfs/canvas-1',
     })
   })
 
-  it('keeps the daemon token authoritative over host environment overrides', () => {
+  it('rejects a session token declaration without exposing its value', () => {
+    expect(() =>
+      buildAgentProcessEnv('ws://daemon.test', 'daemon-token', {}, {
+        AGENTLET_TOKEN: 'host-secret',
+      }, {}),
+    ).toThrow('Session cannot override protected environment key: AGENTLET_TOKEN')
+  })
+
+  it('preserves ordinary session overrides without any host-specific SDK injection', () => {
     expect(
       buildAgentProcessEnv('ws://daemon.test', 'daemon-token', {}, {
         AGENTLET_SERVER: 'ws://host.test',
-        AGENTLET_TOKEN: 'host-token',
         AGENTLET_SERVICE_SDK_URL: 'file:///tmp/untrusted.js',
-      }),
+      }, {}),
     ).toMatchObject({
       AGENTLET_SERVER: 'ws://host.test',
       AGENTLET_TOKEN: 'daemon-token',
-      AGENTLET_SERVICE_SDK_URL: expect.not.stringContaining('untrusted'),
+      AGENTLET_SERVICE_SDK_URL: 'file:///tmp/untrusted.js',
     })
   })
 })

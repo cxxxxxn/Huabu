@@ -18,8 +18,8 @@
  *   canvas-internal agent.
  * - `POST agent` — create one visible Agent Node and optionally start it.
  * - `POST agent/:threadId/prompt` — submit a turn to an existing Agent.
- * - `GET  skill` — pull the full RFS usage guide (per-canvas `skill.md` override
- *   or the bundled default).
+ * - `GET  skill` — pull the header-selected HTTP/CLI usage guide with live
+ *   Space Skill Frames.
  *
  * Auth for every endpoint is a per-request `Authorization: Bearer $AGENTLET_TOKEN`
  * header. Errors use the canonical {@link ApiErrorBody}; on `4xx`/`5xx` the
@@ -34,6 +34,16 @@ import { z } from 'zod';
 
 import { inkIntentReportSchema } from './agent.js';
 import { CANVAS_NODE_TYPES } from '../canvas/node.js';
+
+export const RFS_SKILL_CLIENT_HEADER = 'X-Huabu-Skill-Client';
+export const rfsSkillClientSchema = z.enum(['http', 'rfs-cli']);
+export type RfsSkillClient = z.infer<typeof rfsSkillClientSchema>;
+
+export const rfsSkillParamsSchema = z.object({
+  canvasId: z.string().min(1).max(256),
+  skillId: z.string().min(1).max(128),
+});
+export type RfsSkillParams = z.infer<typeof rfsSkillParamsSchema>;
 
 export const rfsInkIntentParamsSchema = z.object({
   canvasId: z.string().min(1).max(256),

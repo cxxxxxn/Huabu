@@ -3,27 +3,18 @@
 
 import { randomBytes } from 'node:crypto';
 
-import {
-  getAgentletGateway,
-  getDaemonAuth,
-  getDaemonSupervisor,
-} from '@agenetes/agentlet-host';
+import { getDaemonAuth } from '@agenetes/agentlet-host';
+import { parse } from 'dotenv';
 
 import { getExternalAgentRuntimeConfig } from './modules/agent/acp/runtime-config.js';
 import {
   normalizePublicOrigin,
   resolveConfiguredPublicOrigin,
 } from './modules/security/public-origin.js';
-import { SECRET_IDS } from './security/secret-ids.js';
-import {
-  getPersistedSecret,
-  isSecretStoreWritable,
-  setSecret,
-} from './security/secret-store.js';
 
 import type {
   AgentletConnectionCommandResponse,
-  ConnectionTokenConfig,
+  AgentletConnectionCommandRequest,
   ConnectionTokenSource,
 } from '@huabu/shared';
 
@@ -37,14 +28,12 @@ import type {
  * the server process, so agent reachback credentials survive an
  * agentlet daemon restart.
  *
- * The generated fallback is available during module composition. After the
- * SecretStore initializes, {@link initializeConnectionToken} activates the
- * persisted/environment/generated precedence before the server listens.
+ * The environment/generated choice is captured at first use during module
+ * composition. Persisted overrides are deliberately ignored and retained.
  */
 let generatedToken: string | null = null;
 let activeToken: string | null = null;
 let activeSource: ConnectionTokenSource | null = null;
-let mutationQueue = Promise.resolve();
 
 function getGeneratedToken(): string {
   generatedToken ??= randomBytes(32).toString('hex');
@@ -57,21 +46,12 @@ function getEnvironmentToken(): string | null {
 
 function resolveFallback(): {
   token: string;
-  source: Exclude<ConnectionTokenSource, 'stored'>;
+  source: ConnectionTokenSource;
 } {
   const environment = getEnvironmentToken();
   return environment
     ? { token: environment, source: 'environment' }
     : { token: getGeneratedToken(), source: 'generated' };
-}
-
-function activateConnectionToken(
-  token: string,
-  source: ConnectionTokenSource,
-): void {
-  activeToken = token;
-  activeSource = source;
-  getDaemonAuth().setDaemonToken(token);
 }
 
 export function getConnectionToken(): string {
@@ -82,53 +62,8 @@ export function getConnectionToken(): string {
   return activeToken;
 }
 
-export function initializeConnectionToken(): ConnectionTokenConfig {
-  const stored = getPersistedSecret(SECRET_IDS.agentletConnectionToken);
-  if (stored) activateConnectionToken(stored, 'stored');
-  else {
-    const fallback = resolveFallback();
-    activateConnectionToken(fallback.token, fallback.source);
-  }
-  return getConnectionTokenConfig();
-}
-
-export function getConnectionTokenConfig(): ConnectionTokenConfig {
-  if (!activeSource) getConnectionToken();
-  return {
-    source: activeSource ?? 'generated',
-    writable: isSecretStoreWritable(),
-  };
-}
-
-function disconnectAgentlets(): void {
-  const gateway = getAgentletGateway();
-  for (const connection of gateway?.getAgentlets({ status: 'connected' }) ??
-    []) {
-    connection.disconnect('connection_token_changed');
-  }
-}
-
-export function setConnectionToken(
-  token: string | null,
-): Promise<ConnectionTokenConfig> {
-  const mutation = mutationQueue.then(async () => {
-    await setSecret(SECRET_IDS.agentletConnectionToken, token);
-    const next = token
-      ? { token, source: 'stored' as const }
-      : resolveFallback();
-    const changed = next.token !== getConnectionToken();
-    activateConnectionToken(next.token, next.source);
-    if (changed) {
-      disconnectAgentlets();
-      getDaemonSupervisor().restart();
-    }
-    return getConnectionTokenConfig();
-  });
-  mutationQueue = mutation.then(
-    () => undefined,
-    () => undefined,
-  );
-  return mutation;
+export function initializeConnectionToken(): void {
+  getDaemonAuth().setDaemonToken(getConnectionToken());
 }
 
 function quotePosix(value: string): string {
@@ -145,14 +80,30 @@ function isLoopbackHostname(hostname: string): boolean {
 }
 
 export class InvalidAgentletConnectionOriginError extends Error {}
+export class InvalidAgentletConnectionEnvFileError extends Error {}
+
+function quotePowerShell(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function dotenvValue(key: string, value: string): string {
+  for (const quote of ["'", '`', '"', '']) {
+    if (quote && value.includes(quote)) continue;
+    const line = `${key}=${quote}${value}${quote}\n`;
+    if (parse(line)[key] === value) return line;
+  }
+  throw new InvalidAgentletConnectionEnvFileError(
+    'This credential cannot be represented safely in a dotenv file; use Copy connection command instead',
+  );
+}
 
 export function buildAgentletConnectionCommand(
-  originValue: string,
+  request: AgentletConnectionCommandRequest,
 ): AgentletConnectionCommandResponse {
   let normalizedOrigin: string;
   try {
-    normalizedOrigin =
-      resolveConfiguredPublicOrigin() ?? normalizePublicOrigin(originValue);
+    const browserOrigin = normalizePublicOrigin(request.origin);
+    normalizedOrigin = resolveConfiguredPublicOrigin() ?? browserOrigin;
   } catch {
     throw new InvalidAgentletConnectionOriginError(
       'Origin must be an HTTP(S) origin without a path',
@@ -160,17 +111,35 @@ export function buildAgentletConnectionCommand(
   }
   const origin = new URL(normalizedOrigin);
   const insecure = origin.protocol === 'http:';
-  const endpoint = `${insecure ? 'ws:' : 'wss:'}//${origin.host}/api/acp/agent`;
-  const maxAgents = getExternalAgentRuntimeConfig().maxAgents;
-  const command = [
-    'agentlet daemon',
-    `--server ${quotePosix(endpoint)}`,
-    `--max-agents ${maxAgents}`,
-    `--token ${quotePosix(getConnectionToken())}`,
-    ...(insecure ? ['--allow-insecure'] : []),
-  ].join(' ');
+  const token = getConnectionToken();
+  let content: string;
+  if (request.format === 'env-file') {
+    content =
+      dotenvValue('HUABU_PUBLIC_ORIGIN', normalizedOrigin) +
+      dotenvValue('HUABU_CONNECTION_TOKEN', token);
+  } else if (request.shell === 'posix') {
+    const maxAgents = getExternalAgentRuntimeConfig().maxAgents;
+    content = `HUABU_PUBLIC_ORIGIN=${quotePosix(normalizedOrigin)} HUABU_CONNECTION_TOKEN=${quotePosix(token)} pnpm start:daemon --max-agents ${maxAgents}`;
+  } else {
+    const maxAgents = getExternalAgentRuntimeConfig().maxAgents;
+    content = [
+      '& {',
+      "  $huabuPreviousOrigin = [Environment]::GetEnvironmentVariable('HUABU_PUBLIC_ORIGIN', 'Process')",
+      "  $huabuPreviousToken = [Environment]::GetEnvironmentVariable('HUABU_CONNECTION_TOKEN', 'Process')",
+      '  try {',
+      `    $env:HUABU_PUBLIC_ORIGIN = ${quotePowerShell(normalizedOrigin)}`,
+      `    $env:HUABU_CONNECTION_TOKEN = ${quotePowerShell(token)}`,
+      `    pnpm start:daemon --max-agents ${maxAgents}`,
+      '  } finally {',
+      "    [Environment]::SetEnvironmentVariable('HUABU_PUBLIC_ORIGIN', $huabuPreviousOrigin, 'Process')",
+      "    [Environment]::SetEnvironmentVariable('HUABU_CONNECTION_TOKEN', $huabuPreviousToken, 'Process')",
+      '  }',
+      '}',
+    ].join('\n');
+  }
   return {
-    command,
+    content,
+    source: activeSource ?? 'generated',
     warnings: [
       ...(isLoopbackHostname(origin.hostname) ? (['loopback'] as const) : []),
       ...(insecure ? (['insecure'] as const) : []),
@@ -182,5 +151,4 @@ export function _resetConnectionTokenForTests(): void {
   generatedToken = null;
   activeToken = null;
   activeSource = null;
-  mutationQueue = Promise.resolve();
 }

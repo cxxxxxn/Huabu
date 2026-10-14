@@ -1,5 +1,5 @@
 import { arch, hostname, platform } from 'node:os'
-import { join, resolve } from 'node:path'
+import { resolve } from 'node:path'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import WebSocket from 'ws'
 import {
@@ -31,6 +31,11 @@ import {
 } from './session-bootstrap.js'
 import type { AgentletOptions } from './cli.js'
 import { resolveDeviceIdentity } from './device-identity.js'
+import {
+  createBootstrapEnv,
+  interpolateBootstrapDestination,
+  mergeAgentEnvironment,
+} from './bootstrap-env.js'
 
 interface ManagedAgent {
   sessionId: string
@@ -85,28 +90,13 @@ export class Agentlet {
   private readonly stopOperations = new Map<string, Promise<StopResult>>()
   private handshakeComplete = false
 
-  /**
-   * Unified env registry — all daemon-managed environment variables that
-   * are injected into spawned agent processes. Initialized from defaults,
-   * then overridden by process.env if present. Individual dirs are created
-   * lazily when resources are received via server/sendResource.
-   */
-  private readonly envRegistry: Record<string, string> = {}
+  private readonly bootstrapEnv: Readonly<Record<string, string>>
 
   constructor(options: AgentletOptions, logger: Logger) {
-    this.options = options
+    this.bootstrapEnv = createBootstrapEnv(Object.entries(options.bootstrapEnv ?? {}))
+    this.options = { ...options, bootstrapEnv: this.bootstrapEnv }
     this.logger = logger
     this.daemonId = resolveAgentletId(options.agentletId)
-
-    // Well-known env vars with defaults — process.env overrides if set.
-    // Values are resolved to absolute paths against the daemon cwd so that
-    // spawned agents (which run in a different cwd) reference the same dir.
-    const defaults: Record<string, string> = {
-      AGENTLET_REACHBACK_DIR: join('node_modules', '.cache', 'agentlet', 'reachback'),
-    }
-    for (const [key, fallback] of Object.entries(defaults)) {
-      this.envRegistry[key] = resolve(process.env[key] || fallback)
-    }
   }
 
   async start(): Promise<void> {
@@ -118,16 +108,10 @@ export class Agentlet {
 
   /**
    * Resolve `${ENV_VAR}` references in a destination path against
-   * the daemon's envRegistry.
+   * the explicit bootstrap environment.
    */
   private resolveDestination(destination: string): string {
-    return destination.replace(/\$\{([^}]+)\}/g, (_match, varName) => {
-      const value = this.envRegistry[varName]
-      if (!value) {
-        throw new Error(`Unknown env var in destination: ${varName}`)
-      }
-      return value
-    })
+    return interpolateBootstrapDestination(destination, this.bootstrapEnv)
   }
 
   /**
@@ -233,7 +217,7 @@ export class Agentlet {
     if (!this.handshakeComplete && 'id' in msg && msg.id === 1) {
       if ('error' in msg && msg.error) {
         this.logger.error('handshake_failed', { code: msg.error.code, message: msg.error.message })
-        this.shutdown('handshake_failed')
+        this.shutdown('handshake_failed', 1)
         return
       }
       if ('result' in msg) {
@@ -382,6 +366,21 @@ export class Agentlet {
     }
 
     const autoRestart = sessionSpec.autoRestart ?? false
+    let agentEnv: NodeJS.ProcessEnv
+    try {
+      agentEnv = buildAgentProcessEnv(
+        this.options.server,
+        this.options.token,
+        this.bootstrapEnv,
+        sessionSpec.env,
+      )
+    } catch (error) {
+      this.sendDaemonResponse(requestId, undefined, {
+        code: -32602,
+        message: error instanceof Error ? error.message : String(error),
+      })
+      return
+    }
 
     if (
       this.options.maxAgents &&
@@ -416,20 +415,11 @@ export class Agentlet {
     this.logger.info('spawning_agent', { command, cwd, sessionId: params.sessionId })
 
     try {
-      // Inject daemon-managed env vars into the spawned agent process:
-      // - AGENTLET_SERVER: WS URL for reachback HTTP derivation
-      // - AGENTLET_TOKEN: daemon token used to authenticate reachback
-      // - envRegistry: all well-known dirs (AGENTLET_REACHBACK_DIR, etc.)
-      // Host env overrides defaults, except for the daemon-owned token.
       const agent = new AgentProcess({
         command,
         cwd,
-        env: buildAgentProcessEnv(
-          this.options.server,
-          this.options.token,
-          this.envRegistry,
-          sessionSpec.env,
-        ),
+        env: agentEnv,
+        inheritEnv: false,
       })
 
       agent.on('error', (err) => {
@@ -822,7 +812,7 @@ export class Agentlet {
     this.reconnectTimer = setTimeout(() => this.connectDaemonControl(), backoff)
   }
 
-  private async shutdown(reason: string): Promise<void> {
+  private async shutdown(reason: string, exitCode = 0): Promise<void> {
     if (this.shutdownInProgress) return
     this.shutdownInProgress = true
 
@@ -834,11 +824,11 @@ export class Agentlet {
       this.reconnectTimer = null
     }
 
-    await this.shutdownDaemon(reason)
+    await this.shutdownDaemon(reason, exitCode)
     this.logger.info('stopped', { reason })
   }
 
-  private async shutdownDaemon(reason: string): Promise<void> {
+  private async shutdownDaemon(reason: string, exitCode: number): Promise<void> {
     // Stop all managed agents
     for (const [sessionId, managed] of this.agents) {
       this.logger.info('stopping_agent', { sessionId })
@@ -863,7 +853,7 @@ export class Agentlet {
       this.controlWs.close()
     }
 
-    process.exit(0)
+    process.exit(exitCode)
   }
 
   private waitForAgentExit(agent: AgentProcess, ms: number): Promise<void> {
@@ -892,17 +882,18 @@ export class Agentlet {
 export function buildAgentProcessEnv(
   server: string,
   token: string,
-  envRegistry: Readonly<Record<string, string>>,
-  sessionEnv?: Readonly<Record<string, string>>,
-): Record<string, string> {
-  return {
-    AGENTLET_SERVER: server,
-    ...envRegistry,
-    ...sessionEnv,
-    AGENTLET_TOKEN: token,
-    AGENTLET_SERVICE_SDK_URL: new URL(
-      './service-sdk/index.js',
-      import.meta.url,
-    ).href,
-  }
+  bootstrapEnv: Readonly<Record<string, string>>,
+  sessionEnv: Readonly<Record<string, string>> = {},
+  inherited: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  return mergeAgentEnvironment(
+    { ...inherited, AGENTLET_SERVER: server },
+    sessionEnv,
+    createBootstrapEnv(Object.entries(bootstrapEnv), platform),
+    {
+      AGENTLET_TOKEN: token,
+    },
+    platform,
+  )
 }

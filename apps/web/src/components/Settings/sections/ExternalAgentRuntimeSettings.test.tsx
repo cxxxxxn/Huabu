@@ -7,28 +7,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   createConnectionCommand,
-  getConnectionTokenConfig,
   getRuntimeConfig,
-  updateConnectionToken,
   updateRuntimeConfig,
   toast,
 } = vi.hoisted(() => ({
   createConnectionCommand: vi.fn(),
-  getConnectionTokenConfig: vi.fn(),
   getRuntimeConfig: vi.fn(),
-  updateConnectionToken: vi.fn(),
   updateRuntimeConfig: vi.fn(),
   toast: vi.fn(),
 }));
-
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
-}));
+vi.mock('react-i18next', () => {
+  const t = (key: string) => key;
+  return { useTranslation: () => ({ t }) };
+});
 vi.mock('@/api/acp', () => ({
   createAgentletConnectionCommand: createConnectionCommand,
-  getConnectionTokenConfig,
   getExternalAgentRuntimeConfig: getRuntimeConfig,
-  updateConnectionToken,
   updateExternalAgentRuntimeConfig: updateRuntimeConfig,
 }));
 vi.mock('@/components/Common/Toast', () => ({ toast }));
@@ -36,30 +30,23 @@ vi.mock('@/components/Common/Toast', () => ({ toast }));
 import { ExternalAgentRuntimeSettings } from './ExternalAgentRuntimeSettings';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
-
 let root: Root;
 let container: HTMLDivElement;
-
+const originalExecCommand = Object.getOwnPropertyDescriptor(
+  document,
+  'execCommand',
+);
+const content =
+  "HUABU_PUBLIC_ORIGIN='https://huabu.example' HUABU_CONNECTION_TOKEN='secret' pnpm start:daemon --max-agents 10";
 beforeEach(() => {
-  getRuntimeConfig.mockResolvedValue({
-    idleTimeoutSecs: 600,
-    maxAgents: 10,
-  });
+  getRuntimeConfig.mockResolvedValue({ idleTimeoutSecs: 600, maxAgents: 10 });
   updateRuntimeConfig.mockResolvedValue({
     idleTimeoutSecs: 1800,
     maxAgents: 10,
   });
-  getConnectionTokenConfig.mockResolvedValue({
-    source: 'stored',
-    writable: true,
-  });
-  updateConnectionToken.mockResolvedValue({
-    source: 'stored',
-    writable: true,
-  });
   createConnectionCommand.mockResolvedValue({
-    command:
-      "agentlet daemon --server 'wss://huabu.example/api/acp/agent' --max-agents 10 --token 'secret'",
+    content,
+    source: 'environment',
     warnings: [],
   });
   Object.defineProperty(navigator, 'clipboard', {
@@ -70,66 +57,52 @@ beforeEach(() => {
   document.body.appendChild(container);
   root = createRoot(container);
 });
-
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
   vi.clearAllMocks();
+  if (originalExecCommand)
+    Object.defineProperty(document, 'execCommand', originalExecCommand);
+  else Reflect.deleteProperty(document, 'execCommand');
 });
+async function render() {
+  await act(async () => root.render(<ExternalAgentRuntimeSettings />));
+}
+function button(key: string) {
+  const found = [...container.querySelectorAll('button')].find(
+    (button) => button.textContent === key,
+  );
+  if (!found) throw new Error(`Button not found: ${key}`);
+  return found;
+}
 
 describe('ExternalAgentRuntimeSettings', () => {
-  it('places responsive token controls below the full-width description', async () => {
-    await act(async () => {
-      root.render(<ExternalAgentRuntimeSettings />);
-    });
-
-    const tokenInput = container.querySelector<HTMLInputElement>(
-      '#agentlet-connection-token',
+  it('shows preparation and responsive How to connect without token editors or automatic reveals', async () => {
+    await render();
+    expect(container.textContent).toContain('settings.agentletHowToConnect');
+    expect(container.textContent).toContain('git clone');
+    expect(container.textContent).toContain('pnpm install');
+    expect(container.textContent).toContain(
+      'settings.agentletGeneratedTokenWarning',
     );
-    if (!tokenInput) throw new Error('Connection token input not found');
-
-    const controls = tokenInput.parentElement;
-    const controlRow = controls?.parentElement;
-    const settingRow = controlRow?.parentElement;
-    expect(settingRow?.classList.contains('flex-col')).toBe(true);
-    expect(settingRow?.classList.contains('items-stretch')).toBe(true);
-    expect(controlRow?.classList.contains('w-full')).toBe(true);
+    expect(container.querySelector('input[type="password"]')).toBeNull();
+    expect(container.querySelector('#agentlet-connection-token')).toBeNull();
+    expect(container.textContent).not.toContain('secret');
+    expect(createConnectionCommand).not.toHaveBeenCalled();
+    const controls = button('settings.agentletCommandCopy').parentElement;
     expect(controls?.classList.contains('flex-wrap')).toBe(true);
     expect(controls?.classList.contains('w-full')).toBe(true);
-    expect(tokenInput.classList.contains('flex-1')).toBe(true);
-    expect(tokenInput.classList.contains('basis-56')).toBe(true);
-
-    const buttons = controls?.querySelectorAll('button') ?? [];
-    expect(buttons.length).toBeGreaterThan(0);
-    for (const button of buttons) {
-      expect(button.classList.contains('shrink-0')).toBe(true);
-      expect(button.classList.contains('whitespace-nowrap')).toBe(true);
-    }
+    expect(controls?.parentElement?.classList.contains('w-full')).toBe(true);
   });
 
-  it('preserves the process limit when saving the idle timeout', async () => {
-    await act(async () => {
-      root.render(<ExternalAgentRuntimeSettings />);
-    });
-
-    const idleTimeout = [...container.querySelectorAll('button')].find(
-      (button) => button.textContent?.includes('settings.tenMinutesDefault'),
-    );
-    if (!idleTimeout) throw new Error('Idle-timeout selector not found');
-
-    await act(async () => {
-      idleTimeout.click();
-    });
-
-    const thirtyMinutes = [...document.body.querySelectorAll('button')].find(
+  it('preserves the process limit when saving idle timeout', async () => {
+    await render();
+    await act(async () => button('settings.tenMinutesDefault').click());
+    const selected = [...document.body.querySelectorAll('button')].find(
       (button) => button.textContent === 'settings.thirtyMinutes',
     );
-    if (!thirtyMinutes) throw new Error('Thirty-minute option not found');
-
-    await act(async () => {
-      thirtyMinutes.click();
-    });
-
+    if (!selected) throw new Error('Thirty-minute option not found');
+    await act(async () => selected.click());
     expect(updateRuntimeConfig).toHaveBeenCalledWith({
       idleTimeoutSecs: 1800,
       maxAgents: 10,
@@ -140,73 +113,87 @@ describe('ExternalAgentRuntimeSettings', () => {
     );
   });
 
-  it('does not render the active token and saves a replacement', async () => {
-    await act(async () => {
-      root.render(<ExternalAgentRuntimeSettings />);
-    });
+  it.each([
+    [
+      'settings.agentletCommandCopy',
+      'command',
+      'settings.agentletCommandCopied',
+    ],
+    [
+      'settings.agentletEnvFileCopy',
+      'env-file',
+      'settings.agentletEnvFileCopied',
+    ],
+  ])(
+    'copies only on explicit action without rendering returned secret text',
+    async (key, format, copied) => {
+      await render();
+      await act(async () => button(key).click());
+      expect(createConnectionCommand).toHaveBeenCalledWith('posix', format);
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith(content);
+      expect(container.textContent).not.toContain('secret');
+      expect(container.textContent).not.toContain('https://huabu.example');
+      expect(toast).toHaveBeenCalledWith(copied, { tone: 'success' });
+    },
+  );
 
+  it('uses the explicit PowerShell choice instead of browser platform inference', async () => {
+    await render();
+    const selector = container.querySelector<HTMLButtonElement>(
+      '[aria-label="settings.agentletTargetShell"]',
+    );
+    if (!selector) throw new Error('Shell selector not found');
+    await act(async () => selector.click());
+    const powershell = [...document.body.querySelectorAll('button')].find(
+      (button) => button.textContent === 'PowerShell',
+    );
+    if (!powershell) throw new Error('PowerShell choice not found');
+    await act(async () => powershell.click());
+    await act(async () => button('settings.agentletCommandCopy').click());
+    expect(createConnectionCommand).toHaveBeenCalledWith(
+      'powershell',
+      'command',
+    );
+  });
+
+  it.each([
+    ['generated', [], 'settings.agentletCommandCopiedGenerated'],
+    ['environment', ['loopback'], 'settings.agentletCommandCopiedLoopback'],
+    ['environment', ['insecure'], 'settings.agentletCommandCopiedInsecure'],
+  ])(
+    'surfaces generated token and transport warnings',
+    async (source, warnings, key) => {
+      createConnectionCommand.mockResolvedValue({ content, source, warnings });
+      await render();
+      await act(async () => button('settings.agentletCommandCopy').click());
+      expect(toast).toHaveBeenCalledWith(key, { tone: 'warning' });
+    },
+  );
+
+  it('reports HTTP/clipboard failure explicitly and re-enables both copy actions', async () => {
+    createConnectionCommand.mockRejectedValueOnce(
+      new Error('copy endpoint failed'),
+    );
+    await render();
+    await act(async () => button('settings.agentletCommandCopy').click());
+    expect(toast).toHaveBeenCalledWith('copy endpoint failed', {
+      tone: 'danger',
+    });
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+    vi.mocked(navigator.clipboard.writeText).mockRejectedValueOnce(
+      new Error('clipboard blocked'),
+    );
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: vi.fn(() => {
+        throw new Error('clipboard blocked');
+      }),
+    });
+    await act(async () => button('settings.agentletEnvFileCopy').click());
+    expect(toast).toHaveBeenCalledWith('clipboard blocked', { tone: 'danger' });
+    expect(button('settings.agentletCommandCopy').disabled).toBe(false);
+    expect(button('settings.agentletEnvFileCopy').disabled).toBe(false);
     expect(container.textContent).not.toContain('secret');
-    const tokenInput = container.querySelector<HTMLInputElement>(
-      '#agentlet-connection-token',
-    );
-    if (!tokenInput) throw new Error('Connection token input not found');
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(
-        HTMLInputElement.prototype,
-        'value',
-      )?.set?.call(tokenInput, 'replacement-token');
-      tokenInput.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-    const saveButton = [
-      ...(tokenInput.parentElement?.querySelectorAll('button') ?? []),
-    ].find((button) => button.textContent === 'settings.saveChanges');
-    if (!saveButton) throw new Error('Connection token save button not found');
-    await act(async () => {
-      saveButton.click();
-    });
-
-    expect(updateConnectionToken).toHaveBeenCalledWith({
-      token: 'replacement-token',
-    });
-    expect(container.textContent).not.toContain('replacement-token');
-  });
-
-  it('copies the generated command directly without rendering it', async () => {
-    await act(async () => {
-      root.render(<ExternalAgentRuntimeSettings />);
-    });
-
-    const copyButton = [...container.querySelectorAll('button')].find(
-      (button) => button.textContent === 'settings.agentletCommandCopy',
-    );
-    if (!copyButton) throw new Error('Copy command button not found');
-    await act(async () => {
-      copyButton.click();
-    });
-
-    expect(createConnectionCommand).toHaveBeenCalledOnce();
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
-      expect.stringContaining('wss://huabu.example/api/acp/agent'),
-    );
-    expect(container.textContent).not.toContain('wss://huabu.example');
-    expect(toast).toHaveBeenCalledWith('settings.agentletCommandCopied', {
-      tone: 'success',
-    });
-  });
-
-  it('clears only the stored override', async () => {
-    await act(async () => {
-      root.render(<ExternalAgentRuntimeSettings />);
-    });
-
-    const clearButton = [...container.querySelectorAll('button')].find(
-      (button) => button.textContent === 'settings.agentletTokenClear',
-    );
-    if (!clearButton) throw new Error('Clear token button not found');
-    await act(async () => {
-      clearButton.click();
-    });
-
-    expect(updateConnectionToken).toHaveBeenCalledWith({ token: null });
+    expect(document.querySelector('textarea')).toBeNull();
   });
 });

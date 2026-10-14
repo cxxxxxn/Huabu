@@ -17,7 +17,6 @@
  *  - `GET/POST/PATCH/DELETE /api/acp/profiles` — CRUD for spawn
  *     recipes with revision-checked launch and working-directory edits.
  *  - `GET/POST /api/acp/daemon` — daemon liveness + manual restart.
- *  - `GET/PUT /api/acp/connection-token` — masked credential configuration.
  *  - `POST /api/acp/connection-command` — explicit owner-only command reveal.
  *  - `GET /api/acp/threads/:threadId/cached-meta` — cached capabilities.
  *  - thread control POSTs — canonical realization plus per-session knobs.
@@ -45,8 +44,8 @@ import type {
   SetAcpSessionModeRequest,
   SetAcpSessionModeResponse,
   ExternalAgentRuntimeConfig,
-  ConnectionTokenConfig,
-  ConnectionTokenUpdate,
+  ConnectionShell,
+  ConnectionCopyFormat,
   AgentletConnectionCommandResponse,
   WarmAcpSessionRequest,
   WarmAcpSessionResponse,
@@ -78,8 +77,8 @@ export type {
   SetAcpSessionModeRequest,
   SetAcpSessionModeResponse,
   ExternalAgentRuntimeConfig,
-  ConnectionTokenConfig,
-  ConnectionTokenUpdate,
+  ConnectionShell,
+  ConnectionCopyFormat,
   AgentletConnectionCommandResponse,
   ConnectedAgentletDevice,
   WarmAcpSessionRequest,
@@ -191,28 +190,15 @@ export async function updateExternalAgentRuntimeConfig(
   });
 }
 
-export async function getConnectionTokenConfig(): Promise<ConnectionTokenConfig> {
-  return apiFetch<ConnectionTokenConfig>(routes.acpConnectionToken, {
-    fallbackMessage: 'Failed to read the Agentlet connection token settings',
-  });
-}
-
-export async function updateConnectionToken(
-  update: ConnectionTokenUpdate,
-): Promise<ConnectionTokenConfig> {
-  return apiFetch<ConnectionTokenConfig>(routes.acpConnectionToken, {
-    method: 'PUT',
-    json: update,
-    fallbackMessage: 'Failed to update the Agentlet connection token',
-  });
-}
-
-export async function createAgentletConnectionCommand(): Promise<AgentletConnectionCommandResponse> {
+export async function createAgentletConnectionCommand(
+  shell: ConnectionShell,
+  format: ConnectionCopyFormat,
+): Promise<AgentletConnectionCommandResponse> {
   return apiFetch<AgentletConnectionCommandResponse>(
     routes.acpConnectionCommand,
     {
       method: 'POST',
-      json: { origin: window.location.origin },
+      json: { origin: window.location.origin, shell, format },
       fallbackMessage: 'Failed to create the Agentlet connection command',
     },
   );

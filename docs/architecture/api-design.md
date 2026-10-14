@@ -112,6 +112,10 @@ export async function postEcho(body: EchoBody): Promise<EchoResponse> {
 - **Error message**: take from the first zod issue, fall back to a
   fixed string. Never ship `error.format()` — it leaks zod internals.
 
+## RFS Skill delivery
+
+`rfsSkillParamsSchema` in `packages/shared/src/types/api/rfs.ts` validates canvas and Skill path parameters for the authenticated focused-guide route. Root and focused Skills keep the existing `GET /api/rfs/:canvasId/skill[/<skillId>]` URLs. `X-Huabu-Skill-Client` selects `http` or `rfs-cli`; absence defaults to `http`, unknown values return `400`, and variant responses include `Vary: X-Huabu-Skill-Client`. Both presentations append the same live Skill Frames at the root. The former Space-root `skill.md` override is ignored. HTTP exposes `agents`, `interactive-views`, `layout`, `services`, and `tasks`; CLI intentionally exposes only `agents`, `layout`, and `services` while Task/View abstractions await redesign. Unknown or unavailable IDs retain explicit 404 errors. CLI Service commands reuse the existing Service HTTP contracts; local extraction output is not a new wire response.
+
 ## Agent Node owner-specific writes
 
 [`agent-node.ts`](../../packages/shared/src/types/api/agent-node.ts) defines the bounded editable node schema, launch overrides, association bodies, result acknowledgements, and internal projection shape. `PUT /api/canvas/:canvasId` accepts editable fields, not a complete replacement read model: omitted fields remain unchanged, Question FSM fields cannot be submitted, and the server composes from current state under the Canvas mutex. The same ownership guard applies to ordinary `MERGE_NODE_DATA`, regardless of the submitted originator. It does not reserve unrelated node types' `status` or thread-reference metadata.
@@ -149,6 +153,10 @@ Malformed request fields and malformed cursors return HTTP 400 with `code: "malf
 `GET/PUT /api/acp/runtime-config` uses `externalAgentRuntimeConfigSchema` from [`acp.ts`](../../packages/shared/src/types/api/acp.ts). The owner-only full replacement body contains `idleTimeoutSecs` and `maxAgents`; `maxAgents` is a positive JavaScript safe integer with default `10` and no product-defined upper bound. The value is persisted globally and supplied to the supervised Agentlet daemon as `--max-agents` on its next start; the API does not restart the daemon or configure manually launched remote daemons.
 
 `GET /api/acp/profiles` returns persisted Profiles, active connected devices, connectivity-filtered `selectableProfileIds`, supervised-child health, and optional Agent defaults. `POST /api/acp/profiles` requires an explicit active `agentletId`. `GET /api/acp/agent-cli` requires exactly one explicit target: `agentletId` while creating or `profileId` while editing. The server validates every target against the live Gateway and never substitutes the supervised child or first connected device. Harness commands are compiled by the target Agentlet during spawn; there is no HTTP launch-preview contract.
+
+## External-agent connection copy
+
+`POST /api/acp/connection-command` is an owner-only, non-cacheable explicit credential reveal. The canonical `agentletConnectionCommandRequestSchema` validates strict `{ origin, shell: "posix" | "powershell", format: "command" | "env-file" }`. Its response is `{ content, source: "environment" | "generated", warnings }`; copy content is a source-daemon invocation or private dotenv data, never an Agentlet token argv flag. Origin mismatch/invalid roots and lossless dotenv encoding failures return explicit 400 errors; operational failures remain 500. The former `GET/PUT /api/acp/connection-token`, update/config wire types, and web helpers are removed; old persisted records are deliberately untouched.
 
 ## Utility Agent selection
 

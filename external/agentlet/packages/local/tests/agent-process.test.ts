@@ -31,4 +31,11 @@ describe('process transport selection', () => {
       shell: true, cwd: '/work', stdio: ['pipe', 'pipe', 'pipe'],
     }))
   })
+
+  it('does not reintroduce ambient values after the managed environment has been finalized', () => {
+    const env = { AGENTLET_TOKEN: 'authoritative', TOOL: 'entry' }
+    new AgentProcess({ command: 'agent --acp', env, inheritEnv: false }).start()
+    expect(spawn).toHaveBeenCalledWith('agent --acp', expect.objectContaining({ env }))
+    expect(vi.mocked(spawn).mock.calls[0]?.[1]?.env).toBe(env)
+  })
 })

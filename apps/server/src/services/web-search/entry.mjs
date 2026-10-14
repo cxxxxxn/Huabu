@@ -64,8 +64,8 @@ export async function search({ config, input }) {
 
 export async function main(argv = process.argv.slice(2)) {
   const options = parseCliArgs(argv);
-  const sdkUrl = process.env.AGENTLET_SERVICE_SDK_URL;
-  if (!sdkUrl) throw new Error('AGENTLET_SERVICE_SDK_URL is unavailable');
+  const sdkUrl = process.env.HUABU_SERVICE_SDK_URL;
+  if (!sdkUrl) throw new Error('HUABU_SERVICE_SDK_URL is unavailable');
   const { withServiceContext } = await import(sdkUrl);
   await withServiceContext('web-search', async ({ manifest, config }) => {
     if (options.help) {

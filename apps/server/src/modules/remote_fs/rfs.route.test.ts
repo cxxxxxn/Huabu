@@ -236,9 +236,8 @@ describe('GET /api/rfs/:canvasId/skill', () => {
         );
       }
       expect(res.body).toContain('/capabilities/commands/$COMMAND');
-      expect(res.body).toContain('AGENTLET_SERVICE_SDK_URL');
       expect(res.body).toContain('/services');
-      expect(res.body).toContain('$HUABU_RFS_URL/skill/tasks');
+      expect(res.body).toContain('GET skill/services');
       expect(res.body).toContain('**parent-local**');
       expect(res.body).toContain('read-only `absolutePosition`');
       expect(res.body).toContain(
@@ -247,6 +246,23 @@ describe('GET /api/rfs/:canvasId/skill', () => {
       expect(res.body).toContain(
         `${getNodeDefaultSize('note').height}px nominal layout height`,
       );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('serves the anonymous CLI root from the same endpoint by header', async () => {
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/skill',
+        headers: { 'x-huabu-skill-client': 'rfs-cli' },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers.vary).toBe('X-Huabu-Skill-Client');
+      expect(response.body).toContain('huabu-rfs query --help');
+      expect(response.body).not.toContain('# Space-specific Skills');
     } finally {
       await app.close();
     }
@@ -269,11 +285,11 @@ describe('GET /api/rfs/:canvasId/skill', () => {
     }
   });
 
-  it('returns only the bundled root guide without authorization', async () => {
+  it('ignores a retired Space skill.md for anonymous and authenticated roots', async () => {
     seedNote('c1', 'node-1', 'Anchor', 'content');
     writeFileSync(
       join(diskDirOf('c1'), 'skill.md'),
-      '# Private Space Override',
+      '# Retired Space Override',
       'utf8',
     );
     const app = await buildApp();
@@ -289,8 +305,9 @@ describe('GET /api/rfs/:canvasId/skill', () => {
       });
 
       expect(anonymous.body).toMatch(/Accessing this Huabu Space/);
-      expect(anonymous.body).not.toContain('Private Space Override');
-      expect(authenticated.body).toContain('Private Space Override');
+      expect(authenticated.body).toMatch(/Accessing this Huabu Space/);
+      expect(anonymous.body).not.toContain('Retired Space Override');
+      expect(authenticated.body).not.toContain('Retired Space Override');
     } finally {
       await app.close();
     }
@@ -320,7 +337,7 @@ describe('GET /api/rfs/:canvasId/skill', () => {
     }
   });
 
-  it('appends Skill Frames after a legacy Space guide override', async () => {
+  it('appends Skill Frames to the bundled guide despite a retired skill.md', async () => {
     seedInstructionFrame('c1', 'skill', 'Use the team glossary.');
     writeFileSync(
       join(diskDirOf('c1'), 'skill.md'),
@@ -335,10 +352,10 @@ describe('GET /api/rfs/:canvasId/skill', () => {
         headers: { authorization: '******' },
       });
 
-      expect(response.body).toContain('# Legacy Space Guide');
+      expect(response.body).not.toContain('# Legacy Space Guide');
       expect(response.body).toContain('# Space-specific Skills');
       expect(response.body).toContain('Use the team glossary.');
-      expect(response.body).not.toMatch(/Accessing this Huabu Space/i);
+      expect(response.body).toMatch(/Accessing this Huabu Space/i);
     } finally {
       await app.close();
     }
@@ -363,6 +380,10 @@ describe('GET /api/rfs/:canvasId/skill', () => {
         method: 'GET',
         url: '/rfs/c1/skill/interactive-views',
       });
+      const services = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/skill/services',
+      });
       const unknown = await app.inject({
         method: 'GET',
         url: '/rfs/c1/skill/not-a-skill',
@@ -377,10 +398,114 @@ describe('GET /api/rfs/:canvasId/skill', () => {
       expect(tasks.body).toContain('# Durable Tasks and Runs');
       expect(agents.body).toContain('# Creating and Prompting Agents');
       expect(interactiveViews.body).toContain('# Building Interactive Views');
+      expect(services.statusCode).toBe(200);
+      expect(services.body).toContain('# Using Huabu Services');
+      expect(services.body).toContain('withServiceContext');
+      expect(services.body).toContain('urllib.request');
       expect(interactiveViews.body).toContain('huabu.view.connect');
       expect(unknown.statusCode).toBe(404);
       expect(unknown.json()).toMatchObject({ code: 'skill_not_found' });
       expect(traversal.statusCode).toBe(404);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('selects HTTP/CLI presentations by header and shares Skill Frames', async () => {
+    seedInstructionFrame('c1', 'skill', 'Use the CLI team glossary.');
+    const app = await buildApp();
+    const headers = { authorization: 'Bearer token' };
+    try {
+      const initial = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/skill',
+        headers: { ...headers, 'x-huabu-skill-client': 'rfs-cli' },
+      });
+      expect(initial.statusCode).toBe(200);
+      expect(initial.body).toContain('# Accessing this Huabu Space');
+      expect(initial.body).toContain('huabu-rfs query --help');
+      expect(initial.body).toContain('Use the CLI team glossary.');
+      expect(initial.body).not.toContain('curl -fsS');
+      const cli = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/skill',
+        headers: { ...headers, 'x-huabu-skill-client': 'rfs-cli' },
+      });
+      const http = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/skill',
+        headers,
+      });
+      expect(cli.body).toContain('# Accessing this Huabu Space');
+      expect(cli.body).toContain('huabu-rfs query --help');
+      expect(http.body).toContain('# Accessing this Huabu Space');
+      expect(cli.body).not.toBe(http.body);
+      expect(cli.headers.vary).toBe('X-Huabu-Skill-Client');
+      expect(cli.body).toContain('Use the CLI team glossary.');
+      expect(http.body).toContain('Use the CLI team glossary.');
+      expect(cli.body).toContain('# Space-specific Skills');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it.each([
+    ['agents', '# Creating and Prompting Agents'],
+    ['layout', '# Advanced Space Layout'],
+    ['services', '# Using Huabu Services'],
+  ])(
+    'loads focused CLI Skill %s without Space instructions',
+    async (id, heading) => {
+      seedInstructionFrame('c1', 'skill', 'Private shared instructions.');
+      const app = await buildApp();
+      try {
+        const res = await app.inject({
+          method: 'GET',
+          url: `/rfs/c1/skill/${id}`,
+          headers: {
+            'x-huabu-skill-client': 'rfs-cli',
+            authorization: 'Bearer token',
+          },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.body).toContain(heading);
+        expect(res.body).not.toContain('{{include:');
+        expect(res.body).not.toContain('Private shared instructions.');
+      } finally {
+        await app.close();
+      }
+    },
+  );
+
+  it('does not expose Task/View Skills to the CLI presentation', async () => {
+    const app = await buildApp();
+    try {
+      for (const id of ['tasks', 'interactive-views']) {
+        const response = await app.inject({
+          method: 'GET',
+          url: `/rfs/c1/skill/${id}`,
+          headers: { 'x-huabu-skill-client': 'rfs-cli' },
+        });
+        expect(response.statusCode).toBe(404);
+        expect(response.json()).toMatchObject({ code: 'skill_not_found' });
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects unknown Skill clients instead of falling back', async () => {
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/rfs/c1/skill',
+        headers: { 'x-huabu-skill-client': 'unknown' },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({
+        message: expect.stringContaining('Invalid Skill client'),
+      });
     } finally {
       await app.close();
     }

@@ -27,7 +27,7 @@ import {
   getAgentProfileRegistry,
   installAcpProfileCachePort,
   mountAgenetes,
-  resolveDaemonEntry,
+  resolveDaemonRuntime,
 } from './modules/agent/acp/index.js';
 import { initializeAgentDefaults } from './modules/agent/agent-defaults.js';
 import agentDefaultsRoutes from './modules/agent/agent-defaults.route.js';
@@ -275,8 +275,8 @@ app.register(rfsRoutes, { prefix: '/api/rfs' });
 // It mounts the stateless Gateway, forks & supervises the agentlet daemon,
 // and authenticates connections against the host-injected connection token.
 // The daemon owns the agent worker pool; the server tells it which agent CLI
-// to spawn (per user profile). The connection token never crosses the HTTP
-// boundary — it lives only in-process and on the loopback WS.
+// to spawn (per user profile). The token is revealed only by the explicit
+// owner-only no-store copy action and is never part of ordinary read models.
 //
 // L1 owns all deployment-layout knowledge and injects it downward:
 // the global connection token, the data directory, and the resolved
@@ -299,10 +299,17 @@ try {
     app.log.warn({ err }, '[acp] could not remove legacy acp-config.json');
   }
 }
+const daemonRuntime = resolveDaemonRuntime();
+if (!daemonRuntime.artifacts.serviceSdkEntry) {
+  app.log.warn(
+    '[acp] Service SDK artifact missing; direct HTTP remains available, rebuild client-runtime to use JS Service entries',
+  );
+}
 const agentletGateway = mountAgenetes(app, {
   connectionToken: getConnectionToken(),
   dataDir: getDataDir(),
-  daemonEntryPath: resolveDaemonEntry() ?? '',
+  daemonEntryPath: daemonRuntime.artifacts.daemonEntry ?? '',
+  bootstrapEnv: daemonRuntime.bootstrapEnv,
   getMaxAgents: () => getExternalAgentRuntimeConfig().maxAgents,
   // Host-namespaced env isolation: the agentlet daemon and every external
   // agent it spawns are host-agnostic and must receive their Huabu

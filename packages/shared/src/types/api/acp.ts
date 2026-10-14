@@ -526,27 +526,20 @@ export const acpAgentletStatusSchema = agentletStatusSchema;
 /** @deprecated Use {@link acpAgentletStatusSchema} instead. */
 export const acpDaemonStatusSchema = acpAgentletStatusSchema;
 
-export const connectionTokenSourceSchema = z.enum([
-  'stored',
-  'environment',
-  'generated',
-]);
+export const connectionTokenSourceSchema = z.enum(['environment', 'generated']);
 export type ConnectionTokenSource = z.infer<typeof connectionTokenSourceSchema>;
 
-export const connectionTokenConfigSchema = z.object({
-  source: connectionTokenSourceSchema,
-  writable: z.boolean(),
-});
-export type ConnectionTokenConfig = z.infer<typeof connectionTokenConfigSchema>;
-
-export const connectionTokenUpdateSchema = z.object({
-  token: z.string().trim().min(1).max(512).nullable(),
-});
-export type ConnectionTokenUpdate = z.infer<typeof connectionTokenUpdateSchema>;
-
-export const agentletConnectionCommandRequestSchema = z.object({
-  origin: z.url().max(2048),
-});
+export const connectionShellSchema = z.enum(['posix', 'powershell']);
+export type ConnectionShell = z.infer<typeof connectionShellSchema>;
+export const connectionCopyFormatSchema = z.enum(['command', 'env-file']);
+export type ConnectionCopyFormat = z.infer<typeof connectionCopyFormatSchema>;
+export const agentletConnectionCommandRequestSchema = z
+  .object({
+    origin: z.url().max(2048),
+    shell: connectionShellSchema,
+    format: connectionCopyFormatSchema,
+  })
+  .strict();
 export type AgentletConnectionCommandRequest = z.infer<
   typeof agentletConnectionCommandRequestSchema
 >;
@@ -560,7 +553,8 @@ export type AgentletConnectionCommandWarning = z.infer<
 >;
 
 export const agentletConnectionCommandResponseSchema = z.object({
-  command: z.string().min(1),
+  content: z.string().min(1),
+  source: connectionTokenSourceSchema,
   warnings: z.array(agentletConnectionCommandWarningSchema),
 });
 export type AgentletConnectionCommandResponse = z.infer<

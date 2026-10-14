@@ -24,7 +24,7 @@ Runtime Home-folder activation reserves the namespace switch before preparing an
     skills/<id>/SKILL.md          # user / memory-agent authored skills
   <canvasDir>/                    # dir name = safe(title)
     space.json                   # { canvasId, title, version, state:{nodes,edges,...}, createdAt, updatedAt }
-    skill.md                      # optional legacy per-Space RFS root-guide override (blob area `guide`)
+    skill.md                      # retired RFS override; ignored, retained only for cleanup compatibility
     nodes/
       <safe(label)>.md            # frontmatter: id/type/label/src/... + content(markdown body)
     .artifacts/                   # Disk BlobStore mapping for this Space
@@ -110,7 +110,7 @@ SQLite uses Node's built-in `node:sqlite`, which requires the `node:` prefix. Th
     blobs/                        # Disk *blob* store; override with HUABU_BLOB_ROOT
       <workspaceId>/
         <canvasId>/
-          skill.md                # blob area `guide`
+          skill.md                # retired guide blob retained only for cleanup compatibility
           .artifacts/             # blob area `artifacts`
           .memory/space.md        # blob area `memory`
           .upload/                # blob area `uploads`
