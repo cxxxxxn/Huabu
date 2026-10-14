@@ -812,6 +812,7 @@ export interface AgentTurnInput {
   attachments?: ChatAttachment[];
   groundingVisual?: VisibleCanvasGrounding;
   invokedSkills?: string[];
+  quotedComments?: AgentRequest['quotedComments'];
 }
 
 export interface PreparedAgentTurn extends AgentTurnInput {
@@ -935,6 +936,7 @@ export function prepareAgentTurnRetry(
     inputKind: message.inputKind ?? 'text',
     attachments: message.attachments,
     invokedSkills: message.invokedSkills,
+    quotedComments: message.quotedComments,
     groundingVisual: message.groundingVisual,
   });
 }
@@ -961,6 +963,33 @@ function sourceMessageMetadata(context: AgentChatContext): {
   };
 }
 
+export function createAgentTurnUserMessage(
+  prepared: PreparedAgentTurn,
+): Extract<ChatMessage, { role: 'user' }> {
+  const { selectedNodeIds, selectedStrokeIds } = sourceMessageMetadata(
+    prepared.sources.canvasContext,
+  );
+  return {
+    id: createId('message'),
+    role: 'user',
+    content: prepared.content,
+    ...(prepared.quotedComments?.length
+      ? { quotedComments: prepared.quotedComments }
+      : {}),
+    inputKind: prepared.inputKind,
+    ...(prepared.inputKind === 'ink-intent'
+      ? { inkInterpretation: { state: 'pending' as const } }
+      : {}),
+    groundingVisual: prepared.groundingVisual,
+    attachments: prepared.attachments,
+    ...(selectedNodeIds.length > 0 ? { selectedNodeIds } : {}),
+    ...(selectedStrokeIds.length > 0 ? { selectedStrokeIds } : {}),
+    ...(prepared.invokedSkills?.length
+      ? { invokedSkills: prepared.invokedSkills }
+      : {}),
+  };
+}
+
 export async function dispatchAgentTurn(
   input: PreparedAgentTurn,
   callbacks: AgentTurnCallbacks = {},
@@ -971,6 +1000,7 @@ export async function dispatchAgentTurn(
     content: prompt,
     mode: agentMode,
     invokedSkills,
+    quotedComments,
     attachments,
     inputKind,
   } = prepared;
@@ -983,7 +1013,7 @@ export async function dispatchAgentTurn(
     // thread's. The user may already have a stream running in a
     // different chat (canvas chat + question node both active).
     if (
-      (inputKind === 'text' && !prompt.trim()) ||
+      (inputKind === 'text' && !prompt.trim() && !quotedComments?.length) ||
       selectThreadIsLoading(useChatStore.getState(), threadId)
     ) {
       result.status = selectThreadIsLoading(useChatStore.getState(), threadId)
@@ -1009,10 +1039,8 @@ export async function dispatchAgentTurn(
     // selection, in gesturePreviewStore) so the chip matches what was
     // actually sent as context.
     const canvasContext = prepared.sources.canvasContext;
-    const {
-      selectedNodeIds: sentSelectedNodeIds,
-      selectedStrokeIds: sentSelectedStrokeIds,
-    } = sourceMessageMetadata(canvasContext);
+    const { selectedStrokeIds: sentSelectedStrokeIds } =
+      sourceMessageMetadata(canvasContext);
     const acceptanceKey = turnKey(requestScope.canvasId, threadId);
     if (turnAcceptanceSinks.has(acceptanceKey)) {
       result.status = 'busy';
@@ -1082,25 +1110,9 @@ export async function dispatchAgentTurn(
     setThreadLastAction(threadId, agentMode);
     callbacks.onStarted?.();
 
-    const userMessageId = createId('message');
-    addMessage(threadId, {
-      id: userMessageId,
-      role: 'user',
-      content: prompt,
-      inputKind,
-      ...(inputKind === 'ink-intent'
-        ? { inkInterpretation: { state: 'pending' as const } }
-        : {}),
-      groundingVisual: prepared.groundingVisual,
-      attachments,
-      ...(sentSelectedNodeIds.length > 0
-        ? { selectedNodeIds: sentSelectedNodeIds }
-        : {}),
-      ...(sentSelectedStrokeIds.length > 0
-        ? { selectedStrokeIds: sentSelectedStrokeIds }
-        : {}),
-      ...(invokedSkills && invokedSkills.length > 0 ? { invokedSkills } : {}),
-    });
+    const userMessage = createAgentTurnUserMessage(prepared);
+    const userMessageId = userMessage.id;
+    addMessage(threadId, userMessage);
 
     setThreadLoading(threadId, true);
 
@@ -1245,6 +1257,7 @@ export async function dispatchAgentTurn(
           agentBinding,
           anchorNodeId: requestScope.anchorNodeId,
           invokedSkills,
+          quotedComments,
           // Carry this thread's built-in selection so a model /
           // reasoning effort picked before the first message is applied
           // when the thread is created. Ignored server-side for external
