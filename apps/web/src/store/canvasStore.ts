@@ -967,6 +967,7 @@ const preprocessQueue = createPreprocessQueue({
 const nodeContentQueue = createNodeContentQueue({
   delayMs: NODE_CONTENT_DEBOUNCE_MS,
   getState: () => useCanvasStore.getState(),
+  waitForCreation: awaitQuestionCreation,
   retryStructure: () => useCanvasStore.getState().saveCanvas(),
   onRestoredContentPersisted: (canvasId, nodeId) =>
     preprocessQueue.resumeRestored(canvasId, nodeId),
@@ -1566,6 +1567,7 @@ const useCanvasStore = create<RFState>()(
           !state.nodes.some((old) => old.id === node.id),
       );
       if (createdQuestions.length > 0 && resolvedSource === 'ui') {
+        nodeContentQueue.prepareServerCreatedNodes(createdQuestions);
         const creation = Promise.all(
           createdQuestions.map((node) =>
             questionForks.get(`${state.canvasId}\0${node.data.threadId}`),
@@ -1766,6 +1768,7 @@ const useCanvasStore = create<RFState>()(
       const dirty = new Set(nodeContentQueue.pendingNodeIds());
       const skippedNodeIds: string[] = [];
       const skippedRemoteNodes: Node[] = [];
+      const advancedRemoteBaselines: Node[] = [];
       const preservedPendingNodeIds = new Set<string>();
       const localNodesById = new Map(
         get().nodes.map((node) => [node.id, node]),
@@ -1777,18 +1780,51 @@ const useCanvasStore = create<RFState>()(
               if (d.type === 'REPLACE_NODE' && dirty.has(d.next.id)) {
                 const prevData = (d.prev.data ?? {}) as Record<string, unknown>;
                 const nextData = (d.next.data ?? {}) as Record<string, unknown>;
+                const pendingFields = nodeContentQueue.pendingFields(d.next.id);
                 // JSON transport gives unchanged keywords/provenance separate
                 // object identities; compare their values, not references.
-                const changesPendingContent = [...NODE_CONTENT_KEYS].some(
+                const changedContentFields = [...NODE_CONTENT_KEYS].filter(
                   (key) => !deepEqual(prevData[key], nextData[key]),
                 );
+                const changesPendingContent = changedContentFields.some((key) =>
+                  pendingFields.has(key),
+                );
+                const local = localNodesById.get(d.next.id);
+                if (local?.type === 'question') {
+                  const localData = (local.data ?? {}) as Record<
+                    string,
+                    unknown
+                  >;
+                  const mergedData = { ...nextData };
+                  for (const key of pendingFields) {
+                    if (key in localData) mergedData[key] = localData[key];
+                    else delete mergedData[key];
+                  }
+                  preservedPendingNodeIds.add(d.next.id);
+                  if (changesPendingContent) {
+                    skippedNodeIds.push(d.next.id);
+                    skippedRemoteNodes.push(d.next as unknown as Node);
+                  } else if (
+                    changedContentFields.some(
+                      (key) => key === 'content' || key === 'src',
+                    )
+                  ) {
+                    advancedRemoteBaselines.push(d.next as unknown as Node);
+                  }
+                  return [
+                    {
+                      ...d,
+                      prev: local,
+                      next: { ...local, data: mergedData },
+                    },
+                  ];
+                }
                 if (!changesPendingContent) {
                   // Coarse REPLACE_NODE deltas carry the server's full node,
                   // including stale content fields. A lifecycle-only update
                   // (for example Question running/done/viewed) is safe to
                   // apply while preserving every locally pending content
                   // field; otherwise applying `next` would erase the edit.
-                  const local = localNodesById.get(d.next.id);
                   if (local) {
                     const localData = (local.data ?? {}) as Record<
                       string,
@@ -1811,20 +1847,6 @@ const useCanvasStore = create<RFState>()(
                 }
                 skippedNodeIds.push(d.next.id);
                 skippedRemoteNodes.push(d.next as unknown as Node);
-                const local = localNodesById.get(d.next.id);
-                if (local?.type === 'question') {
-                  preservedPendingNodeIds.add(d.next.id);
-                  return [
-                    {
-                      ...d,
-                      prev: local,
-                      next: {
-                        ...local,
-                        data: preserveAgentNodeOwnedData(local.data, nextData),
-                      },
-                    },
-                  ];
-                }
                 return [];
               }
               if (d.type === 'DELETE_NODE' && dirty.has(d.node.id)) {
@@ -1842,8 +1864,12 @@ const useCanvasStore = create<RFState>()(
       // change the local-first policy already decided the user wins. The
       // "your version was kept" notice tells the user what happened; the
       // change-review card lets them inspect the agent's dropped edit.
-      if (skippedRemoteNodes.length > 0) {
-        nodeContentQueue.seedBaselines(skippedRemoteNodes);
+      const rebasedRemoteNodes = [
+        ...skippedRemoteNodes,
+        ...advancedRemoteBaselines,
+      ];
+      if (rebasedRemoteNodes.length > 0) {
+        nodeContentQueue.seedBaselines(rebasedRemoteNodes);
       }
 
       if (safeDeltas.length === 0) {

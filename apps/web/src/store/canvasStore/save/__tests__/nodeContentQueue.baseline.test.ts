@@ -49,7 +49,19 @@ function noteNode(content: string, label = 'Note'): Node {
   } as Node;
 }
 
-function makeQueue(node: Node) {
+function questionNode(content: string, label = 'Question 1'): Node {
+  return {
+    id: 'q1',
+    type: 'question',
+    position: { x: 0, y: 0 },
+    data: { content, label, threadId: 'thread-1' },
+  } as Node;
+}
+
+function makeQueue(
+  node: Node,
+  options?: { waitForCreation?: () => Promise<void> },
+) {
   const state = {
     canvasId: 'c1',
     nodes: [node] as Node[],
@@ -59,6 +71,9 @@ function makeQueue(node: Node) {
   const queue = createNodeContentQueue({
     delayMs: 0,
     getState: () => state,
+    waitForCreation: options?.waitForCreation
+      ? () => options.waitForCreation!()
+      : undefined,
   });
   return { queue, state };
 }
@@ -70,6 +85,141 @@ beforeEach(() => {
 });
 
 describe('nodeContentQueue baseline lifecycle', () => {
+  it('suppresses the redundant Question creation PUT', async () => {
+    const node = questionNode('');
+    const { queue } = makeQueue(node);
+
+    queue.prepareServerCreatedNodes([node]);
+    queue.scheduleChanges('c1', [], [node]);
+    await queue.flushAll();
+
+    expect(putMock).not.toHaveBeenCalled();
+    expect(queue.pendingNodeIds()).toEqual([]);
+  });
+
+  it('waits for Question creation before persisting a real pre-acknowledgement edit', async () => {
+    let acknowledge!: () => void;
+    const creation = new Promise<void>((resolve) => {
+      acknowledge = resolve;
+    });
+    const node = questionNode('');
+    const { queue, state } = makeQueue(node, {
+      waitForCreation: () => creation,
+    });
+    queue.prepareServerCreatedNodes([node]);
+    queue.scheduleChanges('c1', [], [node]);
+    const edited = questionNode('First prompt');
+    state.nodes = [edited];
+    queue.scheduleChanges('c1', [node], [edited]);
+    putMock.mockResolvedValue({
+      nodeId: 'q1',
+      label: 'Question 1',
+      rev: 'FIRST',
+    });
+
+    const flushing = queue.flushAll();
+    await Promise.resolve();
+    expect(putMock).not.toHaveBeenCalled();
+    acknowledge();
+    await flushing;
+
+    expect(putMock).toHaveBeenCalledOnce();
+    expect(putMock.mock.calls[0][2]).toMatchObject({
+      content: 'First prompt',
+      expectRev: nodeRevisionOf({ content: '' }),
+    });
+  });
+
+  it('sends only locally dirty Question fields', async () => {
+    const node = questionNode('');
+    const { queue, state } = makeQueue(node);
+    queue.seedBaselines([node]);
+    const edited = questionNode('Pending prompt');
+    state.nodes = [edited];
+    queue.scheduleChanges('c1', [node], [edited]);
+    putMock.mockResolvedValue({
+      nodeId: 'q1',
+      label: 'Generated remotely',
+      rev: 'BODY',
+    });
+
+    await queue.flushAll();
+
+    expect(putMock.mock.calls[0][2]).toEqual({
+      nodeType: 'question',
+      content: 'Pending prompt',
+      expectRev: nodeRevisionOf({ content: '' }),
+    });
+  });
+
+  it('ignores an obsolete success after a newer authoritative baseline and retries', async () => {
+    let finishFirst!: (value: unknown) => void;
+    const first = new Promise((resolve) => {
+      finishFirst = resolve;
+    });
+    const node = questionNode('');
+    const { queue, state } = makeQueue(node);
+    queue.seedBaselines([node]);
+    const edited = questionNode('Mine');
+    state.nodes = [edited];
+    queue.scheduleChanges('c1', [node], [edited]);
+    putMock
+      .mockReturnValueOnce(first)
+      .mockResolvedValueOnce({ nodeId: 'q1', label: 'Remote', rev: 'MINE' });
+
+    const flushing = queue.flushAll();
+    await vi.waitFor(() => expect(putMock).toHaveBeenCalledOnce());
+    queue.seedBaselines([questionNode('Remote prompt', 'Remote')]);
+    finishFirst({ nodeId: 'q1', label: 'Question 1', rev: 'OLD' });
+    await flushing;
+    await queue.flushAll();
+
+    expect(putMock).toHaveBeenCalledTimes(2);
+    expect(putMock.mock.calls[1][2].expectRev).toBe(
+      nodeRevisionOf({ content: 'Remote prompt' }),
+    );
+    expect(state._setStateNoAutosave).toHaveBeenCalledWith({
+      nodes: [
+        expect.objectContaining({
+          data: expect.objectContaining({ label: 'Remote' }),
+        }),
+      ],
+    });
+  });
+
+  it('does not surface an obsolete conflict after a newer authoritative baseline', async () => {
+    let failFirst!: (error: unknown) => void;
+    const first = new Promise((_resolve, reject) => {
+      failFirst = reject;
+    });
+    const node = questionNode('');
+    const { queue, state } = makeQueue(node);
+    queue.seedBaselines([node]);
+    const edited = questionNode('Mine');
+    state.nodes = [edited];
+    queue.scheduleChanges('c1', [node], [edited]);
+    putMock
+      .mockReturnValueOnce(first)
+      .mockResolvedValueOnce({ nodeId: 'q1', label: 'Remote', rev: 'MINE' });
+
+    const flushing = queue.flushAll();
+    await vi.waitFor(() => expect(putMock).toHaveBeenCalledOnce());
+    queue.seedBaselines([questionNode('Remote prompt', 'Remote')]);
+    failFirst(
+      new CanvasConflictError({
+        code: 'NODE_CONTENT_CONFLICT',
+        message: 'changed elsewhere',
+        nodeId: 'q1',
+        currentRev: 'REMOTE',
+      }),
+    );
+    await flushing;
+    await queue.flushAll();
+
+    expect(toastMock).not.toHaveBeenCalled();
+    expect(putMock).toHaveBeenCalledTimes(2);
+  });
+
   it('forgetting a removed restore clears both barriers before an obsolete acknowledgement', async () => {
     const node = noteNode('restored');
     const { queue, state } = makeQueue(node);
@@ -217,9 +367,7 @@ describe('nodeContentQueue baseline lifecycle', () => {
     };
     putMock.mockResolvedValueOnce({ nodeId: 'n1', label: 'Note', rev: 'SRV9' });
     toastOpts.secondaryAction.onClick();
-    // Let the forced flush settle.
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(putMock).toHaveBeenCalledTimes(2));
 
     // The forced write carries the disk rev we collided with, so it
     // deliberately overwrites the other change.

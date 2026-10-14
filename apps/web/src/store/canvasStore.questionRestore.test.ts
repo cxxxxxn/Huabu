@@ -5,14 +5,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { nodeRevisionOf } from '@huabu/shared/canvas-engine';
 
-const { associateNode, deleteNode, putCanvas, postCanvasExecute, forkThread } =
-  vi.hoisted(() => ({
-    associateNode: vi.fn(),
-    deleteNode: vi.fn().mockResolvedValue({ success: true }),
-    putCanvas: vi.fn(),
-    postCanvasExecute: vi.fn(),
-    forkThread: vi.fn(),
-  }));
+const {
+  associateNode,
+  deleteNode,
+  putCanvas,
+  putNodeContent,
+  postCanvasExecute,
+  forkThread,
+} = vi.hoisted(() => ({
+  associateNode: vi.fn(),
+  deleteNode: vi.fn().mockResolvedValue({ success: true }),
+  putCanvas: vi.fn(),
+  putNodeContent: vi.fn(),
+  postCanvasExecute: vi.fn(),
+  forkThread: vi.fn(),
+}));
 vi.mock('../api', async (importOriginal) => ({
   ...(await importOriginal<typeof CanvasApi>()),
   associateAgentNode: associateNode,
@@ -23,17 +30,7 @@ vi.mock('../api', async (importOriginal) => ({
 }));
 vi.mock('../api/canvas', async (importOriginal) => ({
   ...(await importOriginal<typeof CanvasApi>()),
-  putNodeContent: vi.fn(
-    async (
-      _canvasId: string,
-      nodeId: string,
-      request: PutNodeContentRequest,
-    ) => ({
-      nodeId,
-      label: null,
-      rev: nodeRevisionOf({ content: request.content }),
-    }),
-  ),
+  putNodeContent,
   preprocessNode: vi.fn().mockResolvedValue({ success: true }),
 }));
 vi.mock('../api/agent', () => ({ agentApi: { forkThread } }));
@@ -66,6 +63,18 @@ beforeEach(() => {
   deleteNode.mockClear();
   putCanvas.mockReset();
   postCanvasExecute.mockReset();
+  putNodeContent.mockReset();
+  putNodeContent.mockImplementation(
+    async (
+      _canvasId: string,
+      nodeId: string,
+      request: PutNodeContentRequest,
+    ) => ({
+      nodeId,
+      label: null,
+      rev: nodeRevisionOf({ content: request.content }),
+    }),
+  );
   forkThread.mockReset();
   canvasHistoryManager.activate('canvas-restore', true);
   useCanvasStore.getState()._setStateNoAutosave({
@@ -112,6 +121,23 @@ function createQuestion(id: `node-${string}`): Node {
 }
 
 describe('Question creation settlement', () => {
+  it('does not issue a redundant sidecar PUT for the optimistic Question', async () => {
+    postCanvasExecute.mockResolvedValue({
+      canvasId: 'canvas-restore',
+      fromVersion: 1,
+      toVersion: 2,
+      results: [{ applied: true }],
+      deltas: [],
+      pendingEffects,
+    });
+
+    const node = createQuestion('node-created-on-server');
+    await awaitQuestionCreation('canvas-restore', node.id);
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(putNodeContent).not.toHaveBeenCalled();
+  });
+
   it('rolls back an unsupported conversation fork without poisoning unrelated saves or undo', async () => {
     const error = new Error('Fork not supported (501)');
     forkThread.mockRejectedValue(error);
