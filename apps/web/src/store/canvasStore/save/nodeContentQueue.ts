@@ -42,7 +42,10 @@ import {
 } from './nodeContentFields';
 import { createPerKeyDebouncer } from './perKeyDebouncer';
 
-import type { PutNodeContentRequest } from '@huabu/shared';
+import type {
+  PutNodeContentRequest,
+  PutNodeContentResponse,
+} from '@huabu/shared';
 import type { Node } from '@xyflow/react';
 
 /**
@@ -80,6 +83,12 @@ export type NodeContentQueueState = {
  * Public shape returned by {@link createNodeContentQueue}.
  */
 export type NodeContentQueue = {
+  /**
+   * Seed Questions whose CREATE_NODES command is being persisted by the
+   * server, and suppress the redundant "new node" sidecar PUT. A real edit
+   * after the optimistic insertion still schedules normally.
+   */
+  prepareServerCreatedNodes(nodes: readonly Node[]): void;
   /** Hold resurrected sidecars until the matching topology is acknowledged. */
   holdRestoredNodes(canvasId: string, nodes: readonly Node[]): void;
   restoreTokens(): ReadonlyMap<string, object>;
@@ -177,6 +186,7 @@ export type NodeContentQueue = {
    * user is mid-editing from an incoming agent write.
    */
   pendingNodeIds(): string[];
+  pendingFields(nodeId: string): ReadonlySet<string>;
 
   /**
    * Seed (or refresh) the optimistic-concurrency baseline revision for
@@ -202,6 +212,7 @@ export type NodeContentQueue = {
 export function createNodeContentQueue(opts: {
   delayMs: number;
   getState: () => NodeContentQueueState;
+  waitForCreation?: (canvasId: string, nodeId: string) => Promise<void>;
   retryStructure?: () => Promise<void>;
   onRestoredContentPersisted?: (canvasId: string, nodeId: string) => void;
 }): NodeContentQueue {
@@ -211,6 +222,8 @@ export function createNodeContentQueue(opts: {
   const restoredContent = new Map<string, string>();
   const generations = new Map<string, object>();
   const failures = new Map<string, { canvasId: string; error: unknown }>();
+  const pendingFields = new Map<string, Map<string, object>>();
+  const suppressNextNewNodeSave = new Set<string>();
   /**
    * Last `(label, labelSource)` the server confirmed it persisted for
    * each nodeId. Used by {@link handleSaveFailure} to revert an
@@ -236,6 +249,7 @@ export function createNodeContentQueue(opts: {
    * "I believe this is a fresh create").
    */
   const baselineRev = new Map<string, string>();
+  const baselineGeneration = new Map<string, object>();
 
   /**
    * Node ids for which the persistent `NODE_CONTENT_CONFLICT` toast is
@@ -285,7 +299,10 @@ export function createNodeContentQueue(opts: {
    * away (e.g. deleted between debounce-schedule and flush) or its
    * type is not markdown-backed.
    */
-  function buildRequest(nodeId: string): PutNodeContentRequest | null {
+  function buildRequest(
+    nodeId: string,
+    requestFields: ReadonlySet<string> | undefined,
+  ): PutNodeContentRequest | null {
     const node = opts.getState().nodes.find((n) => n.id === nodeId);
     if (!node) return null;
     const nodeType = typeof node.type === 'string' ? node.type : '';
@@ -298,41 +315,51 @@ export function createNodeContentQueue(opts: {
 
     const data = (node.data ?? {}) as Record<string, unknown>;
     if (data['contentMissing'] === true) return null;
+    const partialQuestionWrite =
+      nodeType === 'question' && !restoredContent.has(nodeId);
+    if (partialQuestionWrite && !requestFields?.size) return null;
+    const includes = (key: string) =>
+      !partialQuestionWrite || requestFields?.has(key) === true;
     const body: PutNodeContentRequest = { nodeType };
 
-    if (TEXT_BEARING_NODE_TYPES.has(nodeType)) {
+    if (TEXT_BEARING_NODE_TYPES.has(nodeType) && includes('content')) {
       const content = data['content'];
       if (typeof content === 'string') body.content = content;
     }
 
     const label = data['label'];
-    if (typeof label === 'string') body.label = label;
-    else if (label === null) body.label = null;
+    if (includes('label')) {
+      if (typeof label === 'string') body.label = label;
+      else if (label === null) body.label = null;
+    }
 
     const labelSource = data['labelSource'];
     if (
-      labelSource === 'user' ||
-      labelSource === 'auto' ||
-      labelSource === 'agent'
+      includes('labelSource') &&
+      (labelSource === 'user' ||
+        labelSource === 'auto' ||
+        labelSource === 'agent')
     ) {
       body.labelSource = labelSource;
     }
 
     const src = data['src'];
-    if (typeof src === 'string') body.src = src;
+    if (includes('src') && typeof src === 'string') body.src = src;
 
     const summary = data['summary'];
-    if (typeof summary === 'string') body.summary = summary;
+    if (includes('summary') && typeof summary === 'string')
+      body.summary = summary;
 
     const keywords = data['keywords'];
     if (
+      includes('keywords') &&
       Array.isArray(keywords) &&
       keywords.every((k) => typeof k === 'string')
     ) {
       body.keywords = keywords as string[];
     }
 
-    if ('provenance' in data) {
+    if (includes('provenance') && 'provenance' in data) {
       body.provenance = data['provenance'];
     }
 
@@ -367,68 +394,100 @@ export function createNodeContentQueue(opts: {
   ): Promise<void> {
     if (opts.getState().canvasId !== canvasId) return;
     const generation = generations.get(nodeId);
-    const body = buildRequest(nodeId);
-    if (!body) return;
-    const response = await putNodeContent(canvasId, nodeId, body, kOpts);
+    await opts.waitForCreation?.(canvasId, nodeId);
     if (
       opts.getState().canvasId !== canvasId ||
-      generations.get(nodeId) !== generation ||
-      !opts.getState().nodes.some((node) => node.id === nodeId)
+      generations.get(nodeId) !== generation
     )
       return;
-    // Content and its baseline update together: record the rev the server
-    // actually persisted so the next edit's `expectRev` is fresh (and a
-    // rapid follow-up edit doesn't 409 against our own just-committed
-    // write). Also clear any content-conflict toast guard — a success
-    // means the node is no longer blocked.
-    baselineRev.set(nodeId, response.rev);
-    const completedRestore = restoredContent.delete(nodeId);
-    failures.delete(nodeId);
-    contentConflictToasted.delete(nodeId);
-    saveErrorToasted.delete(nodeId);
-    // A write that succeeded means any prior duplicate has been
-    // resolved — drop the once-per-node toast guard so a future
-    // recurrence alerts again, and clear the node's duplicate banner
-    // (it was only set transiently by `notifyDuplicate`, never
-    // persisted) so editing re-enables without a reload.
-    if (duplicateToasted.delete(nodeId)) {
-      opts.getState().patchNodeSilent(nodeId, {
-        contentDuplicate: false,
-        duplicateFiles: [],
+    while (true) {
+      const requested = new Map(pendingFields.get(nodeId));
+      const body = buildRequest(nodeId, new Set(requested.keys()));
+      if (!body) return;
+      const baselineAtRequest = baselineGeneration.get(nodeId);
+      let response: PutNodeContentResponse;
+      try {
+        response = await putNodeContent(canvasId, nodeId, body, kOpts);
+      } catch (error) {
+        if (
+          error instanceof CanvasConflictError &&
+          error.code === 'NODE_CONTENT_CONFLICT' &&
+          baselineGeneration.get(nodeId) !== baselineAtRequest
+        ) {
+          continue;
+        }
+        throw error;
+      }
+      if (
+        opts.getState().canvasId !== canvasId ||
+        generations.get(nodeId) !== generation ||
+        !opts.getState().nodes.some((node) => node.id === nodeId)
+      )
+        return;
+      if (baselineGeneration.get(nodeId) !== baselineAtRequest) continue;
+
+      // Content and its baseline update together: record the rev the server
+      // actually persisted so the next edit's `expectRev` is fresh (and a
+      // rapid follow-up edit doesn't 409 against our own just-committed
+      // write). Also clear any content-conflict toast guard — a success
+      // means the node is no longer blocked.
+      baselineRev.set(nodeId, response.rev);
+      baselineGeneration.set(nodeId, {});
+      const livePending = pendingFields.get(nodeId);
+      for (const [key, token] of requested) {
+        if (livePending?.get(key) === token) livePending.delete(key);
+      }
+      if (livePending?.size === 0) pendingFields.delete(nodeId);
+      const completedRestore = restoredContent.delete(nodeId);
+      failures.delete(nodeId);
+      contentConflictToasted.delete(nodeId);
+      saveErrorToasted.delete(nodeId);
+      // A write that succeeded means any prior duplicate has been
+      // resolved — drop the once-per-node toast guard so a future
+      // recurrence alerts again, and clear the node's duplicate banner
+      // (it was only set transiently by `notifyDuplicate`, never
+      // persisted) so editing re-enables without a reload.
+      if (duplicateToasted.delete(nodeId)) {
+        opts.getState().patchNodeSilent(nodeId, {
+          contentDuplicate: false,
+          duplicateFiles: [],
+        });
+      }
+      // Record the label the server actually persisted so a later
+      // failure can revert to it. Capture `labelSource` from the body
+      // we just sent — it's the provenance attached to that label
+      // server-side.
+      lastSuccessful.set(nodeId, {
+        label: response.label,
+        labelSource:
+          typeof body.labelSource === 'string' ? body.labelSource : undefined,
       });
+      // Only patch when the resolved label actually differs from what's
+      // in the store right now — avoids spurious re-renders when the
+      // server echoes back exactly what we sent.
+      const state = opts.getState();
+      const currentNode = state.nodes.find((n) => n.id === nodeId);
+      if (!currentNode) return;
+      const currentLabel =
+        typeof currentNode.data?.['label'] === 'string'
+          ? (currentNode.data['label'] as string)
+          : null;
+      if (response.label !== null && response.label !== currentLabel) {
+        state._setStateNoAutosave({
+          nodes: state.nodes.map((n) =>
+            n.id === nodeId
+              ? {
+                  ...n,
+                  data: { ...(n.data ?? {}), label: response.label },
+                }
+              : n,
+          ),
+        });
+      }
+      if (pendingFields.get(nodeId)?.size) schedule(canvasId, nodeId);
+      if (completedRestore) opts.onRestoredContentPersisted?.(canvasId, nodeId);
+      return;
     }
-    // Record the label the server actually persisted so a later
-    // failure can revert to it. Capture `labelSource` from the body
-    // we just sent — it's the provenance attached to that label
-    // server-side.
-    lastSuccessful.set(nodeId, {
-      label: response.label,
-      labelSource:
-        typeof body.labelSource === 'string' ? body.labelSource : undefined,
-    });
-    // Only patch when the resolved label actually differs from what's
-    // in the store right now — avoids spurious re-renders when the
-    // server echoes back exactly what we sent.
-    const state = opts.getState();
-    const currentNode = state.nodes.find((n) => n.id === nodeId);
-    if (!currentNode) return;
-    const currentLabel =
-      typeof currentNode.data?.['label'] === 'string'
-        ? (currentNode.data['label'] as string)
-        : null;
-    if (response.label !== null && response.label !== currentLabel) {
-      state._setStateNoAutosave({
-        nodes: state.nodes.map((n) =>
-          n.id === nodeId
-            ? {
-                ...n,
-                data: { ...(n.data ?? {}), label: response.label },
-              }
-            : n,
-        ),
-      });
-    }
-    if (completedRestore) opts.onRestoredContentPersisted?.(canvasId, nodeId);
   }
 
   /**
@@ -843,6 +902,15 @@ export function createNodeContentQueue(opts: {
   }
 
   return {
+    prepareServerCreatedNodes(nodes) {
+      for (const node of nodes) {
+        if (node.type !== 'question') continue;
+        suppressNextNewNodeSave.add(node.id);
+        baselineRev.set(node.id, revOfNode(node));
+        baselineGeneration.set(node.id, {});
+      }
+    },
+
     holdRestoredNodes(canvasId, nodes) {
       for (const node of nodes) {
         if (!MD_BACKED_NODE_TYPES.has(node.type ?? '')) continue;
@@ -924,7 +992,12 @@ export function createNodeContentQueue(opts: {
         if (!MD_BACKED_NODE_TYPES.has(nodeType)) continue;
         const before = prevById.get(next.id);
         if (!before) {
+          if (suppressNextNewNodeSave.delete(next.id)) continue;
           // Brand new node — its `.md` does not exist yet.
+          pendingFields.set(
+            next.id,
+            new Map([...NODE_CONTENT_KEYS].map((key) => [key, {}])),
+          );
           schedule(canvasId, next.id);
           continue;
         }
@@ -933,8 +1006,11 @@ export function createNodeContentQueue(opts: {
         const afterData = (next.data ?? {}) as Record<string, unknown>;
         for (const key of NODE_CONTENT_KEYS) {
           if (beforeData[key] !== afterData[key]) {
+            const fields =
+              pendingFields.get(next.id) ?? new Map<string, object>();
+            fields.set(key, {});
+            pendingFields.set(next.id, fields);
             schedule(canvasId, next.id);
-            break;
           }
         }
       }
@@ -1015,6 +1091,9 @@ export function createNodeContentQueue(opts: {
       failures.delete(nodeId);
       debouncer.cancel(nodeId);
       baselineRev.delete(nodeId);
+      baselineGeneration.delete(nodeId);
+      pendingFields.delete(nodeId);
+      suppressNextNewNodeSave.delete(nodeId);
       frozen.delete(nodeId);
       contentConflictToasted.delete(nodeId);
       saveErrorToasted.delete(nodeId);
@@ -1027,6 +1106,7 @@ export function createNodeContentQueue(opts: {
         const nodeType = typeof node.type === 'string' ? node.type : '';
         if (!MD_BACKED_NODE_TYPES.has(nodeType)) continue;
         baselineRev.set(node.id, revOfNode(node));
+        baselineGeneration.set(node.id, {});
         failures.delete(node.id);
         // A fresh authoritative baseline means any prior conflict for this
         // node is resolved — drop the toast guard and unfreeze it so a
@@ -1043,11 +1123,17 @@ export function createNodeContentQueue(opts: {
         new Set([
           ...debouncer.pendingKeys(),
           ...inflight.keys(),
+          ...pendingFields.keys(),
           ...[...restoredContent]
             .filter(([, canvasId]) => canvasId === opts.getState().canvasId)
             .map(([id]) => id),
         ]),
       );
+    },
+
+    pendingFields(nodeId) {
+      if (restoredContent.has(nodeId)) return new Set(NODE_CONTENT_KEYS);
+      return new Set(pendingFields.get(nodeId)?.keys());
     },
   };
 }

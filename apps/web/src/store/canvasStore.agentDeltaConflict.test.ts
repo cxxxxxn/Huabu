@@ -63,6 +63,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  useCanvasStore.setState({ nodes: [] });
   vi.clearAllTimers();
   vi.useRealTimers();
 });
@@ -211,7 +212,7 @@ describe('agent delta conflict protection', () => {
       nextMetadata: {},
     },
   ])(
-    'still skips $name after JSON transport while local content is pending',
+    'applies independent $name while local content is pending',
     ({ prevMetadata, nextMetadata }) => {
       useCanvasStore
         .getState()
@@ -223,14 +224,87 @@ describe('agent delta conflict protection', () => {
         .getState()
         .applyDeltasFromAgent([delta], 2, pendingEffects);
 
-      expect(skipped).toEqual(['question-1']);
+      expect(skipped).toEqual([]);
       expect(useCanvasStore.getState().nodes[0]).toEqual({
         ...before,
-        data: { ...before.data, status: 'running' },
+        data: {
+          ...before.data,
+          ...nextMetadata,
+          status: 'running',
+        },
       });
       expect(useCanvasStore.getState().version).toBe(2);
     },
   );
+
+  it('applies an automatic title while a local body edit is pending', () => {
+    useCanvasStore
+      .getState()
+      .patchNodeSilent('question-1', { content: 'Pending prompt' });
+    const prev = question('', 'idle');
+    const next = {
+      ...question('', 'running'),
+      data: {
+        ...question('', 'running').data,
+        label: 'Generated title',
+        labelSource: 'auto',
+        conversationTitleSource: 'generated',
+      },
+    };
+
+    expect(
+      useCanvasStore
+        .getState()
+        .applyDeltasFromAgent(
+          [{ type: 'REPLACE_NODE', prev, next }],
+          2,
+          pendingEffects,
+          true,
+        ),
+    ).toEqual([]);
+    expect(useCanvasStore.getState().nodes[0]?.data).toMatchObject({
+      content: 'Pending prompt',
+      label: 'Generated title',
+      labelSource: 'auto',
+      conversationTitleSource: 'generated',
+      status: 'running',
+    });
+  });
+
+  it('applies first-turn content while preserving a pending manual title', () => {
+    useCanvasStore.getState().patchNodeSilent('question-1', {
+      label: 'Manual title',
+      labelSource: 'user',
+    });
+    const prev = question('', 'idle');
+    const next = {
+      ...question('First prompt', 'running'),
+      data: {
+        ...question('First prompt', 'running').data,
+        label: 'Generated title',
+        labelSource: 'auto',
+        conversationTitleSource: 'generated',
+      },
+    };
+
+    expect(
+      useCanvasStore
+        .getState()
+        .applyDeltasFromAgent(
+          [{ type: 'REPLACE_NODE', prev, next }],
+          2,
+          pendingEffects,
+          true,
+        ),
+    ).toEqual(['question-1']);
+    expect(useCanvasStore.getState().nodes[0]?.data).toMatchObject({
+      content: 'First prompt',
+      label: 'Manual title',
+      labelSource: 'user',
+      conversationTitleSource: 'generated',
+      status: 'running',
+    });
+  });
 
   it('applies lifecycle-only changes without overwriting pending local content', () => {
     useCanvasStore
