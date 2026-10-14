@@ -44,6 +44,8 @@ export type FrameFitPreview = FrameFitResult & { role: FrameFitPreviewRole };
  * default, so a new field can never be silently omitted from the reset.
  */
 type GesturePreviewData = {
+  /** Sole-selected Note whose body owns touch/pen content scrolling. */
+  noteReadingNodeId: string | null;
   /** Stroke ids hidden while an eraser gesture is still uncommitted. */
   sketchErasePreview: Record<string, string[]>;
 
@@ -77,6 +79,9 @@ type GesturePreviewData = {
    */
   sketchSelectionPolygon: Array<{ x: number; y: number }> | null;
 
+  /** Identity of the committed Lasso, preserved through moves and cancelled previews. */
+  sketchSelectionSession: object | null;
+
   /**
    * Live translation (flow-space) applied to the selected strokes while a
    * move drag is in progress; `null` when not moving. Baked into node data
@@ -95,7 +100,7 @@ type GesturePreviewData = {
    */
   sketchStrokeMoveCarriedNodeIds: string[];
 
-  /** Whether the retained Ink selection is reserved by submission prep. */
+  /** Whether Ink is synchronously freezing its activation-time snapshot. */
   inkSubmissionPreparing: boolean;
 
   /**
@@ -156,6 +161,11 @@ type GesturePreviewState = GesturePreviewData & {
 
   /** Set the retained selection polygon (flow-space). */
   setSketchSelectionPolygon: (
+    polygon: Array<{ x: number; y: number }> | null,
+  ) => void;
+
+  /** Commit a new Lasso even when it captures the same strokes and polygon. */
+  commitSketchSelection: (
     polygon: Array<{ x: number; y: number }> | null,
   ) => void;
 
@@ -223,10 +233,12 @@ export type StructuredDropPreview = {
  * two can never drift and a newly-added field is reset automatically.
  */
 const INITIAL_PREVIEW_DATA: GesturePreviewData = {
+  noteReadingNodeId: null,
   sketchErasePreview: {},
   sketchStrokeSelection: {},
   sketchStrokeHighlight: {},
   sketchSelectionPolygon: null,
+  sketchSelectionSession: null,
   sketchStrokeMovePreview: null,
   sketchStrokeMoveCarriedNodeIds: [],
   inkSubmissionPreparing: false,
@@ -276,6 +288,7 @@ export const useGesturePreviewStore = create<GesturePreviewState>()((set) => ({
     set({
       sketchStrokeSelection: {},
       sketchSelectionPolygon: null,
+      sketchSelectionSession: null,
       sketchStrokeMovePreview: null,
       sketchStrokeMoveCarriedNodeIds: [],
     }),
@@ -284,6 +297,11 @@ export const useGesturePreviewStore = create<GesturePreviewState>()((set) => ({
   clearSketchStrokeHighlight: () => set({ sketchStrokeHighlight: {} }),
   setSketchSelectionPolygon: (sketchSelectionPolygon) =>
     set({ sketchSelectionPolygon }),
+  commitSketchSelection: (sketchSelectionPolygon) =>
+    set({
+      sketchSelectionPolygon,
+      sketchSelectionSession: sketchSelectionPolygon ? {} : null,
+    }),
   setSketchStrokeMovePreview: (sketchStrokeMovePreview) =>
     set({ sketchStrokeMovePreview }),
   setSketchStrokeMoveCarriedNodeIds: (sketchStrokeMoveCarriedNodeIds) =>

@@ -5,6 +5,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ApiError } from '@/api/_client';
 import useCanvasStore from '@/store/canvasStore';
 import { selectThreadMessages, useChatStore } from '@/store/chatStore';
 import { useGesturePreviewStore } from '@/store/gesturePreviewStore';
@@ -38,6 +39,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/api/agent', () => ({
   agentApi: { streamMessage: mocks.stream, stopThread: mocks.stop },
+}));
+vi.mock('@/api/conversationTitles', () => ({
+  queryConversationTitles: vi.fn(async () => ({ titles: {} })),
+  setConversationTitle: vi.fn(),
 }));
 vi.mock('@/store/canvasStore', async (original) => ({
   ...((await original()) as object),
@@ -172,6 +177,376 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe('Ink interpretation lifecycle', () => {
+  const ctx = {
+    threadId: 'thread-1',
+    assistantId: 'assistant-1',
+    userMessageId: 'ink-user',
+  };
+  const startReport = (
+    id: string,
+    rawInput: unknown,
+    internalToolName: string | undefined = 'report_ink_intent',
+  ) =>
+    handleStreamEvent(
+      {
+        type: 'tool_call',
+        data: {
+          toolCallId: id,
+          title: 'report_ink_intent',
+          internalToolName,
+          status: 'pending',
+          rawInput,
+        },
+      },
+      ctx,
+    );
+  const updateReport = (
+    id: string,
+    data: {
+      status?: 'pending' | 'in_progress' | 'completed' | 'failed';
+      rawOutput?: unknown;
+    },
+  ) =>
+    handleStreamEvent(
+      {
+        type: 'tool_call_update',
+        data: { toolCallId: id, ...data },
+      },
+      ctx,
+    );
+  const interpretation = () => {
+    const message = selectThreadMessages(
+      useChatStore.getState(),
+      ctx.threadId,
+    ).find((message) => message.id === ctx.userMessageId);
+    return message?.role === 'user' ? message.inkInterpretation : undefined;
+  };
+  beforeEach(() => {
+    useChatStore.getState().addMessage(ctx.threadId, {
+      id: ctx.userMessageId,
+      role: 'user',
+      content: '',
+      inputKind: 'ink-intent',
+      inkInterpretation: { state: 'pending' },
+      selectedNodeIds: ['sketch-1'],
+      selectedStrokeIds: [{ nodeId: 'sketch-1', strokeIds: ['stroke-1'] }],
+    });
+  });
+
+  it('retains report output without confirming it before terminal status', () => {
+    startReport('report-1', { text: '  Explain this arrow  ' });
+    updateReport('report-1', {
+      status: 'in_progress',
+      rawOutput: {
+        text: '  Explain this arrow  ',
+        explanation: '  It connects the two notes.  ',
+      },
+    });
+    expect(interpretation()).toEqual({ state: 'pending' });
+    updateReport('report-1', { status: 'completed' });
+    expect(interpretation()).toEqual({
+      state: 'reported',
+      text: 'Explain this arrow',
+      explanation: 'It connects the two notes.',
+    });
+    updateReport('report-1', { rawOutput: '{}' });
+    expect(selectThreadMessages(useChatStore.getState(), ctx.threadId)).toEqual(
+      [expect.objectContaining({ content: '', selectedNodeIds: ['sketch-1'] })],
+    );
+  });
+
+  it.each([
+    ['failed', { status: 'failed' as const }],
+    [
+      'error envelope',
+      {
+        status: 'completed' as const,
+        rawOutput: {
+          tool: 'report_ink_intent',
+          status: 'error',
+          error: 'Rejected',
+        },
+      },
+    ],
+    [
+      'malformed result',
+      { status: 'completed' as const, rawOutput: 'not JSON' },
+    ],
+  ])(
+    'does not confirm a %s report; a successful retry wins once',
+    (_label, terminal) => {
+      startReport('report-1', { text: 'Rejected summary' });
+      updateReport('report-1', terminal);
+      expect(interpretation()).toEqual({ state: 'failed' });
+      startReport('report-2', {
+        text: 'Accepted summary',
+        explanation: 'Verified in context.',
+      });
+      updateReport('report-2', { status: 'completed' });
+      startReport('report-3', { text: 'Later summary' });
+      updateReport('report-3', { status: 'completed' });
+      updateReport('report-2', { status: 'failed' });
+      expect(interpretation()).toEqual({
+        state: 'reported',
+        text: 'Accepted summary',
+        explanation: 'Verified in context.',
+      });
+    },
+  );
+
+  it('keeps reports in the captured user message and owner thread', () => {
+    startReport('report-1', { text: 'First Ink request' });
+    for (const threadId of ['thread-1', 'thread-2']) {
+      useChatStore.getState().addMessage(threadId, {
+        id: 'new-user',
+        role: 'user',
+        content: '',
+        inputKind: 'ink-intent',
+        inkInterpretation: { state: 'pending' },
+      });
+    }
+    updateReport('report-1', { status: 'completed' });
+    expect(interpretation()).toEqual({
+      state: 'reported',
+      text: 'First Ink request',
+    });
+    for (const threadId of ['thread-1', 'thread-2']) {
+      expect(
+        selectThreadMessages(useChatStore.getState(), threadId).find(
+          (message) => message.id === 'new-user',
+        ),
+      ).toMatchObject({
+        inkInterpretation: { state: 'pending' },
+      });
+    }
+  });
+
+  it('retains the original owner when missing args are followed by output after a newer user message', () => {
+    const streamContext = {
+      threadId: ctx.threadId,
+      assistantId: ctx.assistantId,
+    };
+    handleStreamEvent(
+      {
+        type: 'tool_call',
+        data: {
+          toolCallId: 'delayed-report',
+          title: 'report_ink_intent',
+          internalToolName: 'report_ink_intent',
+          status: 'pending',
+        },
+      },
+      streamContext,
+    );
+    useChatStore.getState().addMessage(ctx.threadId, {
+      id: 'newer-ink-user',
+      role: 'user',
+      content: '',
+      inputKind: 'ink-intent',
+      inkInterpretation: { state: 'pending' },
+    });
+    handleStreamEvent(
+      {
+        type: 'tool_call_update',
+        data: {
+          toolCallId: 'delayed-report',
+          status: 'in_progress',
+          rawOutput: { text: 'Original request interpretation' },
+        },
+      },
+      streamContext,
+    );
+    expect(interpretation()).toEqual({ state: 'pending' });
+    handleStreamEvent(
+      {
+        type: 'tool_call_update',
+        data: { toolCallId: 'delayed-report', status: 'completed' },
+      },
+      streamContext,
+    );
+    expect(interpretation()).toEqual({
+      state: 'reported',
+      text: 'Original request interpretation',
+    });
+    expect(
+      selectThreadMessages(useChatStore.getState(), ctx.threadId).at(-1),
+    ).toMatchObject({
+      id: 'newer-ink-user',
+      inkInterpretation: { state: 'pending' },
+    });
+  });
+
+  it('ignores a generic external tool with the same title', () => {
+    startReport('external-report', { text: 'Not host owned' }, '');
+    updateReport('external-report', { status: 'completed' });
+    expect(interpretation()).toEqual({ state: 'pending' });
+  });
+
+  it('does not attach a text turn report to the preceding Ink request', () => {
+    useChatStore.getState().addMessage(ctx.threadId, {
+      id: 'text-user',
+      role: 'user',
+      content: 'Ordinary text',
+    });
+    const textCtx = { threadId: ctx.threadId, assistantId: 'text-assistant' };
+    handleStreamEvent(
+      {
+        type: 'tool_call',
+        data: {
+          toolCallId: 'text-report',
+          title: 'report_ink_intent',
+          internalToolName: 'report_ink_intent',
+          rawInput: { text: 'Wrong owner' },
+        },
+      },
+      textCtx,
+    );
+    handleStreamEvent(
+      {
+        type: 'tool_call_update',
+        data: { toolCallId: 'text-report', status: 'completed' },
+      },
+      textCtx,
+    );
+    handleStreamEvent({ type: 'done', data: { message: '' } }, textCtx);
+    expect(interpretation()).toEqual({ state: 'pending' });
+    expect(
+      selectThreadMessages(useChatStore.getState(), ctx.threadId)[1],
+    ).not.toHaveProperty('inkInterpretation');
+  });
+
+  it.each([
+    [undefined, 'missing'],
+    ['aborted', 'interrupted'],
+    ['cancelled', 'interrupted'],
+    ['error', 'failed'],
+  ])('settles a no-report turn ending with %s as %s', (stopReason, state) => {
+    handleStreamEvent(
+      {
+        type: 'done',
+        data: { message: '', meta: { stopReason } },
+      },
+      ctx,
+    );
+    expect(interpretation()).toEqual({ state });
+  });
+
+  it.each([
+    [
+      { status: 'inferred', text: 'Old summary' },
+      { state: 'reported', text: 'Old summary' },
+    ],
+    [{ status: 'clarify', text: 'Old question' }, { state: 'legacy' }],
+    [{ status: 'unsupported', text: 'Old limitation' }, { state: 'legacy' }],
+    [{ text: 'Invalid\nsummary' }, { state: 'failed' }],
+  ])(
+    'normalizes historical and malformed report payloads %j',
+    (rawInput, expected) => {
+      startReport('report-1', rawInput);
+      updateReport('report-1', { status: 'completed' });
+      handleStreamEvent({ type: 'done', data: { message: '' } }, ctx);
+      expect(interpretation()).toEqual(expected);
+    },
+  );
+
+  it.each([
+    {
+      text: '  Canonical summary  ',
+      explanation: '  Confirmed context.  ',
+      renamed: true,
+    },
+    {
+      tool: 'report_ink_intent',
+      status: 'success',
+      data: {
+        text: '  Canonical summary  ',
+        explanation: '  Confirmed context.  ',
+        renamed: true,
+      },
+    },
+  ])('prefers canonical confirmed output over report input %j', (rawOutput) => {
+    startReport('canonical-report', {
+      text: 'Draft summary',
+      explanation: 'Draft explanation.',
+    });
+    updateReport('canonical-report', { rawOutput });
+    expect(interpretation()).toEqual({ state: 'pending' });
+    updateReport('canonical-report', { status: 'completed' });
+    expect(interpretation()).toEqual({
+      state: 'reported',
+      text: 'Canonical summary',
+      explanation: 'Confirmed context.',
+    });
+  });
+
+  it('retains the first successful legacy record through subsequent reports', () => {
+    startReport('legacy-report', {
+      status: 'clarify',
+      text: 'An old question',
+    });
+    updateReport('legacy-report', { status: 'completed' });
+    startReport('new-report', { text: 'New interpretation' });
+    updateReport('new-report', { status: 'completed' });
+    updateReport('new-report', { status: 'failed' });
+    expect(interpretation()).toEqual({ state: 'legacy' });
+  });
+
+  it('allows a successful report to supersede a missing-report fallback', () => {
+    handleStreamEvent({ type: 'done', data: { message: '' } }, ctx);
+    expect(interpretation()).toEqual({ state: 'missing' });
+    startReport('late-report', { text: 'Confirmed interpretation' });
+    updateReport('late-report', { status: 'completed' });
+    expect(interpretation()).toEqual({
+      state: 'reported',
+      text: 'Confirmed interpretation',
+    });
+  });
+
+  it('initializes optimistic Ink as pending and settles no-report completion', async () => {
+    mocks.stream.mockImplementationOnce(
+      async (_a, _b, _c, callbacks: AgentStreamCallbacks) => {
+        expect(
+          selectThreadMessages(useChatStore.getState(), ctx.threadId).at(-1),
+        ).toMatchObject({
+          role: 'user',
+          content: '',
+          inkInterpretation: { state: 'pending' },
+        });
+        callbacks.onComplete();
+      },
+    );
+    await dispatchAgentTurn(request('ink-intent'));
+    expect(
+      selectThreadMessages(useChatStore.getState(), ctx.threadId).at(-1),
+    ).toMatchObject({ inkInterpretation: { state: 'missing' } });
+  });
+
+  it('settles optimistic Ink after stream rejection', async () => {
+    mocks.stream.mockRejectedValueOnce(new Error('Offline'));
+    await dispatchAgentTurn(request('ink-intent'));
+    expect(
+      selectThreadMessages(useChatStore.getState(), ctx.threadId)
+        .filter((message) => message.role === 'user')
+        .at(-1),
+    ).toMatchObject({ inkInterpretation: { state: 'failed' } });
+  });
+
+  it('settles Ink only after stop is confirmed', async () => {
+    const gate = deferred();
+    mocks.stop.mockImplementationOnce(async () => {
+      await gate.promise;
+      return { stopped: true, acceptance: null };
+    });
+    stopAgentTurn(session);
+    expect(interpretation()).toEqual({ state: 'pending' });
+    gate.resolve();
+    await vi.waitFor(() =>
+      expect(interpretation()).toEqual({ state: 'interrupted' }),
+    );
+  });
+});
+
 describe('shared Agent turn input', () => {
   it('deduplicates Frame-nested Ink while excluding its Question anchor', () => {
     useCanvasStore.getState()._setStateNoAutosave({
@@ -220,7 +595,7 @@ describe('shared Agent turn input', () => {
     ]);
   });
 
-  it('projects inferred Ink intent without rendering its tool call', () => {
+  it('projects an Agent interpretation without rendering its tool call', () => {
     useChatStore.getState().addMessage('thread-1', {
       id: 'ink-user',
       role: 'user',
@@ -236,8 +611,8 @@ describe('shared Agent turn input', () => {
           title: 'report_ink_intent',
           status: 'pending',
           rawInput: {
-            status: 'inferred',
             text: 'Expand the third comparison step',
+            explanation: 'The arrow points to the third step.',
           },
           internalToolName: 'report_ink_intent',
         },
@@ -259,7 +634,11 @@ describe('shared Agent turn input', () => {
     expect(selectThreadMessages(useChatStore.getState(), 'thread-1')).toEqual([
       expect.objectContaining({
         id: 'ink-user',
-        inferredIntent: 'Expand the third comparison step',
+        inkInterpretation: {
+          state: 'reported',
+          text: 'Expand the third comparison step',
+          explanation: 'The arrow points to the third step.',
+        },
       }),
     ]);
   });
@@ -293,7 +672,7 @@ describe('shared Agent turn input', () => {
     );
 
     expect(selectThreadMessages(useChatStore.getState(), 'thread-1')).toEqual([
-      expect.not.objectContaining({ inferredIntent: expect.anything() }),
+      expect.objectContaining({ inkInterpretation: { state: 'failed' } }),
     ]);
   });
 
@@ -659,6 +1038,304 @@ describe('shared Agent turn input', () => {
     expect(mocks.stream.mock.calls[0][4].canvasContext).toEqual({
       selectedNodes: [],
     });
+  });
+
+  it('sends and retries quote-only messages with the same structured snapshot', async () => {
+    const quotedComments = [
+      {
+        quote: 'Original reply',
+        contextBefore: 'Before ',
+        contextAfter: ' after',
+        comment: 'Explain this.',
+      },
+    ];
+    const prepared = request();
+    prepared.content = '';
+    prepared.quotedComments = quotedComments;
+    await dispatchAgentTurn(prepared);
+    expect(mocks.stream.mock.calls[0][0]).toBe('');
+    expect(mocks.stream.mock.calls[0][4].quotedComments).toEqual(
+      quotedComments,
+    );
+    const message = selectThreadMessages(
+      useChatStore.getState(),
+      session.threadId,
+    ).find((item) => item.role === 'user');
+    expect(message).toMatchObject({ content: '', quotedComments });
+    if (message?.role !== 'user') throw new Error('Missing user message');
+    const retry = prepareAgentTurnRetry(session, message, 'operate');
+    expect(retry.quotedComments).toEqual(quotedComments);
+    await dispatchAgentTurn(retry);
+    expect(mocks.stream.mock.calls[1][4].quotedComments).toEqual(
+      quotedComments,
+    );
+  });
+
+  it.each([true, false])(
+    'clears quoted drafts before transport and restores only a rejected submission: %s',
+    async (accepted) => {
+      const store = useChatStore.getState();
+      store.setDraft(session.threadId, 'General instructions');
+      store.addQuotedComment(session.threadId, {
+        quote: 'Original reply',
+        contextBefore: '',
+        contextAfter: '',
+        comment: 'Explain this.',
+      });
+      mocks.stream.mockImplementationOnce(
+        async (_content, _thread, _mode, callbacks: AgentStreamCallbacks) => {
+          expect(
+            useChatStore.getState().threadsById[session.threadId].draft,
+          ).toBe('');
+          expect(
+            useChatStore.getState().threadsById[session.threadId]
+              .pendingQuotedComments,
+          ).toHaveLength(0);
+          if (accepted) {
+            callbacks.onAccepted?.({
+              threadId: session.threadId,
+              turnStartSeq: 5,
+            });
+            callbacks.onComplete();
+          } else {
+            callbacks.onError(
+              new ApiError(400, {}, 'Request rejected before acceptance'),
+            );
+          }
+        },
+      );
+      let hook!: UseAgentStreamReturn;
+      function Harness() {
+        hook = useAgentStream(session);
+        return null;
+      }
+      container = document.createElement('div');
+      root = createRoot(container);
+      await act(async () => root?.render(createElement(Harness)));
+      await act(async () =>
+        hook.startStream('General instructions', 'operate'),
+      );
+      const current = useChatStore.getState().threadsById[session.threadId];
+      expect(current.draft).toBe(accepted ? '' : 'General instructions');
+      expect(current.pendingQuotedComments).toHaveLength(accepted ? 0 : 1);
+      expect(mocks.stream.mock.calls[0][4].quotedComments).toEqual([
+        {
+          quote: 'Original reply',
+          contextBefore: '',
+          contextAfter: '',
+          comment: 'Explain this.',
+        },
+      ]);
+    },
+  );
+
+  describe('optimistic composer clearing', () => {
+    let hook: UseAgentStreamReturn;
+    const quote = {
+      quote: 'Original reply',
+      contextBefore: '',
+      contextAfter: '',
+      comment: 'Explain this.',
+    };
+    beforeEach(async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const store = useChatStore.getState();
+      store.setDraft(session.threadId, 'Hello');
+      store.addQuotedComment(session.threadId, quote);
+      function Harness() {
+        hook = useAgentStream(session);
+        return null;
+      }
+      container = document.createElement('div');
+      root = createRoot(container);
+      await act(async () => root?.render(createElement(Harness)));
+    });
+
+    it('clears synchronously before saving and never clears a newer identical draft on acceptance', async () => {
+      const saved = deferred();
+      mocks.save.mockReturnValueOnce(saved.promise);
+      mocks.stream.mockImplementationOnce(
+        async (_content, _thread, _mode, callbacks: AgentStreamCallbacks) => {
+          const store = useChatStore.getState();
+          store.setDraft(session.threadId, 'Hello');
+          store.addQuotedComment(session.threadId, quote);
+          callbacks.onAccepted?.({
+            threadId: session.threadId,
+            turnStartSeq: 5,
+          });
+          callbacks.onComplete();
+        },
+      );
+      await act(async () => {
+        const running = hook.startStream('Hello', 'operate');
+        const current = useChatStore.getState().threadsById[session.threadId];
+        expect(current.draft).toBe('');
+        expect(current.pendingQuotedComments).toEqual([]);
+        expect(mocks.stream).not.toHaveBeenCalled();
+        saved.resolve();
+        await running;
+      });
+      const current = useChatStore.getState().threadsById[session.threadId];
+      expect(current.draft).toBe('Hello');
+      expect(current.pendingQuotedComments).toHaveLength(1);
+    });
+
+    it('restores the exact snapshot when preparation rejects before transport', async () => {
+      const snapshot = useChatStore.getState().threadsById[session.threadId];
+      mocks.save.mockRejectedValueOnce(new Error('Save conflict'));
+      await act(async () => hook.startStream('Hello', 'operate'));
+      const current = useChatStore.getState().threadsById[session.threadId];
+      expect(current.draft).toBe(snapshot.draft);
+      expect(current.pendingQuotedComments).toEqual(
+        snapshot.pendingQuotedComments,
+      );
+      expect(mocks.stream).not.toHaveBeenCalled();
+    });
+
+    it('clears a quote-only submission immediately', async () => {
+      act(() => useChatStore.getState().setDraft(session.threadId, ''));
+      await act(async () => {
+        const running = hook.startStream('', 'operate');
+        expect(
+          useChatStore.getState().threadsById[session.threadId]
+            .pendingQuotedComments,
+        ).toEqual([]);
+        await running;
+      });
+      expect(mocks.stream.mock.calls[0][0]).toBe('');
+      expect(mocks.stream.mock.calls[0][4].quotedComments).toEqual([quote]);
+    });
+
+    it('restores a busy submission without changing the active stream claim', async () => {
+      const claim = claimAgentStream('canvas-1', 'thread-1', 'post');
+      if (!claim) throw new Error('Missing stream claim');
+      try {
+        await act(async () => hook.startStream('Hello', 'operate'));
+        const current = useChatStore.getState().threadsById[session.threadId];
+        expect(current.draft).toBe('Hello');
+        expect(current.pendingQuotedComments).toHaveLength(1);
+        expect(mocks.stream).not.toHaveBeenCalled();
+        expect(hasAgentStreamClaim('canvas-1', 'thread-1')).toBe(true);
+      } finally {
+        claim.release();
+      }
+    });
+
+    it('keeps a preflight-rejected snapshot retryable when the user has already started a new draft', async () => {
+      mocks.save.mockImplementationOnce(async () => {
+        useChatStore.getState().setDraft(session.threadId, 'Next draft');
+        throw new Error('Save conflict');
+      });
+      await act(async () => hook.startStream('Hello', 'operate'));
+      expect(useChatStore.getState().threadsById[session.threadId].draft).toBe(
+        'Next draft',
+      );
+      const message = selectThreadMessages(
+        useChatStore.getState(),
+        session.threadId,
+      ).find((item) => item.role === 'user');
+      expect(message).toMatchObject({
+        content: 'Hello',
+        quotedComments: [quote],
+        selectedNodeIds: ['note-1', 'sketch-1'],
+      });
+      if (message?.role !== 'user') throw new Error('Missing retry snapshot');
+      const retry = prepareAgentTurnRetry(session, message, 'operate');
+      expect(retry.content).toBe('Hello');
+      expect(retry.quotedComments).toEqual([quote]);
+      expect(
+        selectThreadMessages(useChatStore.getState(), session.threadId).at(-1),
+      ).toMatchObject({
+        role: 'status',
+        status: 'error',
+        detail: 'Save conflict',
+      });
+      expect(mocks.stream).not.toHaveBeenCalled();
+    });
+
+    it.each(['text', 'quote'])(
+      'keeps a newer %s draft instead of restoring a rejected submission',
+      async (kind) => {
+        mocks.stream.mockImplementationOnce(
+          async (_content, _thread, _mode, callbacks: AgentStreamCallbacks) => {
+            const store = useChatStore.getState();
+            if (kind === 'text') store.setDraft(session.threadId, 'Next draft');
+            else
+              store.addQuotedComment(session.threadId, {
+                ...quote,
+                comment: 'Next comment.',
+              });
+            callbacks.onError(new ApiError(400, {}, 'Rejected'));
+          },
+        );
+        await act(async () => hook.startStream('Hello', 'operate'));
+        const current = useChatStore.getState().threadsById[session.threadId];
+        expect(current.draft).toBe(kind === 'text' ? 'Next draft' : '');
+        expect(
+          current.pendingQuotedComments.map((item) => item.comment),
+        ).toEqual(kind === 'quote' ? ['Next comment.'] : []);
+        expect(
+          selectThreadMessages(useChatStore.getState(), session.threadId),
+        ).toContainEqual(
+          expect.objectContaining({
+            role: 'user',
+            content: 'Hello',
+            quotedComments: [quote],
+          }),
+        );
+      },
+    );
+
+    it('does not restore an accepted submission after a runtime failure', async () => {
+      mocks.stream.mockImplementationOnce(
+        async (_content, _thread, _mode, callbacks: AgentStreamCallbacks) => {
+          callbacks.onAccepted?.({
+            threadId: session.threadId,
+            turnStartSeq: 5,
+          });
+          callbacks.onError(new Error('Agent failed after acceptance'));
+        },
+      );
+      await act(async () => hook.startStream('Hello', 'operate'));
+      const current = useChatStore.getState().threadsById[session.threadId];
+      expect(current.draft).toBe('');
+      expect(current.pendingQuotedComments).toEqual([]);
+    });
+
+    it.each([true, false])(
+      'waits for ambiguous acceptance to reconcile before deciding restoration: %s',
+      async (accepted) => {
+        mocks.stream.mockRejectedValueOnce(new Error('Connection lost'));
+        await act(async () => hook.startStream('Hello', 'operate'));
+        expect(
+          useChatStore.getState().threadsById[session.threadId].draft,
+        ).toBe('');
+        expect(
+          useChatStore.getState().threadsById[session.threadId]
+            .pendingQuotedComments,
+        ).toEqual([]);
+        if (accepted) {
+          act(() =>
+            observeAgentTurnAcceptance('canvas-1', {
+              threadId: session.threadId,
+              turnStartSeq: 5,
+            }),
+          );
+        } else {
+          await act(async () => {
+            stopAgentTurn(session);
+            await vi.waitFor(() =>
+              expect(
+                useChatStore.getState().threadsById[session.threadId].draft,
+              ).toBe('Hello'),
+            );
+          });
+        }
+        const current = useChatStore.getState().threadsById[session.threadId];
+        expect(current.draft).toBe(accepted ? '' : 'Hello');
+        expect(current.pendingQuotedComments).toHaveLength(accepted ? 0 : 1);
+      },
+    );
   });
 
   it('keeps a text run alive after Chat unmount and permits a new Chat to stop it', async () => {

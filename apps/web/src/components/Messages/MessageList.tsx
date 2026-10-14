@@ -653,8 +653,9 @@ export const MessageList = memo(function MessageList({
                   <div key={msg.id} data-chat-message-id={msg.id}>
                     <UserMessage
                       content={msg.content}
+                      quotedComments={msg.quotedComments}
                       inputKind={msg.inputKind}
-                      inferredIntent={msg.inferredIntent}
+                      inkInterpretation={msg.inkInterpretation}
                       attachments={msg.attachments}
                       selectedNodeIds={msg.selectedNodeIds}
                       selectedStrokeIds={msg.selectedStrokeIds}
@@ -667,12 +668,18 @@ export const MessageList = memo(function MessageList({
               }
 
               if (msg.role === 'assistant') {
+                const nextMessage = messages[i + 1];
                 elements.push(
                   <div key={msg.id} data-chat-message-id={msg.id}>
                     <AIMessage
                       messageId={msg.id}
                       segments={msg.segments}
                       isStreaming={msg.id === streamingAssistantId}
+                      endStatus={
+                        nextMessage?.role === 'status'
+                          ? nextMessage.status
+                          : undefined
+                      }
                       hideActions={hideAIActions}
                       enableComments={isActive && !isHistoryLoading}
                     />
@@ -716,6 +723,15 @@ export const MessageList = memo(function MessageList({
           )}
         </div>
       </div>
+
+      {!isHistoryLoading && !isLoading && messages.length === 0 ? (
+        <div
+          className="text-fg-subtle pointer-events-none absolute inset-0 flex items-center justify-center px-6 text-center text-xs"
+          data-chat-empty-disclaimer
+        >
+          {t('chat.aiContentDisclaimer')}
+        </div>
+      ) : null}
 
       {isAwayFromBottom && (
         <Button

@@ -16,6 +16,11 @@
 
 // ── Executor + runtime types ──────────────────────────────────────────────
 export {
+  computeAdjacentNodePlacement,
+  type NodePlacementBounds,
+  type NodePlacementSide,
+} from './utils/nodePlacement.js';
+export {
   SPACE_SHORTCUT_SIZE,
   clampSpaceShortcutWidth,
   normalizeSpaceShortcut,
@@ -191,6 +196,7 @@ export {
   createAbsolutePositionGetter,
   indexById,
   getDescendantIds,
+  getAncestorIds,
   canParentNode,
   isContainerNode,
   moveNodeIntoContainer,

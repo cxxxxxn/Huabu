@@ -2,7 +2,12 @@
 // Licensed under the MIT license.
 
 import type { AssistantHistoryPart } from './assistant-parts.js';
-import type { AgentInputKind, VisibleCanvasGrounding } from '../api/agent.js';
+import type {
+  AgentInputKind,
+  InkInterpretation,
+  QuotedComment,
+  VisibleCanvasGrounding,
+} from '../api/agent.js';
 
 export {
   chatEnvelopeSchema,
@@ -64,8 +69,9 @@ export type ChatHistoryItem =
   | {
       role: 'user';
       content: string;
+      quotedComments?: QuotedComment[];
       inputKind?: AgentInputKind;
-      inferredIntent?: string;
+      inkInterpretation?: InkInterpretation;
       /** Hidden retry metadata; never rendered as a Chat attachment. */
       groundingVisual?: VisibleCanvasGrounding;
       /** Image attachments recovered from multimodal messages. */

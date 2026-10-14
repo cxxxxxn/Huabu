@@ -11,6 +11,7 @@ const { listCanvases } = vi.hoisted(() => ({ listCanvases: vi.fn() }));
 const toolState = vi.hoisted(() => ({
   pendingNodeType: null as string | null,
 }));
+const inputState = vi.hoisted(() => ({ isNotMouse: false }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -28,7 +29,9 @@ vi.mock('@/api/canvas', () => ({ listCanvases }));
 
 vi.mock('@/config/shortcuts', () => ({ matchesShortcut: () => false }));
 
-vi.mock('@/hooks/useInputMode', () => ({ useIsNotMouse: () => false }));
+vi.mock('@/hooks/useInputMode', () => ({
+  useIsNotMouse: () => inputState.isNotMouse,
+}));
 
 vi.mock('@/store/toolStore', () => ({
   useToolStore: (
@@ -90,9 +93,48 @@ afterEach(() => {
   container = undefined;
   listCanvases.mockReset();
   toolState.pendingNodeType = null;
+  inputState.isNotMouse = false;
 });
 
 describe('NodeToolbar', () => {
+  it('uses roomier primary buttons without enlarging icons or compact dropdowns', () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() =>
+      root?.render(<NodeToolbar activeTool="select" onToolChange={vi.fn()} />),
+    );
+
+    for (const label of [
+      'toolbar.tools.select',
+      'toolbar.nodes.note',
+      'toolbar.nodes.text',
+      'toolbar.nodes.frame',
+      'toolbar.nodes.sketch',
+    ]) {
+      const button = container.querySelector<HTMLButtonElement>(
+        `button[aria-label^="${label}"]`,
+      );
+      expect(button).not.toBeNull();
+      for (const className of [
+        'h-9',
+        'w-9',
+        'p-2.5',
+        '[&_svg]:h-4',
+        '[&_svg]:w-4',
+        '[&>span]:right-1',
+        '[&>span]:bottom-1',
+      ]) {
+        expect(button?.classList.contains(className)).toBe(true);
+      }
+    }
+    const dropdown = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="toolbar.resources.addContent"]',
+    );
+    expect(dropdown?.classList.contains('h-9')).toBe(false);
+    expect(dropdown?.classList.contains('w-9')).toBe(false);
+  });
+
   it('labels the outlined Sparkles tool with Agent and describes its placement action', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -124,6 +166,7 @@ describe('NodeToolbar', () => {
           <NodeToolbar activeTool={activeTool} onToolChange={vi.fn()} />,
         ),
       );
+
       const selected = container.querySelector<HTMLButtonElement>(
         `button[aria-label^="toolbar.tools.${activeTool}"]`,
       );
@@ -135,6 +178,64 @@ describe('NodeToolbar', () => {
       expect(container.querySelectorAll('button.bg-info-bg')).toHaveLength(1);
     },
   );
+
+  it('shows a fixed leading Lasso button for touch and pen input', () => {
+    inputState.isNotMouse = true;
+    const onToolChange = vi.fn();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() =>
+      root?.render(
+        <NodeToolbar activeTool="select" onToolChange={onToolChange} />,
+      ),
+    );
+
+    const buttons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('button'),
+    );
+    const lasso = buttons.find(
+      (button) => button.getAttribute('aria-label') === 'toolbar.tools.lasso',
+    );
+    expect(lasso).toBe(buttons[0]);
+    expect(lasso?.getAttribute('aria-pressed')).toBe('false');
+    expect(
+      container.querySelector('button[aria-label^="toolbar.tools.select"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('button[aria-label^="toolbar.tools.pan"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('button[aria-label="toolbar.tools.moreTools"]'),
+    ).toBeNull();
+
+    act(() => lasso?.click());
+    expect(onToolChange).toHaveBeenCalledWith('lasso');
+  });
+
+  it('keeps the touch Lasso button active when pressed again', () => {
+    inputState.isNotMouse = true;
+    const onToolChange = vi.fn();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() =>
+      root?.render(
+        <NodeToolbar activeTool="lasso" onToolChange={onToolChange} />,
+      ),
+    );
+
+    const lasso = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="toolbar.tools.lasso"]',
+    );
+    expect(lasso?.getAttribute('aria-pressed')).toBe('true');
+    expect(lasso?.classList.contains('text-info')).toBe(true);
+    expect(lasso?.classList.contains('bg-info-bg')).toBe(true);
+
+    act(() => lasso?.click());
+    expect(onToolChange).toHaveBeenCalledWith('lasso');
+    expect(onToolChange).not.toHaveBeenCalledWith('select');
+  });
 
   it.each(['note', 'text', 'frame', 'sketch', 'question'])(
     'highlights only the pending %s placement button',
@@ -188,6 +289,19 @@ describe('NodeToolbar', () => {
       document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
     ).find((button) => button.textContent?.includes('spacePreview.add'));
     expect(previewAction).toBeDefined();
+    expect(previewAction?.classList.contains('text-[13px]')).toBe(true);
+    expect(previewAction?.classList.contains('font-normal')).toBe(true);
+    expect(previewAction?.classList.contains('leading-5')).toBe(true);
+    expect(previewAction?.classList.contains('gap-2')).toBe(true);
+    expect(previewAction?.querySelector('svg')?.parentElement?.className).toBe(
+      'shrink-0 text-inherit',
+    );
+    expect(previewAction?.parentElement?.classList.contains('rounded-lg')).toBe(
+      true,
+    );
+    expect(previewAction?.parentElement?.classList.contains('p-1')).toBe(true);
+    expect(previewAction?.classList.contains('min-h-7')).toBe(true);
+    expect(previewAction?.classList.contains('py-1')).toBe(true);
 
     await act(async () => previewAction?.click());
 
