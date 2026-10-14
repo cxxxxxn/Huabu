@@ -224,10 +224,15 @@ describe('server bundle runtime', () => {
         const entry = path.join(directory, 'probe.ts');
         writeFileSync(
           entry,
-          `import { writeFileSync } from 'node:fs';
+          `import { createRequire as __createRequire } from 'node:module';
+import { writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
+const localRequire = __createRequire(import.meta.url);
 const database = new DatabaseSync(':memory:');
-writeFileSync(process.argv[2], JSON.stringify(database.prepare('SELECT 42 AS answer').get()));
+writeFileSync(process.argv[2], JSON.stringify({
+  ...database.prepare('SELECT 42 AS answer').get(),
+  fsType: typeof localRequire('node:fs').readFileSync,
+}));
 database.close();
 `,
         );
@@ -251,6 +256,7 @@ database.close();
         );
         expect(JSON.parse(readFileSync(resultFile, 'utf8'))).toEqual({
           answer: 42,
+          fsType: 'function',
         });
       } finally {
         rmSync(directory, { recursive: true, force: true });

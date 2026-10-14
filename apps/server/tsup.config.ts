@@ -15,12 +15,12 @@ import { prepareVideoMedia } from './scripts/prepare-video-media.mjs';
 // asset lookups need file-relative `__dirname` / `__filename`.
 const BANNER = {
   js:
-    `import { createRequire as __createRequire } from 'module';\n` +
-    `import { fileURLToPath as __fileURLToPath } from 'url';\n` +
-    `import { dirname as __pathDirname } from 'path';\n` +
-    `const require = __createRequire(import.meta.url);\n` +
-    `const __filename = __fileURLToPath(import.meta.url);\n` +
-    `const __dirname = __pathDirname(__filename);`,
+    `import { createRequire as __huabuCreateRequire } from 'module';\n` +
+    `import { fileURLToPath as __huabuFileURLToPath } from 'url';\n` +
+    `import { dirname as __huabuPathDirname } from 'path';\n` +
+    `const require = __huabuCreateRequire(import.meta.url);\n` +
+    `const __filename = __huabuFileURLToPath(import.meta.url);\n` +
+    `const __dirname = __huabuPathDirname(__filename);`,
 };
 
 // @resvg/resvg-wasm ships its WebAssembly as `index_bg.wasm`. The agent
@@ -64,8 +64,8 @@ export default defineConfig([
     // Many bundled CJS packages call require('fs'), require('path'), etc.
     // In an ESM output file, `require` is not defined. This banner injects a
     // real `require` function so those CJS-style dynamic requires work correctly.
-    // Using __createRequire alias to avoid conflicts with any bundled source that
-    // also imports createRequire (e.g., pdf.loader.ts).
+    // Namespace banner-only aliases because esbuild cannot rename raw banner
+    // declarations when bundled source emits the same import alias.
     banner: BANNER,
     esbuildOptions(options) {
       options.platform = 'node';
