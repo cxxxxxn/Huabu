@@ -185,7 +185,10 @@ export const routes = {
   acpThreadModel: (threadId: string) => `/acp/threads/${enc(threadId)}/model`,
   acpThreadConfigOption: (threadId: string) =>
     `/acp/threads/${enc(threadId)}/config-option`,
-  acpThreadWarm: (threadId: string) => `/acp/threads/${enc(threadId)}/warm`,
+  acpProfileCapabilities: (profileId: string) =>
+    `/acp/profiles/${enc(profileId)}/capabilities`,
+  acpProfileCapabilitiesDiscover: (profileId: string) =>
+    `/acp/profiles/${enc(profileId)}/capabilities/discover`,
 
   // ── Built-in agent per-thread settings ────────────────────────────
   agentThreadSettings: (threadId: string, canvasId?: string) =>

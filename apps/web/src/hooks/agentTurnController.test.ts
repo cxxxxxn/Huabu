@@ -6,8 +6,13 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from '@/api/_client';
+import { useAcpThreadChangesStore } from '@/store/acpThreadChangesStore';
 import useCanvasStore from '@/store/canvasStore';
-import { selectThreadMessages, useChatStore } from '@/store/chatStore';
+import {
+  selectThreadExcludeCanvasSelection,
+  selectThreadMessages,
+  useChatStore,
+} from '@/store/chatStore';
 import { useGesturePreviewStore } from '@/store/gesturePreviewStore';
 
 import {
@@ -1129,6 +1134,152 @@ describe('shared Agent turn input', () => {
     },
   );
 
+  describe('composer selection exclusion', () => {
+    it.each([
+      { external: false, anchored: false },
+      { external: true, anchored: false },
+      { external: false, anchored: true },
+      { external: true, anchored: true },
+    ])(
+      'sends empty selection, preserves explicit context and retries the original sources: %j',
+      async ({ external, anchored }) => {
+        vi.spyOn(
+          useAcpThreadChangesStore.getState(),
+          'load',
+        ).mockResolvedValue();
+        const owner = anchored ? questionSession : session;
+        const binding = external
+          ? {
+              kind: 'external' as const,
+              profileId: 'profile-1',
+              alias: 'Agent',
+            }
+          : { kind: 'internal' as const };
+        const canvas = useCanvasStore.getState();
+        canvas._setStateNoAutosave({
+          nodes: [
+            {
+              id: 'frame-1',
+              type: 'frame',
+              selected: true,
+              position: { x: 0, y: 0 },
+              data: {},
+            },
+            {
+              id: 'image-1',
+              type: 'image',
+              parentId: 'frame-1',
+              position: { x: 0, y: 0 },
+              data: { src: 'artifact.png' },
+            },
+            {
+              id: 'sketch-1',
+              type: 'sketch',
+              parentId: 'frame-1',
+              position: { x: 0, y: 0 },
+              data: {},
+            },
+            ...(anchored
+              ? [
+                  {
+                    id: 'question-1',
+                    type: 'question',
+                    selected: true,
+                    position: { x: 0, y: 0 },
+                    data: {
+                      threadId: 'thread-1',
+                      status: 'idle',
+                      agentBinding: binding,
+                    },
+                  },
+                ]
+              : []),
+          ],
+        });
+        const nodes = useCanvasStore.getState().nodes;
+        const strokes = useGesturePreviewStore.getState().sketchStrokeSelection;
+        const attachment: ChatAttachment = {
+          type: 'text',
+          source: 'upload',
+          content: 'Explicit upload',
+        };
+        const excerpt: ChatAttachment = {
+          type: 'text',
+          source: 'excerpt',
+          content: 'Explicit excerpt',
+        };
+        const chat = useChatStore.getState();
+        chat.setAgentBinding(session.threadId, binding);
+        chat.addPendingAttachment(session.threadId, attachment);
+        chat.setSelectionAttachment(excerpt);
+        chat.setExcludeCanvasSelection(session.threadId, true);
+        chat.setDraft(session.threadId, 'Hello');
+        let hook!: UseAgentStreamReturn;
+        function Harness() {
+          hook = useAgentStream(owner);
+          return null;
+        }
+        container = document.createElement('div');
+        root = createRoot(container);
+        await act(async () => root?.render(createElement(Harness)));
+        await act(async () => hook.startStream('Hello', 'operate'));
+        const sent = mocks.stream.mock.calls[0][4];
+        expect(sent.canvasContext).toEqual({ selectedNodes: [] });
+        expect(sent.attachments).toEqual([attachment, excerpt]);
+        expect(sent.agentBinding).toEqual(binding);
+        expect(sent.anchorNodeId).toBe(anchored ? 'question-1' : undefined);
+        expect(
+          selectThreadExcludeCanvasSelection(
+            useChatStore.getState(),
+            session.threadId,
+          ),
+        ).toBe(false);
+        expect(useCanvasStore.getState().nodes).toBe(nodes);
+        expect(useGesturePreviewStore.getState().sketchStrokeSelection).toBe(
+          strokes,
+        );
+        const message = selectThreadMessages(
+          useChatStore.getState(),
+          session.threadId,
+        ).find((item) => item.role === 'user');
+        if (message?.role !== 'user') throw new Error('Missing user message');
+        expect(message.selectedNodeIds).toBeUndefined();
+        expect(message.selectedStrokeIds).toBeUndefined();
+        await act(async () => hook.retryStream(message, 'operate'));
+        expect(mocks.stream.mock.calls[1][4].canvasContext).toEqual({
+          selectedNodes: [],
+        });
+        await act(async () => hook.startStream('Next message', 'operate'));
+        expect(
+          mocks.stream.mock.calls[2][4].canvasContext.selectedNodes,
+        ).toEqual([
+          {
+            id: 'frame-1',
+            type: 'frame',
+            children: [
+              { id: 'image-1', type: 'image', src: 'artifact.png' },
+              { id: 'sketch-1', type: 'sketch', strokeIds: ['stroke-1'] },
+            ],
+          },
+        ]);
+      },
+    );
+
+    it('does not suppress explicit Ink intent or consume the composer exclusion', async () => {
+      useChatStore.getState().setExcludeCanvasSelection(session.threadId, true);
+      await dispatchAgentTurn(request('ink-intent'));
+      expect(
+        mocks.stream.mock.calls[0][4].canvasContext.selectedNodes,
+      ).not.toEqual([]);
+      expect(
+        selectThreadExcludeCanvasSelection(
+          useChatStore.getState(),
+          session.threadId,
+        ),
+      ).toBe(true);
+    });
+  });
+
   describe('optimistic composer clearing', () => {
     let hook: UseAgentStreamReturn;
     const quote = {
@@ -1190,6 +1341,65 @@ describe('shared Agent turn input', () => {
         snapshot.pendingQuotedComments,
       );
       expect(mocks.stream).not.toHaveBeenCalled();
+    });
+
+    it.each(['preflight', 'transport'])(
+      'restores selection exclusion with the rejected draft: %s',
+      async (phase) => {
+        useChatStore
+          .getState()
+          .setExcludeCanvasSelection(session.threadId, true);
+        if (phase === 'preflight') {
+          mocks.save.mockRejectedValueOnce(new Error('Save conflict'));
+        } else {
+          mocks.stream.mockImplementationOnce(
+            async (
+              _content,
+              _thread,
+              _mode,
+              callbacks: AgentStreamCallbacks,
+            ) => {
+              callbacks.onError(new ApiError(400, {}, 'Rejected'));
+            },
+          );
+        }
+        await act(async () => hook.startStream('Hello', 'operate'));
+        expect(
+          selectThreadExcludeCanvasSelection(
+            useChatStore.getState(),
+            session.threadId,
+          ),
+        ).toBe(true);
+        expect(
+          useChatStore.getState().threadsById[session.threadId].draft,
+        ).toBe('Hello');
+      },
+    );
+
+    it('does not reset exclusion staged for the next draft when the previous turn is accepted', async () => {
+      useChatStore.getState().setExcludeCanvasSelection(session.threadId, true);
+      mocks.stream.mockImplementationOnce(
+        async (_content, _thread, _mode, callbacks: AgentStreamCallbacks) => {
+          const chat = useChatStore.getState();
+          chat.setDraft(session.threadId, 'Next draft');
+          chat.setExcludeCanvasSelection(session.threadId, true);
+          callbacks.onAccepted?.({
+            threadId: session.threadId,
+            turnStartSeq: 5,
+          });
+          callbacks.onComplete();
+        },
+      );
+      await act(async () => hook.startStream('Hello', 'operate'));
+      expect(
+        selectThreadExcludeCanvasSelection(
+          useChatStore.getState(),
+          session.threadId,
+        ),
+      ).toBe(true);
+      expect(useChatStore.getState().threadsById[session.threadId].draft).toBe(
+        'Next draft',
+      );
     });
 
     it('clears a quote-only submission immediately', async () => {

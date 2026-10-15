@@ -88,6 +88,7 @@ const DEBOUNCE_MS = 250;
  * `available_commands_update` replaces it wholesale on each session.
  */
 export interface AcpProfileSchemaCacheEntry {
+  executionRevision?: number;
   availableModes?: AcpSessionMode[];
   currentModeId?: string | null;
   availableModels?: AcpModelInfo[];
@@ -146,6 +147,10 @@ function sanitizeEntry(raw: unknown): AcpProfileSchemaCacheEntry | undefined {
   const r = raw as Record<string, unknown>;
   const out: AcpProfileSchemaCacheEntry = {};
   let touched = false;
+  if (typeof r.executionRevision === 'number') {
+    out.executionRevision = r.executionRevision;
+    touched = true;
+  }
   if (Array.isArray(r.availableModes)) {
     out.availableModes = r.availableModes as AcpSessionMode[];
     touched = true;
@@ -213,6 +218,10 @@ export function mergeProfileSchemaCache(
   const cache = ensureLoaded();
   const prior = cache.get(profileId) ?? {};
   const next: AcpProfileSchemaCacheEntry = { ...prior };
+
+  if (patch.executionRevision !== undefined) {
+    next.executionRevision = patch.executionRevision;
+  }
 
   if (patch.availableModes !== undefined) {
     next.availableModes = patch.availableModes;

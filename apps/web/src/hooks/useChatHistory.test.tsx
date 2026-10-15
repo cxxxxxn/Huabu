@@ -14,7 +14,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { useChatStore } from '@/store/chatStore';
+import { selectThreadHistoryLoaded, useChatStore } from '@/store/chatStore';
 import {
   conversationTitleKey,
   getConversationTitle,
@@ -110,16 +110,16 @@ const SESSION: ChatSession = {
 };
 
 function Harness({ session = SESSION }: { session?: ChatSession }) {
-  latestLoadOlderHistory = useChatHistory(
-    session,
-    noopSetIsLoading,
-  ).loadOlderHistory;
+  const history = useChatHistory(session, noopSetIsLoading);
+  latestLoadOlderHistory = history.loadOlderHistory;
+  latestRetryHistory = history.retryHistory;
   return null;
 }
 
 let root: Root | undefined;
 let container: HTMLDivElement | undefined;
 let latestLoadOlderHistory: (() => void) | undefined;
+let latestRetryHistory: (() => void) | undefined;
 
 /** History ends on a user turn: the state that arms the reconnect. */
 function seedStore(isStreaming: boolean) {
@@ -130,6 +130,7 @@ function seedStore(isStreaming: boolean) {
         messages: [{ id: 'm1', role: 'user', content: 'hi' }],
         draft: '',
         pendingQuotedComments: [],
+        excludeCanvasSelection: false,
         historyLoaded: true,
         historyBefore: null,
         hasOlderHistory: false,
@@ -196,6 +197,63 @@ afterEach(() => {
 });
 
 describe('useChatHistory paging', () => {
+  it.each([false, true])(
+    'does not request history for a newly created thread with node=%s',
+    async (node) => {
+      const threadId = useChatStore
+        .getState()
+        .createThread({ binding: { kind: 'internal' } });
+      const session: ChatSession = {
+        ...SESSION,
+        threadId,
+        conversationView: node
+          ? {
+              presentationAnchor: { canvasId: CANVAS_ID, nodeId: 'node-new' },
+              conversationOwner: {
+                canvasId: CANVAS_ID,
+                nodeId: 'node-new',
+                threadId,
+              },
+            }
+          : null,
+      };
+      await renderHarness(session);
+      expect(apiMocks.fetchHistoryPage).not.toHaveBeenCalled();
+      expect(apiMocks.reconnectStream).not.toHaveBeenCalled();
+    },
+  );
+
+  it('retains the draft and blocks sending after a failed initial load until explicit retry', async () => {
+    useChatStore.setState({ threadsById: {} });
+    useChatStore.getState().setDraft(THREAD_ID, 'Keep my draft');
+    apiMocks.fetchHistoryPage.mockRejectedValueOnce(
+      new Error('History unavailable'),
+    );
+    await renderHarness();
+    expect(selectThreadHistoryLoaded(useChatStore.getState(), THREAD_ID)).toBe(
+      false,
+    );
+    expect(useChatStore.getState().threadsById[THREAD_ID]).toMatchObject({
+      draft: 'Keep my draft',
+      historyError: 'History unavailable',
+    });
+    expect(apiMocks.fetchHistoryPage).toHaveBeenCalledOnce();
+    apiMocks.fetchHistoryPage.mockResolvedValueOnce({
+      threadId: THREAD_ID,
+      turns: [],
+      hasMore: false,
+    });
+    await act(async () => {
+      latestRetryHistory?.();
+    });
+    expect(selectThreadHistoryLoaded(useChatStore.getState(), THREAD_ID)).toBe(
+      true,
+    );
+    expect(useChatStore.getState().threadsById[THREAD_ID]).toMatchObject({
+      draft: 'Keep my draft',
+      historyError: null,
+    });
+  });
   it('rehydrates quote-only user messages without regenerating template text', async () => {
     useChatStore.setState({ threadsById: {} });
     const quotedComments = [

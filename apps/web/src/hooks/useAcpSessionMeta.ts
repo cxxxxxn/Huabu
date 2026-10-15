@@ -4,16 +4,21 @@
 /**
  * Reads thread/Profile capability observations through the GET-only cache
  * endpoint and merges live metadata events after a real interaction starts.
- * Cache misses are normal and never create a workload or ACP process.
+ * Cache misses discover Profile capabilities without realizing this thread.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { getAcpThreadCachedMeta } from '@/api/acp';
+import { getAcpThreadCachedMeta, loadAcpProfileCapabilities } from '@/api/acp';
 import {
   registerAcpSessionMetaSink,
   type AcpSessionMetaStreamEvent,
 } from '@/hooks/useAgentStream';
+import { selectThreadIsLoading, useChatStore } from '@/store/chatStore';
+import {
+  observeConversationExecution,
+  useConversationPreparationStore,
+} from '@/store/conversationPreparation';
 
 import type {
   AcpSessionMetaSnapshot,
@@ -119,6 +124,10 @@ export function useAcpSessionMeta({
 
   const bindingKind = binding.kind;
   const profileId = binding.kind === 'external' ? binding.profileId : '';
+  const isStreaming = useChatStore(
+    (state) => !!threadId && selectThreadIsLoading(state, threadId),
+  );
+  const wasStreaming = useRef(false);
 
   const refresh = useCallback(async () => {
     const myEpoch = ++epochRef.current;
@@ -140,12 +149,26 @@ export function useAcpSessionMeta({
     setLoading(true);
     loadingRef.current = true;
     try {
-      const res = await getAcpThreadCachedMeta(
+      const preparationRevision =
+        useConversationPreparationStore.getState().revisions[
+          JSON.stringify([canvasId ?? '', threadId])
+        ] ?? 0;
+      let res = await getAcpThreadCachedMeta(
         threadId,
         canvasId ?? undefined,
         profileId,
       );
       if (!isCurrent()) return;
+      observeConversationExecution(
+        canvasId ?? '',
+        threadId,
+        res.execution,
+        preparationRevision,
+      );
+      if (res.source !== 'thread' && res.sessionMeta.updatedAt === 0) {
+        res = await loadAcpProfileCapabilities(profileId);
+        if (!isCurrent()) return;
+      }
       setMeta(res.sessionMeta);
       setSource(res.source);
       setError(null);
@@ -154,8 +177,10 @@ export function useAcpSessionMeta({
       if (!isCurrent()) return;
       setError(err instanceof Error ? err : new Error(String(err)));
     } finally {
-      if (isCurrent()) setLoading(false);
-      loadingRef.current = false;
+      if (isCurrent()) {
+        setLoading(false);
+        loadingRef.current = false;
+      }
     }
   }, [threadId, canvasId, bindingKind, profileId, enabled]);
 
@@ -170,6 +195,10 @@ export function useAcpSessionMeta({
   );
 
   const applyEvent = useCallback((event: AcpSessionMetaEvent) => {
+    epochRef.current++;
+    loadingRef.current = false;
+    setLoading(false);
+    setError(null);
     setSource('thread');
     setMeta((prev) => {
       switch (event.type) {
@@ -263,6 +292,12 @@ export function useAcpSessionMeta({
     },
     [],
   );
+
+  useEffect(() => {
+    const finished = wasStreaming.current && !isStreaming;
+    wasStreaming.current = isStreaming;
+    if (finished) void refresh();
+  }, [isStreaming, refresh]);
 
   useEffect(() => {
     setMeta(EMPTY_META);

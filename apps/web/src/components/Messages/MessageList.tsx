@@ -681,7 +681,7 @@ export const MessageList = memo(function MessageList({
                           : undefined
                       }
                       hideActions={hideAIActions}
-                      enableComments={isActive && !isHistoryLoading}
+                      enableComments={isActive}
                     />
                   </div>,
                 );

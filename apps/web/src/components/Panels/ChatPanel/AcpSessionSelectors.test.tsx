@@ -387,7 +387,7 @@ describe('AcpSessionSelectors Profile observations', () => {
   });
 });
 
-describe('AcpSessionSelectors cache-miss warm-up pill', () => {
+describe('AcpSessionSelectors capability loading', () => {
   const emptyMeta: AcpSessionMetaSnapshot = {
     availableModes: [],
     currentModeId: null,
@@ -400,8 +400,8 @@ describe('AcpSessionSelectors cache-miss warm-up pill', () => {
     updatedAt: 0,
   };
 
-  it('renders a clickable warm-up pill for a genuine cache miss with onWarm', () => {
-    const onWarm = vi.fn();
+  it('offers retry only after capability loading fails', () => {
+    const onRetry = vi.fn();
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -410,7 +410,8 @@ describe('AcpSessionSelectors cache-miss warm-up pill', () => {
         <AcpSessionSelectors
           source="none"
           meta={emptyMeta}
-          onWarm={onWarm}
+          error={new Error('Agent is offline')}
+          onRetry={onRetry}
           onSelectMode={vi.fn()}
           onSelectModel={vi.fn()}
           onSelectConfigOption={vi.fn()}
@@ -420,15 +421,18 @@ describe('AcpSessionSelectors cache-miss warm-up pill', () => {
 
     const button = container.querySelector('button');
     expect(button).not.toBeNull();
-    expect(button?.textContent).toContain('chat.warmAgentOptions');
+    expect(button?.textContent).toContain('chat.retryAgentOptions');
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      'Agent is offline',
+    );
 
     act(() => {
       button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-    expect(onWarm).toHaveBeenCalledTimes(1);
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
-  it('renders nothing for a genuine cache miss when onWarm is not supplied', () => {
+  it('does not offer a manual warm button for an empty observation', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -448,8 +452,8 @@ describe('AcpSessionSelectors cache-miss warm-up pill', () => {
     expect(container.textContent).toBe('');
   });
 
-  it('prefers the loading placeholder over the warm-up pill while a fetch is in flight', () => {
-    const onWarm = vi.fn();
+  it('prefers the loading placeholder over retry while a fetch is in flight', () => {
+    const onRetry = vi.fn();
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -459,7 +463,8 @@ describe('AcpSessionSelectors cache-miss warm-up pill', () => {
           source="none"
           meta={emptyMeta}
           loading
-          onWarm={onWarm}
+          error={new Error('Previous failure')}
+          onRetry={onRetry}
           onSelectMode={vi.fn()}
           onSelectModel={vi.fn()}
           onSelectConfigOption={vi.fn()}

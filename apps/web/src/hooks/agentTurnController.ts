@@ -40,6 +40,11 @@ import {
   validateConversationView,
 } from '@/store/conversationOwner';
 import {
+  beginConversationRealization,
+  conversationControlTarget,
+  resolveConversationPreparation,
+} from '@/store/conversationPreparation';
+import {
   invalidateConversationTitle,
   refreshConversationTitleAfterStream,
 } from '@/store/conversationTitleStore';
@@ -1008,6 +1013,9 @@ export async function dispatchAgentTurn(
   const { addMessage, setThreadLastAction, setThreadLoading } =
     useChatStore.getState();
   const result: AgentTurnResult = { status: 'rejected' };
+  let requestedCwd: string | undefined;
+  let requestDispatched = false;
+  let releasePreparation: ((attempted?: boolean) => void) | undefined;
   const run = async (): Promise<void> => {
     // Per-thread guard: this thread's own loading flag, not any other
     // thread's. The user may already have a stream running in a
@@ -1194,6 +1202,9 @@ export async function dispatchAgentTurn(
       // from `selectedNodes` for the same reason as `selectedNodeIds`
       // above — it is the conversation anchor, not a separate source.
       result.status = 'unknown';
+      requestDispatched = true;
+      releasePreparation?.();
+      releasePreparation = undefined;
       await agentApi.streamMessage(
         prompt,
         threadId,
@@ -1255,6 +1266,7 @@ export async function dispatchAgentTurn(
           canvasId: requestScope.canvasId || undefined,
           attachments,
           agentBinding,
+          cwd: requestedCwd,
           anchorNodeId: requestScope.anchorNodeId,
           invokedSkills,
           quotedComments,
@@ -1321,7 +1333,31 @@ export async function dispatchAgentTurn(
       }
     }
   };
-  await run();
+  const preparation = resolveConversationPreparation(session);
+  if (preparation.pending) {
+    return { status: 'busy' };
+  }
+  if (
+    preparation.binding.kind === 'external' &&
+    (prompt.trim() || quotedComments?.length || inputKind === 'ink-intent')
+  ) {
+    requestedCwd = conversationControlTarget(session).cwd;
+    try {
+      releasePreparation = beginConversationRealization(session);
+    } catch (error) {
+      return {
+        status: 'busy',
+        error: error instanceof Error ? error : new Error(String(error)),
+      };
+    }
+    try {
+      await run();
+    } finally {
+      releasePreparation?.(requestDispatched);
+    }
+  } else {
+    await run();
+  }
   return result;
 }
 

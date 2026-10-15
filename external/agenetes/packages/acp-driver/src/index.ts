@@ -101,3 +101,5 @@ export type {
   EnsureAcpSessionOptions,
   AcpProfileCachePort,
 } from './session.js';
+
+export { probeAcpCapabilities } from './probe.js';

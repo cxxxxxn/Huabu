@@ -972,6 +972,24 @@ describe('AgentThreadService', () => {
     expect(harness.release).toHaveBeenCalledOnce();
   });
 
+  it('carries standalone Chat directory intent into canonical external realization', async () => {
+    const harness = createHarness({ target: null, agentTarget: null });
+    const invocation = await harness.service.invoke({
+      ...invocationOptions(),
+      requestedCwd: '/chat/project',
+    });
+    for await (const _event of invocation.events) {
+      /* Drain the invocation. */
+    }
+    expect(harness.realizeExternal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestedCwd: '/chat/project',
+        agentTarget: null,
+        fixedTarget: null,
+      }),
+    );
+  });
+
   it('passes a structured submission to the external Agent handle', async () => {
     const harness = createHarness();
     const submission = createInteractiveViewSubmission({

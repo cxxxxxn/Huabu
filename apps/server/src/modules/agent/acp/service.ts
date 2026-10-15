@@ -196,7 +196,7 @@ export function buildAcpWorkloadSpec(
     binding.alias,
   );
 
-  const workingDirPath = opts.launchOverrides?.workingDirPath;
+  const workingDirPath = opts.launchOverrides?.workingDirPath ?? opts.cwd;
   cwd = workingDirPath ?? cwd;
   recipe = applyWorkingDirectoryOverride(recipe, workingDirPath);
 
@@ -218,6 +218,7 @@ export function buildAcpWorkloadSpec(
       binding,
       agentletId,
       ...(cwd !== undefined && { cwd }),
+      workingDirectoryOverride: workingDirPath ?? null,
       recipe,
       env: buildReachbackEnv(threadId, canvasId),
     },

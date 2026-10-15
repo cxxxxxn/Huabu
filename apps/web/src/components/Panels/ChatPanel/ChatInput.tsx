@@ -2,16 +2,11 @@
 // Licensed under the MIT license.
 
 import { ArrowUp, Square } from 'lucide-react';
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { uploadImage, uploadPdf } from '@/api/artifact';
+import { useAutoSizeTextArea } from '@/hooks/useAutoSizeTextArea';
 import { useChatSession } from '@/hooks/useChatSession';
 import {
   selectThreadMessages,
@@ -94,6 +89,7 @@ export interface ChatInputProps {
   /** Active node shown in the other Preview split group. */
   adjacentNodeSourceId?: string;
   disabled?: boolean;
+  submitDisabled?: boolean;
   placeholder?: string;
   /**
    * When true, the change-review card is attached directly above the
@@ -119,6 +115,7 @@ export const ChatInput = ({
   contextUsageOverride,
   adjacentNodeSourceId,
   disabled = false,
+  submitDisabled = false,
   placeholder,
   connectedTop = false,
 }: ChatInputProps) => {
@@ -132,29 +129,7 @@ export const ChatInput = ({
   const focusComposer = useCallback(() => {
     textareaRef.current?.focus({ preventScroll: true });
   }, []);
-  const resizeComposer = useCallback(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    textarea.style.overflowY = 'hidden';
-    textarea.style.height = 'auto';
-    textarea.style.height = textarea.value ? `${textarea.scrollHeight}px` : '';
-    textarea.style.overflowY = '';
-  }, []);
-
-  useLayoutEffect(resizeComposer, [resizeComposer, value]);
-
-  useLayoutEffect(() => {
-    const parent = textareaRef.current?.parentElement;
-    if (!parent || typeof ResizeObserver === 'undefined') return;
-    let width = parent.getBoundingClientRect().width;
-    const observer = new ResizeObserver(([entry]) => {
-      if (!entry || entry.contentRect.width === width) return;
-      width = entry.contentRect.width;
-      resizeComposer();
-    });
-    observer.observe(parent);
-    return () => observer.disconnect();
-  }, [resizeComposer]);
+  useAutoSizeTextArea(textareaRef, value);
 
   // Pending attachments belong to the thread this composer is sending to.
   const { threadId, canvasId } = useChatSession();
@@ -170,6 +145,7 @@ export const ChatInput = ({
   const setQuotedComments = useChatStore((state) => state.setQuotedComments);
   const isSubmitDisabled =
     disabled ||
+    submitDisabled ||
     (!value.trim() && quotedComments.length === 0) ||
     quotedComments.some((item) => !item.comment.trim());
   const addPendingAttachment = useChatStore((s) => s.addPendingAttachment);

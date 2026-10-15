@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { getAcpThreadCachedMeta } from '@/api/acp';
+import { getAcpThreadCachedMeta, loadAcpProfileCapabilities } from '@/api/acp';
 
 import type { AgentBinding, AvailableCommand } from '@huabu/shared';
 
@@ -28,8 +28,7 @@ export interface UseAcpSlashCommandsOptions {
 /**
  * Read slash commands from the server-owned capability cache.
  *
- * Mount and slash-menu refreshes are GET-only. A cache miss is a normal empty
- * result and never creates a workload or starts an ACP process.
+ * A cache miss discovers Profile capabilities without realizing this thread.
  */
 export function useAcpSlashCommands({
   threadId,
@@ -64,12 +63,19 @@ export function useAcpSlashCommands({
     setLoading(true);
     loadingRef.current = true;
     try {
-      const response = await getAcpThreadCachedMeta(
+      let response = await getAcpThreadCachedMeta(
         threadId,
         canvasId ?? undefined,
         profileId,
       );
       if (!isCurrent()) return;
+      if (
+        response.source !== 'thread' &&
+        response.sessionMeta.updatedAt === 0
+      ) {
+        response = await loadAcpProfileCapabilities(profileId);
+        if (!isCurrent()) return;
+      }
       // `availableCommands` is dropped from the JSON body entirely when the
       // server's live session entry hasn't populated it yet, so `response`
       // can arrive without the field despite the response type saying
@@ -82,8 +88,10 @@ export function useAcpSlashCommands({
       if (!isCurrent()) return;
       setError(value instanceof Error ? value : new Error(String(value)));
     } finally {
-      if (isCurrent()) setLoading(false);
-      loadingRef.current = false;
+      if (isCurrent()) {
+        setLoading(false);
+        loadingRef.current = false;
+      }
     }
   }, [threadId, bindingKind, enabled, canvasId, profileId]);
 

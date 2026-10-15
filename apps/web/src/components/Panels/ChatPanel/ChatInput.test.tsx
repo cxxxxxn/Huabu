@@ -103,7 +103,11 @@ afterEach(() => {
 });
 
 describe('ChatInput', () => {
-  function renderQuotedInput(value = '', isStreaming = false) {
+  function renderQuotedInput(
+    value = '',
+    isStreaming = false,
+    submitDisabled = false,
+  ) {
     const onSubmit = vi.fn();
     const onChange = vi.fn();
     container = document.createElement('div');
@@ -126,12 +130,35 @@ describe('ChatInput', () => {
             onStop={vi.fn()}
             mode="ask"
             isStreaming={isStreaming}
+            submitDisabled={submitDisabled}
           />
         </ChatSessionProvider>,
       ),
     );
     return { onSubmit, onChange };
   }
+
+  it('keeps the draft editable while history blocks both button and keyboard submission', () => {
+    const { onSubmit } = renderQuotedInput('Unsent draft', false, true);
+    const textarea = container?.querySelector('textarea');
+    expect(textarea?.disabled).toBe(false);
+    expect(textarea?.value).toBe('Unsent draft');
+    expect(
+      container?.querySelector<HTMLButtonElement>('[aria-label="chat.send"]')
+        ?.disabled,
+    ).toBe(true);
+    act(() => {
+      textarea?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+      );
+      container
+        ?.querySelector('form')
+        ?.dispatchEvent(
+          new Event('submit', { bubbles: true, cancelable: true }),
+        );
+    });
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
 
   it.each(['Explain this.', '   '])(
     'displays quoted comments without an editor and gates quote-only send for %j',

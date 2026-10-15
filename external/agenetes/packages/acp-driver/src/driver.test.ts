@@ -51,6 +51,25 @@ describe('acpDriverFactory (M5 FACTORY)', () => {
     }
   });
 
+  it('preserves directory origin separately from effective cwd during durable spec validation', () => {
+    const driver = acpDriverFactory();
+    const spec = {
+      binding: { alias: 'Agent', profileId: 'profile' },
+      cwd: '/same/path',
+    };
+    for (const workingDirectoryOverride of [null, '/same/path']) {
+      expect(
+        driver.validateSpec(
+          JSON.parse(JSON.stringify({ ...spec, workingDirectoryOverride })),
+        ),
+      ).toEqual({ ...spec, workingDirectoryOverride });
+    }
+    expect(driver.validateSpec(spec)).toEqual(spec);
+    expect(() =>
+      driver.validateSpec({ ...spec, workingDirectoryOverride: true }),
+    ).toThrow();
+  });
+
   it.each([
     { agentDir: '/retired', harness: 'copilot' },
     {

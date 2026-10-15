@@ -4,6 +4,11 @@
 import { acpHarnessLaunchSchema } from '@agenetes/protocol';
 import { z } from 'zod';
 
+import {
+  isAgentWorkingDirectory,
+  MAX_AGENT_WORKING_DIR_PATH_LENGTH,
+} from '../../utils/agent-working-directory.js';
+
 const trimmedString = (max: number) =>
   z
     .string()
@@ -13,13 +18,10 @@ const trimmedString = (max: number) =>
       message: 'Must not contain surrounding whitespace',
     });
 
-const pathSchema = trimmedString(4096).refine(
-  (value) =>
-    value.startsWith('/') ||
-    /^[A-Za-z]:[\\/]/.test(value) ||
-    value.startsWith('\\\\'),
-  { message: 'Must be an absolute path' },
-);
+export const agentWorkingDirectorySchema = trimmedString(
+  MAX_AGENT_WORKING_DIR_PATH_LENGTH,
+).refine(isAgentWorkingDirectory, { message: 'Must be an absolute path' });
+const pathSchema = agentWorkingDirectorySchema;
 
 /**
  * An arbitrary JSON value. Backs {@link customDataSchema}, the opaque

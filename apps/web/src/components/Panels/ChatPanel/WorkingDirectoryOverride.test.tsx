@@ -34,7 +34,7 @@ async function openPopover() {
 
 function nodeOverrideInput(): HTMLInputElement {
   const input = document.body.querySelector<HTMLInputElement>(
-    'input[aria-label="Node override"]',
+    'input[aria-label="Conversation override"]',
   );
   assert(input);
   return input;
@@ -82,7 +82,7 @@ describe('WorkingDirectoryOverride', () => {
       onSave,
     });
     const updatedInput = document.body.querySelector<HTMLInputElement>(
-      'input[aria-label="Node override"]',
+      'input[aria-label="Conversation override"]',
     );
     expect(updatedInput?.value).toBe('');
     expect(updatedInput?.placeholder).toBe('/profiles/second');
@@ -191,7 +191,7 @@ describe('WorkingDirectoryOverride', () => {
     });
     expect(
       container.querySelector(
-        '[aria-label="Node working directory: /node/work"]',
+        '[aria-label="Conversation working directory: /node/work"]',
       ),
     ).not.toBeNull();
     await openPopover();
@@ -201,5 +201,71 @@ describe('WorkingDirectoryOverride', () => {
     assert(restore);
     await act(async () => restore.click());
     expect(onSave).toHaveBeenCalledWith(null);
+  });
+
+  it('shows a frozen inherited path without an override marker after the Profile changes', async () => {
+    await render({
+      profileAlias: 'Changed Profile',
+      profileWorkingDirPath: '/profiles/new',
+      effectiveWorkingDirPath: '/profiles/original',
+      directorySource: 'profile',
+      editable: false,
+      saving: false,
+      onSave: vi.fn(),
+    });
+    const trigger = container.querySelector('button');
+    expect(trigger?.getAttribute('aria-label')).toBe(
+      'Working directory inherited from Profile: /profiles/original',
+    );
+    expect(trigger?.querySelector('span')).toBeNull();
+    await openPopover();
+    expect(document.body.textContent).toContain('/profiles/original');
+    expect(document.body.textContent).toContain('/profiles/new');
+    expect(document.body.querySelector('input')).toBeNull();
+  });
+
+  it('marks an explicit override even when it equals the Profile default', async () => {
+    await render({
+      profileAlias: 'Profile',
+      profileWorkingDirPath: '/same',
+      workingDirPath: '/same',
+      effectiveWorkingDirPath: '/same',
+      directorySource: 'override',
+      editable: false,
+      saving: false,
+      onSave: vi.fn(),
+    });
+    expect(container.querySelector('button')?.getAttribute('aria-label')).toBe(
+      'Conversation working directory: /same',
+    );
+    expect(container.querySelector('button .bg-info')).not.toBeNull();
+  });
+
+  it('does not infer directory origin for a legacy execution or fall back to a changed Profile', async () => {
+    const props = {
+      profileAlias: 'Profile',
+      profileWorkingDirPath: '/profiles/new',
+      effectiveWorkingDirPath: '/legacy',
+      directorySource: 'unknown' as const,
+      editable: false,
+      saving: false,
+      onSave: vi.fn(),
+    };
+    await render(props);
+    expect(container.querySelector('button')?.getAttribute('aria-label')).toBe(
+      'Session working directory: /legacy',
+    );
+    expect(container.querySelector('button .bg-info')).toBeNull();
+    await render({ ...props, effectiveWorkingDirPath: null });
+    expect(container.querySelector('button')?.getAttribute('aria-label')).toBe(
+      'Session working directory: Not specified',
+    );
+    await openPopover();
+    const effectiveLabel = [...document.body.querySelectorAll('dt')].find(
+      (label) => label.textContent === 'Effective directory',
+    );
+    expect(effectiveLabel?.nextElementSibling?.textContent).toBe(
+      'Not specified',
+    );
   });
 });

@@ -51,7 +51,7 @@ vi.mock('../agenetes/index.js', () => ({
   },
 }));
 
-import acpThreadsRoutes, { awaitSchemaQuiescence } from './threads.route.js';
+import acpThreadsRoutes from './threads.route.js';
 
 let app: FastifyInstance | undefined;
 
@@ -75,6 +75,123 @@ async function createApp(): Promise<FastifyInstance> {
 }
 
 describe('ACP cached capability route', () => {
+  it.each([
+    ['mode', { modeId: 'plan' }],
+    ['model', { modelId: 'model-1' }],
+    ['config-option', { configOptionId: 'effort', value: 'high' }],
+  ])(
+    'passes Chat directory intent through the %s realization entry point',
+    async (operation, settings) => {
+      mocks.realize.mockResolvedValue({
+        binding: { kind: 'external', profileId: 'profile-1', alias: 'Agent' },
+        spec: { spec: {} },
+        handle: { control: mocks.control },
+      });
+      mocks.ensureSession.mockResolvedValue({
+        availableModes: [],
+        availableModels: [],
+        configOptions: [],
+        metaUpdatedAt: 0,
+      });
+      mocks.control.mockResolvedValue({ ok: true });
+      const server = await createApp();
+      const response = await server.inject({
+        method: 'POST',
+        url: `/api/acp/threads/thread-1/${operation}`,
+        payload: {
+          ...settings,
+          binding: { kind: 'external', profileId: 'profile-1', alias: 'Agent' },
+          canvasId: 'canvas-1',
+          cwd: '/chat/project',
+        },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(mocks.realize).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestedCwd: '/chat/project',
+        }),
+      );
+    },
+  );
+
+  it.each(['relative/path', ' /path', '', '/'.repeat(4097)])(
+    'rejects invalid control cwd %j before realization',
+    async (cwd) => {
+      const server = await createApp();
+      const response = await server.inject({
+        method: 'POST',
+        url: '/api/acp/threads/thread-1/mode',
+        payload: {
+          modeId: 'plan',
+          binding: { kind: 'external', profileId: 'profile-1', alias: 'Agent' },
+          cwd,
+        },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(mocks.realize).not.toHaveBeenCalled();
+    },
+  );
+  it('returns frozen execution identity even without live metadata or a Profile', async () => {
+    mocks.record = {
+      spec: {
+        kind: 'external',
+        spec: {
+          binding: { alias: 'Removed Profile', profileId: 'profile-removed' },
+          cwd: '/frozen/project',
+          agentletId: 'machine',
+        },
+      },
+      state: {},
+    };
+    const server = await createApp();
+    const response = await server.inject({
+      method: 'GET',
+      url: '/api/acp/threads/thread-1/cached-meta?canvasId=canvas-1',
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      source: 'thread',
+      execution: {
+        binding: {
+          kind: 'external',
+          profileId: 'profile-removed',
+          alias: 'Removed Profile',
+        },
+        workingDirPath: '/frozen/project',
+      },
+    });
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(response.json().execution).not.toHaveProperty(
+      'workingDirectoryOverride',
+    );
+  });
+  it.each([null, '/frozen/project'])(
+    'preserves frozen directory origin %s without consulting the current Profile',
+    async (workingDirectoryOverride) => {
+      mocks.record = {
+        spec: {
+          kind: 'external',
+          spec: {
+            binding: { alias: 'Profile', profileId: 'profile-1' },
+            cwd: '/frozen/project',
+            workingDirectoryOverride,
+          },
+        },
+        state: {},
+      };
+      const server = await createApp();
+      const response = await server.inject({
+        method: 'GET',
+        url: '/api/acp/threads/thread-1/cached-meta?canvasId=canvas-1',
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().execution).toMatchObject({
+        workingDirPath: '/frozen/project',
+        workingDirectoryOverride,
+      });
+      expect(mocks.create).not.toHaveBeenCalled();
+    },
+  );
   it('projects commands and selector catalogues from the Profile cache', async () => {
     mocks.profileCache = {
       availableCommands: [{ name: 'review', description: 'Review changes' }],
@@ -232,81 +349,7 @@ describe('ACP cached capability route', () => {
     });
   });
 
-  it('warms a never-observed Profile by realizing and ensuring its session, with no control dispatched', async () => {
-    const realized = {
-      binding: {
-        kind: 'external',
-        alias: 'Fresh Agent',
-        profileId: 'profile-fresh',
-      },
-      fixedTarget: null,
-      spec: { spec: { initialPreamble: ['Bootstrap', 'Space', 'Node'] } },
-      handle: { control: mocks.control },
-    };
-    mocks.realize.mockResolvedValue(realized);
-    mocks.ensureSession.mockResolvedValue({
-      profileId: 'profile-fresh',
-      availableModes: [],
-      availableModels: [],
-      configOptions: [],
-      metaUpdatedAt: 0,
-    });
-    const server = await createApp();
-
-    const response = await server.inject({
-      method: 'POST',
-      url: '/api/acp/threads/thread-1/warm',
-      payload: {
-        binding: {
-          kind: 'external',
-          alias: 'Fresh Agent',
-          profileId: 'profile-fresh',
-        },
-        canvasId: 'canvas-1',
-      },
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ ok: true });
-    expect(mocks.realize).toHaveBeenCalledWith(
-      expect.objectContaining({
-        threadId: 'thread-1',
-        canvasId: 'canvas-1',
-        requestedBinding: {
-          kind: 'external',
-          alias: 'Fresh Agent',
-          profileId: 'profile-fresh',
-        },
-      }),
-    );
-    expect(mocks.ensureSession).toHaveBeenCalledWith(
-      realized,
-      expect.any(Object),
-    );
-    expect(mocks.control).not.toHaveBeenCalled();
-  });
-
-  it('surfaces realization failure from the warm route without dispatching a control', async () => {
-    mocks.realize.mockRejectedValue(new Error('spawn failed'));
-    const server = await createApp();
-
-    const response = await server.inject({
-      method: 'POST',
-      url: '/api/acp/threads/thread-1/warm',
-      payload: {
-        binding: {
-          kind: 'external',
-          alias: 'Fresh Agent',
-          profileId: 'profile-fresh',
-        },
-      },
-    });
-
-    expect(response.statusCode).toBe(503);
-    expect(mocks.control).not.toHaveBeenCalled();
-  });
-
-  it('rejects a warm request missing the required binding', async () => {
+  it('removes the thread warm route without realizing a workload', async () => {
     const server = await createApp();
 
     const response = await server.inject({
@@ -315,63 +358,9 @@ describe('ACP cached capability route', () => {
       payload: {},
     });
 
-    expect(response.statusCode).toBe(400);
-    expect(response.json()).toMatchObject({ code: 'validation_failed' });
+    expect(response.statusCode).toBe(404);
     expect(mocks.realize).not.toHaveBeenCalled();
   });
-
-  it('waits for a trailing config-option push to settle before responding', async () => {
-    // Simulates an agent that reports mode inline in `session/new` but
-    // pushes model/config-option catalogue a moment later via
-    // `session/update` — the exact race this endpoint exists to close
-    // for a warm-up, which has no live SSE stream to catch the straggler.
-    const entry = {
-      profileId: 'profile-fresh',
-      availableModes: ['plan'],
-      availableModels: [] as unknown[],
-      configOptions: [] as unknown[],
-      metaUpdatedAt: 1,
-    };
-    mocks.realize.mockResolvedValue({
-      binding: {
-        kind: 'external',
-        alias: 'Fresh Agent',
-        profileId: 'profile-fresh',
-      },
-      fixedTarget: null,
-      spec: { spec: {} },
-      handle: { control: mocks.control },
-    });
-    mocks.ensureSession.mockResolvedValue(entry);
-    // Land the straggler push shortly after ensureSession resolves, well
-    // before the route's default quiet window and max-wait budget elapse.
-    setTimeout(() => {
-      entry.configOptions = [{ id: 'model', category: 'model' }];
-      entry.metaUpdatedAt = 2;
-    }, 20);
-    const server = await createApp();
-
-    const start = Date.now();
-    const response = await server.inject({
-      method: 'POST',
-      url: '/api/acp/threads/thread-1/warm',
-      payload: {
-        binding: {
-          kind: 'external',
-          alias: 'Fresh Agent',
-          profileId: 'profile-fresh',
-        },
-      },
-    });
-    const elapsedMs = Date.now() - start;
-
-    expect(response.statusCode).toBe(200);
-    // The route only returns after the entry has been quiet for the
-    // default 300ms window measured from the LATEST mutation (~20ms in),
-    // so the straggler above is guaranteed to have already landed.
-    expect(elapsedMs).toBeGreaterThanOrEqual(300);
-    expect(entry.configOptions).toEqual([{ id: 'model', category: 'model' }]);
-  }, 10_000);
 
   it('passes the frozen execution revision when remembering a successful live model control', async () => {
     const binding = {
@@ -403,58 +392,5 @@ describe('ACP cached capability route', () => {
       'new-model',
       3,
     );
-  });
-});
-
-describe('awaitSchemaQuiescence', () => {
-  it('resolves once the entry stops changing for the quiet window', async () => {
-    const entry = {
-      availableModes: [] as unknown[],
-      availableModels: [] as unknown[],
-      configOptions: [] as unknown[],
-      metaUpdatedAt: 0,
-    };
-    setTimeout(() => {
-      entry.configOptions = [{ id: 'model' }];
-      entry.metaUpdatedAt = 1;
-    }, 10);
-
-    const start = Date.now();
-    await awaitSchemaQuiescence(
-      entry as unknown as Parameters<typeof awaitSchemaQuiescence>[0],
-      { pollIntervalMs: 5, quietWindowMs: 20, maxWaitMs: 500 },
-    );
-    const elapsedMs = Date.now() - start;
-
-    // Waited past the mutation at ~10ms plus the 20ms quiet window
-    // measured from it, but well under the 500ms cap.
-    expect(elapsedMs).toBeGreaterThanOrEqual(20);
-    expect(elapsedMs).toBeLessThan(500);
-    expect(entry.configOptions).toEqual([{ id: 'model' }]);
-  });
-
-  it('gives up at the max-wait budget when the entry never settles', async () => {
-    const entry = {
-      availableModes: [] as unknown[],
-      availableModels: [] as unknown[],
-      configOptions: [] as unknown[],
-      metaUpdatedAt: 0,
-    };
-    const interval = setInterval(() => {
-      entry.metaUpdatedAt += 1;
-    }, 5);
-
-    const start = Date.now();
-    await awaitSchemaQuiescence(
-      entry as unknown as Parameters<typeof awaitSchemaQuiescence>[0],
-      { pollIntervalMs: 5, quietWindowMs: 20, maxWaitMs: 60 },
-    );
-    const elapsedMs = Date.now() - start;
-    clearInterval(interval);
-
-    // Never quiet for a full 20ms window, so the loop only exits via the
-    // 60ms hard cap.
-    expect(elapsedMs).toBeGreaterThanOrEqual(60);
-    expect(elapsedMs).toBeLessThan(200);
   });
 });

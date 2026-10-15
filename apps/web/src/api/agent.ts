@@ -261,6 +261,7 @@ export const agentApi = {
        * Defaults to internal when omitted.
        */
       agentBinding?: AgentBinding;
+      cwd?: string;
       /**
        * Skill ids the user explicitly invoked by typing `/<id>` in the
        * chat input (parsed by `useInternalSlashCommands`). Forwarded
@@ -297,6 +298,7 @@ export const agentApi = {
         : undefined,
       anchorNodeId: options?.anchorNodeId,
       agentBinding: options?.agentBinding,
+      cwd: options?.cwd,
       invokedSkills: options?.invokedSkills?.length
         ? options.invokedSkills
         : undefined,

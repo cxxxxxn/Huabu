@@ -46,39 +46,42 @@ describe('buildAcpWorkloadSpec', () => {
     mocks.profile = undefined;
   });
 
-  it('applies cwd and preamble overrides to command profiles', () => {
-    mocks.profile = {
-      id: 'profile-a',
-      alias: 'Researcher',
-      agentletId: 'agentlet-a',
-      executionRevision: 4,
-      workingDirPath: '/profile/work',
-      launch: { kind: 'acp-command', command: 'copilot --acp' },
-    };
-
-    const workload = buildAcpWorkloadSpec({
-      binding: {
-        profileId: 'profile-a',
+  it.each(['node', 'chat'])(
+    'applies cwd overrides to command profiles from %s',
+    (source) => {
+      mocks.profile = {
+        id: 'profile-a',
         alias: 'Researcher',
-      },
-      threadId: 'thread-a',
-      canvasId: 'canvas-a',
-      launchOverrides: {
-        workingDirPath: '/task/work',
-        additionalInitialPreamble: 'Task-specific constraints',
-      },
-    });
+        agentletId: 'agentlet-a',
+        executionRevision: 4,
+        workingDirPath: '/profile/work',
+        launch: { kind: 'acp-command', command: 'copilot --acp' },
+      };
 
-    expect(workload.spec).toMatchObject({
-      profileExecutionRevision: 4,
-      cwd: '/task/work',
-      initialPreamble: ['Mandatory preamble', 'Task-specific constraints'],
-      recipe: {
-        command: 'copilot --acp',
+      const workload = buildAcpWorkloadSpec({
+        binding: {
+          profileId: 'profile-a',
+          alias: 'Researcher',
+        },
+        threadId: 'thread-a',
+        canvasId: 'canvas-a',
+        ...(source === 'node'
+          ? { launchOverrides: { workingDirPath: '/task/work' } }
+          : { cwd: '/task/work' }),
+      });
+
+      expect(workload.spec).toMatchObject({
+        profileExecutionRevision: 4,
         cwd: '/task/work',
-      },
-    });
-  });
+        workingDirectoryOverride: '/task/work',
+        initialPreamble: ['Mandatory preamble'],
+        recipe: {
+          command: 'copilot --acp',
+          cwd: '/task/work',
+        },
+      });
+    },
+  );
 
   it('uses the discovered Profile machine and default workspace without overrides', () => {
     mocks.profile = {
@@ -104,6 +107,7 @@ describe('buildAcpWorkloadSpec', () => {
     expect(workload.spec).toMatchObject({
       agentletId: 'agentlet-a',
       cwd: '/home/user/.agentlet/workspace/claude',
+      workingDirectoryOverride: null,
       recipe: {
         command: 'claude-agent-acp',
         cwd: '/home/user/.agentlet/workspace/claude',

@@ -25,6 +25,7 @@ import {
   resolveConversationOwnerSource,
   saveConversationDraft,
 } from '@/store/conversationOwner';
+import { createConversation } from '@/store/conversationPreparation';
 import { usePanelStore } from '@/store/panelStore.ts';
 import { openPreviewNode } from '@/store/previewWorkspace/actions.ts';
 import { usePreviewWorkspaceStore } from '@/store/previewWorkspace/store.ts';
@@ -231,8 +232,8 @@ export function createQuestionNode(opts: {
   const profiles = useAcpProfilesStore.getState().profiles;
   const icon = snapshotAgentIcon(binding, profiles);
   const nodeId = opts.id ?? (createId('node') as CanvasNodeId);
-  const threadId = createId('thread');
   const canvasId = opts.canvasId ?? useCanvasStore.getState().canvasId;
+  const threadId = createConversation({ canvasId, binding, mode });
   opts.addNode({
     id: nodeId,
     nodeType: 'question',
@@ -259,7 +260,5 @@ export function createQuestionNode(opts: {
       threadId,
     },
   };
-  useChatStore.getState().setAgentBinding(threadId, binding);
-  useChatStore.getState().setThreadLastAction(threadId, mode);
   return { nodeId, threadId, conversationView };
 }

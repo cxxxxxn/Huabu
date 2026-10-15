@@ -14,19 +14,28 @@ import {
   vi,
 } from 'vitest';
 
+import { MODEL_SELECTION_ID } from '@huabu/shared';
+
 import { ApiError } from '@/api/_client';
+import { setAcpSessionConfigOption, setAcpSessionModel } from '@/api/acp';
 import { agentApi } from '@/api/agent';
 import {
   queryConversationTitles,
   setConversationTitle,
 } from '@/api/conversationTitles';
 import { Button } from '@/components/Common/Button';
+import { toast } from '@/components/Common/Toast';
 import { useConversationTitles } from '@/hooks/useConversationTitles';
 import { i18n } from '@/i18n';
 import { useAcpThreadChangesStore } from '@/store/acpThreadChangesStore';
 import useCanvasStore from '@/store/canvasStore';
 import { useChatStore } from '@/store/chatStore';
 import { conversationViewForNode } from '@/store/conversationOwner';
+import {
+  observeConversationExecution,
+  saveConversationWorkingDirectory,
+  useConversationPreparationStore,
+} from '@/store/conversationPreparation';
 import {
   conversationTitleKey,
   getConversationTitle,
@@ -48,6 +57,8 @@ import {
 import { ChatPanel } from './index';
 
 import type { AcpConnectionInfo } from './AcpConnectionBadge';
+import type { AcpSessionSelectors } from './AcpSessionSelectors';
+import type * as AcpApi from '@/api/acp';
 import type { ChatSession } from '@/hooks/useChatSession';
 import type * as CanvasStore from '@/store/canvasStore';
 import type {
@@ -68,6 +79,7 @@ const sessionMetaState = vi.hoisted(() => ({
   error: null as Error | null,
   updatedAt: 0,
   refresh: vi.fn(),
+  applyOptimistic: vi.fn(),
 }));
 
 // Keep real panel, editor, tab, stores, and stream hook; replace unrelated UI
@@ -90,7 +102,7 @@ vi.mock('@/hooks/useAcpSessionMeta', () => ({
     loading: sessionMetaState.loading,
     error: sessionMetaState.error,
     refresh: sessionMetaState.refresh,
-    applyOptimistic: vi.fn(),
+    applyOptimistic: sessionMetaState.applyOptimistic,
   }),
 }));
 vi.mock('@/hooks/useAcpSlashCommands', () => ({
@@ -123,10 +135,30 @@ vi.mock('./AgentSelector', () => ({ AgentSelector: () => null }));
 vi.mock('./BuiltinSessionSelectors', () => ({
   BuiltinSessionSelectors: () => null,
 }));
+vi.mock('./AcpSessionSelectors', () => ({
+  AcpSessionSelectors: ({
+    onSelectModel,
+    onSelectConfigOption,
+  }: ComponentProps<typeof AcpSessionSelectors>) => (
+    <>
+      <Button onClick={() => void onSelectModel('model-a')}>Model A</Button>
+      <Button onClick={() => void onSelectModel('model-b')}>Model B</Button>
+      <Button onClick={() => void onSelectConfigOption('effort', 'high')}>
+        High effort
+      </Button>
+    </>
+  ),
+}));
 vi.mock('./ThreadChatInput', () => ({
   ThreadChatInput: ({
     onSubmit,
+    agentSelectorSlot,
+    acpSelectorsSlot,
+    submitDisabled,
   }: {
+    agentSelectorSlot?: React.ReactNode;
+    acpSelectorsSlot?: React.ReactNode;
+    submitDisabled?: boolean;
     onSubmit: (
       event: React.FormEvent,
       mode: 'ask',
@@ -134,10 +166,13 @@ vi.mock('./ThreadChatInput', () => ({
     ) => Promise<void>;
   }) => (
     <form
+      data-submit-disabled={String(submitDisabled)}
       onSubmit={(event) => {
         void onSubmit(event, 'ask', 'First prompt\nMore detail');
       }}
     >
+      {agentSelectorSlot}
+      {acpSelectorsSlot}
       <Button type="submit">Send fixture prompt</Button>
     </form>
   ),
@@ -148,6 +183,12 @@ vi.mock('@/api/conversationTitles', () => ({
 }));
 vi.mock('@/api/agent', () => ({
   agentApi: { streamMessage: vi.fn(), stopThread: vi.fn() },
+}));
+vi.mock('@/api/acp', async (original) => ({
+  ...(await original<typeof AcpApi>()),
+  setAcpSessionMode: vi.fn(),
+  setAcpSessionModel: vi.fn(),
+  setAcpSessionConfigOption: vi.fn(),
 }));
 vi.mock('@/store/canvasStore', async (importOriginal) => ({
   ...(await importOriginal<typeof CanvasStore>()),
@@ -333,6 +374,14 @@ beforeEach(async () => {
     lastActionByThread: {},
     selectionAttachment: null,
   });
+  useConversationPreparationStore.setState({
+    directories: {},
+    executions: {},
+    pending: {},
+    queuedControls: {},
+    locked: {},
+    revisions: {},
+  });
   useChatStore.getState().setHistoryLoaded('thread', true);
   useChatStore.getState().setHistoryLoaded('other', true);
   useLLMStore.setState({
@@ -378,6 +427,200 @@ afterEach(async () => {
 });
 
 describe('rendered conversation titles', () => {
+  it.each([false, true])(
+    'preserves consecutive selector choices and releases submission gating with firstFailure=%s',
+    async (firstFailure) => {
+      const binding = {
+        kind: 'external' as const,
+        profileId: 'profile-1',
+        alias: 'Agent',
+      };
+      useChatStore.getState().setAgentBinding('thread', binding);
+      observeConversationExecution('canvas', 'thread', undefined);
+      const calls: string[] = [];
+      let finish!: () => void;
+      const wait = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      finishStreams.add(finish);
+      vi.mocked(setAcpSessionModel).mockImplementation(
+        async (_threadId, { modelId }) => {
+          calls.push(modelId);
+          if (modelId === 'model-a') {
+            await wait;
+            if (firstFailure) throw new Error('Model A rejected');
+          }
+          return { ok: true, modelId };
+        },
+      );
+      vi.mocked(setAcpSessionConfigOption).mockImplementation(
+        async (_threadId, { configOptionId, value }) => {
+          calls.push(configOptionId);
+          return { ok: true, configOptionId, value };
+        },
+      );
+      sessionMetaState.refresh.mockImplementation(async () => {
+        calls.push('refresh');
+        observeConversationExecution('canvas', 'thread', {
+          binding,
+          workingDirPath: '/frozen',
+          workingDirectoryOverride: null,
+        });
+      });
+      await renderPanel();
+      await act(async () => {
+        for (const text of ['Model A', 'Model B', 'High effort']) {
+          const button = [...container.querySelectorAll('button')].find(
+            (item) => item.textContent === text,
+          );
+          assert(button);
+          button.click();
+        }
+      });
+      expect(calls).toEqual(['model-a']);
+      expect(
+        container.querySelector('form')?.getAttribute('data-submit-disabled'),
+      ).toBe('true');
+      await act(async () => {
+        finish();
+        await vi.waitFor(() =>
+          expect(calls).toEqual([
+            'model-a',
+            'refresh',
+            'model-b',
+            'refresh',
+            'effort',
+            'refresh',
+          ]),
+        );
+      });
+      expect(
+        container.querySelector('form')?.getAttribute('data-submit-disabled'),
+      ).toBe('false');
+      expect(
+        sessionMetaState.applyOptimistic.mock.calls.map(([patch]) => patch),
+      ).toEqual([
+        { selection: { id: MODEL_SELECTION_ID, value: 'model-a' } },
+        ...(firstFailure
+          ? [{ selection: { id: MODEL_SELECTION_ID, value: null } }]
+          : []),
+        { selection: { id: MODEL_SELECTION_ID, value: 'model-b' } },
+        { selection: { id: 'effort', value: 'high' } },
+      ]);
+      expect(toast).toHaveBeenCalledTimes(firstFailure ? 1 : 0);
+      expect(
+        container.querySelector(
+          '[aria-label="Working directory inherited from Profile: /frozen"]',
+        ),
+      ).not.toBeNull();
+    },
+  );
+
+  it('keeps queued choices on their original conversation after switching the panel', async () => {
+    useChatStore.getState().setAgentBinding('thread', {
+      kind: 'external',
+      profileId: 'profile-1',
+      alias: 'Agent',
+    });
+    observeConversationExecution('canvas', 'thread', undefined);
+    let finish!: () => void;
+    const wait = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    finishStreams.add(finish);
+    vi.mocked(setAcpSessionModel).mockImplementation(
+      async (_threadId, { modelId }) => {
+        if (modelId === 'model-a') await wait;
+        return { ok: true, modelId };
+      },
+    );
+    await renderPanel();
+    await act(async () => {
+      for (const text of ['Model A', 'Model B']) {
+        const button = [...container.querySelectorAll('button')].find(
+          (item) => item.textContent === text,
+        );
+        assert(button);
+        button.click();
+      }
+    });
+    await renderPanel(
+      { ...baseSession, threadId: 'other' },
+      {
+        ...baseTab,
+        target: { kind: 'chat', canvasId: 'canvas', threadId: 'other' },
+      },
+    );
+    await act(async () => {
+      finish();
+      await vi.waitFor(() =>
+        expect(
+          useConversationPreparationStore.getState().queuedControls,
+        ).toEqual({}),
+      );
+    });
+    expect(vi.mocked(setAcpSessionModel).mock.calls.map(([id]) => id)).toEqual([
+      'thread',
+      'thread',
+    ]);
+    expect(sessionMetaState.applyOptimistic).toHaveBeenCalledOnce();
+    expect(sessionMetaState.refresh).not.toHaveBeenCalled();
+    expect(
+      container.querySelector('form')?.getAttribute('data-submit-disabled'),
+    ).toBe('false');
+  });
+
+  it('shows the same directory control in standalone Chat and carries its intent on Send', async () => {
+    const binding = {
+      kind: 'external' as const,
+      profileId: 'profile-1',
+      alias: 'Agent',
+    };
+    useChatStore.getState().setAgentBinding('thread', binding);
+    observeConversationExecution('canvas', 'thread', undefined);
+    await saveConversationWorkingDirectory(baseSession, '/chat/project');
+    vi.mocked(agentApi.streamMessage).mockImplementation(
+      async (_prompt, _thread, _mode, callbacks) => {
+        callbacks.onComplete();
+      },
+    );
+    await renderPanel();
+    expect(
+      container.querySelector(
+        '[aria-label="Conversation working directory: /chat/project"]',
+      ),
+    ).not.toBeNull();
+    await act(async () => {
+      container
+        .querySelector('form')
+        ?.dispatchEvent(
+          new Event('submit', { bubbles: true, cancelable: true }),
+        );
+    });
+    expect(agentApi.streamMessage).toHaveBeenCalledWith(
+      expect.any(String),
+      'thread',
+      'ask',
+      expect.any(Object),
+      expect.objectContaining({ cwd: '/chat/project', agentBinding: binding }),
+    );
+  });
+
+  it('gates panel submission independently from draft editing when history is not ready', async () => {
+    useChatStore.getState().setHistoryLoaded('thread', false);
+    await renderPanel();
+    expect(
+      container.querySelector('form')?.getAttribute('data-submit-disabled'),
+    ).toBe('true');
+    await act(async () => {
+      container
+        .querySelector('form')
+        ?.dispatchEvent(
+          new Event('submit', { bubbles: true, cancelable: true }),
+        );
+    });
+    expect(agentApi.streamMessage).not.toHaveBeenCalled();
+  });
   it.each(['connected', 'connecting', 'failed'] as const)(
     'moves the %s capability status to the tab without losing failure recovery',
     async (status) => {
@@ -1003,38 +1246,61 @@ describe('rendered conversation titles', () => {
     },
   );
 
-  it('transfers the effective manual name when the actual panel saves a Question', async () => {
-    const addNode = vi.fn((input) =>
-      useCanvasStore.setState({
-        nodes: [
-          {
-            id: input.id,
-            type: input.nodeType,
-            data: input.data,
-            position: { x: 0, y: 0 },
-          },
-        ],
-      }),
-    );
-    const replaceTabTarget = vi.fn();
-    useCanvasStore.setState({ addNode });
-    usePreviewWorkspaceStore.setState({ replaceTabTarget });
-    useChatStore
-      .getState()
-      .addMessage('thread', { id: 'u', role: 'user', content: 'Prompt' });
-    await renderPanel();
-    await enter(await edit('Keep this name'));
-    const saveButton = container.querySelector<HTMLButtonElement>(
-      'button:has(svg.lucide-bookmark)',
-    )!;
-    await act(async () => saveButton.click());
-    expect(addNode.mock.calls[0][0].data).toMatchObject({
-      label: 'Keep this name',
-      labelSource: 'user',
-      threadId: 'thread',
-    });
-    expect(replaceTabTarget).toHaveBeenCalledOnce();
-  });
+  it.each([
+    { cwd: undefined, override: undefined },
+    { cwd: '/chat/project', override: '/chat/project' },
+    { cwd: '/profile/original', override: null },
+    { cwd: '/legacy/directory', override: undefined },
+  ])(
+    'transfers naming without turning inherited or unknown directory origin into an override (%j)',
+    async ({ cwd, override }) => {
+      const addNode = vi.fn((input) =>
+        useCanvasStore.setState({
+          nodes: [
+            {
+              id: input.id,
+              type: input.nodeType,
+              data: input.data,
+              position: { x: 0, y: 0 },
+            },
+          ],
+        }),
+      );
+      const replaceTabTarget = vi.fn();
+      useCanvasStore.setState({ addNode });
+      usePreviewWorkspaceStore.setState({ replaceTabTarget });
+      if (cwd) {
+        observeConversationExecution('canvas', 'thread', {
+          binding: { kind: 'external', alias: 'Agent', profileId: 'profile-1' },
+          workingDirPath: cwd,
+          workingDirectoryOverride: override,
+        });
+      }
+      useChatStore
+        .getState()
+        .addMessage('thread', { id: 'u', role: 'user', content: 'Prompt' });
+      await renderPanel();
+      await enter(await edit('Keep this name'));
+      const saveButton = container.querySelector<HTMLButtonElement>(
+        'button:has(svg.lucide-bookmark)',
+      )!;
+      await act(async () => saveButton.click());
+      expect(addNode.mock.calls[0][0].data).toMatchObject({
+        label: 'Keep this name',
+        labelSource: 'user',
+        threadId: 'thread',
+        ...(override
+          ? { agentLaunchOverrides: { workingDirPath: override } }
+          : {}),
+      });
+      if (!override) {
+        expect(addNode.mock.calls[0][0].data).not.toHaveProperty(
+          'agentLaunchOverrides',
+        );
+      }
+      expect(replaceTabTarget).toHaveBeenCalledOnce();
+    },
+  );
 
   it('batch hydrates ALL cold tabs, retries errors, and finds post-stream generation within a bounded window', async () => {
     vi.useFakeTimers();

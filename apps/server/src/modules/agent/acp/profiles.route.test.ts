@@ -7,6 +7,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import acpProfilesRoutes from './profiles.route.js';
 
+import type * as ProfileCapabilities from './profile-capabilities.js';
+
 const mocks = vi.hoisted(() => ({
   registry: {
     listProfiles: vi.fn(),
@@ -19,6 +21,8 @@ const mocks = vi.hoisted(() => ({
   invalidate: vi.fn(),
   initializeDefaults: vi.fn(),
   discoverHarnesses: vi.fn(),
+  readCapabilities: vi.fn(),
+  discoverCapabilities: vi.fn(),
   connectedIds: new Set(['machine-a', 'remote-machine']),
 }));
 
@@ -61,6 +65,11 @@ vi.mock('@agenetes/agentlet-host', () => ({
 vi.mock('./profile-schema-cache.js', () => ({
   invalidateProfileSchemaCache: mocks.invalidate,
 }));
+vi.mock('./profile-capabilities.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof ProfileCapabilities>()),
+  readProfileCapabilities: mocks.readCapabilities,
+  discoverProfileCapabilities: mocks.discoverCapabilities,
+}));
 
 const commandProfile = {
   id: 'command-1',
@@ -85,6 +94,53 @@ afterEach(async () => {
 });
 
 describe('ordinary Profile catalog routes', () => {
+  it.each([
+    ['GET', '/capabilities', 'readCapabilities'],
+    ['POST', '/capabilities/discover', 'discoverCapabilities'],
+  ] as const)(
+    'routes %s Profile capabilities without a user thread',
+    async (method, suffix, operation) => {
+      mocks[operation].mockResolvedValue({ source: 'profile' });
+      const server = await setup();
+      const response = await server.inject({
+        method,
+        url: `/api/acp/profiles/command-1${suffix}`,
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ source: 'profile' });
+      expect(mocks[operation].mock.calls[0][0]).toBe('command-1');
+      expect(mocks.registry.createProfile).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['GET', 'POST'] as const)(
+    'keeps %s capability operations owner-only',
+    async (method) => {
+      const server = await setup();
+      const response = await server.inject({
+        method,
+        url: `/api/acp/profiles/command-1/capabilities${method === 'POST' ? '/discover' : ''}`,
+        remoteAddress: '203.0.113.5',
+      });
+      expect(response.statusCode).toBe(403);
+      expect(mocks.readCapabilities).not.toHaveBeenCalled();
+      expect(mocks.discoverCapabilities).not.toHaveBeenCalled();
+    },
+  );
+
+  it('surfaces capability discovery errors', async () => {
+    mocks.discoverCapabilities.mockRejectedValue(new Error('Login required'));
+    const server = await setup();
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/acp/profiles/command-1/capabilities/discover',
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      code: 'capability_discovery_failed',
+      message: 'Login required',
+    });
+  });
   it('validates typed harness launch on the target daemon and preserves structured options', async () => {
     const launch = {
       kind: 'acp-harness',

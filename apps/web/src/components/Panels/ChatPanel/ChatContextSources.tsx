@@ -13,6 +13,7 @@ import { useChatSession } from '@/hooks/useChatSession';
 import useCanvasStore from '@/store/canvasStore';
 import {
   selectThreadPendingAttachments,
+  selectThreadExcludeCanvasSelection,
   useChatStore,
 } from '@/store/chatStore';
 import { useGesturePreviewStore } from '@/store/gesturePreviewStore';
@@ -23,6 +24,8 @@ const chipSurfaceClassName =
   'bg-hover text-fg-muted group-focus-within/composer:bg-info-bg group-focus-within/composer:text-info transition-colors';
 const chipActionClassName =
   'text-inherit group-focus-within/composer:enabled:hover:bg-info-bg-hover [&_svg]:h-3 [&_svg]:w-3';
+const candidateActionClassName =
+  'group-focus-within/composer:border-info/40 group-focus-within/composer:text-info h-6 max-w-full justify-start gap-1 border-dashed bg-transparent px-1.5 py-0 enabled:hover:bg-transparent [&_svg]:h-3 [&_svg]:w-3';
 
 function AttachmentSource({
   attachment,
@@ -146,6 +149,12 @@ export const ChatContextSources = memo(function ChatContextSources({
   const pendingAttachments = useChatStore((s) =>
     selectThreadPendingAttachments(s, threadId),
   );
+  const excludeCanvasSelection = useChatStore((s) =>
+    selectThreadExcludeCanvasSelection(s, threadId),
+  );
+  const setExcludeCanvasSelection = useChatStore(
+    (s) => s.setExcludeCanvasSelection,
+  );
   const selectionAttachment = useChatStore((s) => s.selectionAttachment);
   const addPendingAttachment = useChatStore((s) => s.addPendingAttachment);
   const removePendingAttachment = useChatStore(
@@ -187,7 +196,8 @@ export const ChatContextSources = memo(function ChatContextSources({
       : t('node.untitled');
   const showCandidate =
     adjacentNode &&
-    !selectedNodes.some((node) => node.id === adjacentNode.id) &&
+    (excludeCanvasSelection ||
+      !selectedNodes.some((node) => node.id === adjacentNode.id)) &&
     !pendingAttachments.some(
       (attachment) =>
         attachment.originNodeId === adjacentNode.id &&
@@ -243,7 +253,7 @@ export const ChatContextSources = memo(function ChatContextSources({
           title={t('chat.addNodeSource', { name: adjacentNodeLabel })}
           aria-label={t('chat.addNodeSource', { name: adjacentNodeLabel })}
           tooltipWrapperClassName="max-w-40 min-w-0"
-          className="group-focus-within/composer:border-info/40 group-focus-within/composer:text-info h-6 max-w-full justify-start gap-1 border-dashed bg-transparent px-1.5 py-0 enabled:hover:bg-transparent [&_svg]:h-3 [&_svg]:w-3"
+          className={candidateActionClassName}
           onClick={() => {
             addPendingAttachment(threadId, {
               type: 'text',
@@ -260,34 +270,74 @@ export const ChatContextSources = memo(function ChatContextSources({
         </Button>
       ) : null}
       {selectedNodes.length > 0 ? (
-        <Tooltip
-          wrapperClassName="inline-flex max-w-40 min-w-0"
-          content={
-            <div className="flex max-w-80 flex-col gap-0.5">
-              {selectedNodes.map((node) => (
-                <span key={node.id} className="truncate">
-                  {node.label || node.type || t('node.untitled')}
-                </span>
-              ))}
-            </div>
-          }
-        >
-          <span
-            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
-            tabIndex={0}
-            aria-label={t('chat.selectedSourcesLabel', {
-              count: selectedNodes.length,
-              sources: selectedNodes
-                .map((node) => node.label || node.type)
-                .join(', '),
-            })}
-            className={`${chipSurfaceClassName} inline-flex h-6 max-w-full items-center rounded-md px-1.5 text-xs whitespace-nowrap`}
+        excludeCanvasSelection ? (
+          <Button
+            data-context-selection
+            variant="outline"
+            size="sm"
+            title={t('chat.restoreSelectedNodes')}
+            aria-label={t('chat.restoreSelectedNodes')}
+            tooltipWrapperClassName="max-w-40 min-w-0"
+            className={candidateActionClassName}
+            onClick={() => {
+              setExcludeCanvasSelection(threadId, false);
+              onActionComplete?.();
+            }}
           >
-            <span className="truncate">
+            <Plus aria-hidden />
+            <span className="max-w-32 truncate">
               {t('chat.selectedNodes', { count: selectedNodes.length })}
             </span>
-          </span>
-        </Tooltip>
+          </Button>
+        ) : (
+          <div
+            data-context-selection
+            className={`${chipSurfaceClassName} inline-flex h-6 max-w-40 min-w-0 items-center rounded-md`}
+          >
+            <Button
+              variant="ghost"
+              size="sm"
+              iconOnly
+              title={t('chat.excludeSelectedNodes')}
+              tooltipWrapperClassName="shrink-0"
+              className={chipActionClassName}
+              onClick={() => {
+                setExcludeCanvasSelection(threadId, true);
+                onActionComplete?.();
+              }}
+            >
+              <X aria-hidden />
+            </Button>
+            <Tooltip
+              wrapperClassName="inline-flex min-w-0"
+              content={
+                <div className="flex max-w-80 flex-col gap-0.5">
+                  {selectedNodes.map((node) => (
+                    <span key={node.id} className="truncate">
+                      {node.label || node.type || t('node.untitled')}
+                    </span>
+                  ))}
+                </div>
+              }
+            >
+              <span
+                // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+                tabIndex={0}
+                aria-label={t('chat.selectedSourcesLabel', {
+                  count: selectedNodes.length,
+                  sources: selectedNodes
+                    .map((node) => node.label || node.type)
+                    .join(', '),
+                })}
+                className="inline-flex h-6 max-w-full items-center rounded-sm pr-1.5 text-xs whitespace-nowrap"
+              >
+                <span className="truncate">
+                  {t('chat.selectedNodes', { count: selectedNodes.length })}
+                </span>
+              </span>
+            </Tooltip>
+          </div>
+        )
       ) : null}
     </div>
   );

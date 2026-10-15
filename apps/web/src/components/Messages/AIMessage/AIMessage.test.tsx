@@ -630,6 +630,63 @@ describe('assistant activity presentation', () => {
     expect(container.textContent).toContain('Approval needed');
   });
 
+  it.each([
+    { isStreaming: true },
+    { isStreaming: false, hideActions: true },
+    { isStreaming: true, hideActions: true },
+  ])('keeps comments independent of whole-response actions: %j', (props) => {
+    render([{ kind: 'text', text: 'An available passage' }], {
+      ...props,
+      enableComments: true,
+    });
+    expect(
+      container
+        .querySelector('[data-prose-index]')
+        ?.getAttribute('data-comments'),
+    ).toBe('true');
+    expect(
+      container.querySelector('button[aria-label="messages.copyMessage"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('button[aria-label="messages.addAsNote"]'),
+    ).toBeNull();
+  });
+
+  it('allows commenting on rendered text while waiting for permission', () => {
+    render(
+      [
+        { kind: 'text', text: 'Here is what I found' },
+        {
+          kind: 'permission',
+          requestId: 'p',
+          toolCall: { title: 'Approval needed' },
+          options: [],
+        },
+      ],
+      { isStreaming: false, enableComments: true },
+    );
+    expect(
+      container
+        .querySelector('[data-prose-index]')
+        ?.getAttribute('data-comments'),
+    ).toBe('true');
+    expect(
+      container.querySelector('button[aria-label="messages.copyMessage"]'),
+    ).toBeNull();
+  });
+
+  it('keeps comments disabled when the containing chat disables them', () => {
+    render([{ kind: 'text', text: 'An available passage' }], {
+      isStreaming: false,
+      enableComments: false,
+    });
+    expect(
+      container
+        .querySelector('[data-prose-index]')
+        ?.getAttribute('data-comments'),
+    ).toBe('false');
+  });
+
   it('preserves prose comment indices, copy, and Add as note after task_complete projection', () => {
     render(
       [

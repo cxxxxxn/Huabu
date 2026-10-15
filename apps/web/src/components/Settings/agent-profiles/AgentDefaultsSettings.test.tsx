@@ -17,6 +17,7 @@ import type { Root } from 'react-dom/client';
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   update: vi.fn(),
+  loadCapabilities: vi.fn(),
   state: {
     profiles: [] as AgentProfileView[],
     loaded: true,
@@ -29,6 +30,9 @@ vi.mock('react-i18next', () => ({
     t: (key: string, values?: { id?: string }) =>
       values?.id ? `${key}:${values.id}` : key,
   }),
+}));
+vi.mock('@/api/acp', () => ({
+  loadAcpProfileCapabilities: mocks.loadCapabilities,
 }));
 vi.mock('@/store/acpProfilesStore', () => ({
   useAcpProfilesStore: (
@@ -53,7 +57,7 @@ vi.mock('@/components/Common/Select', () => ({
     ariaLabel,
     disabled,
   }: {
-    options: { value: string; label: string }[];
+    options: { value: string; label: string; disabled?: boolean }[];
     value: string;
     onChange: (value: string) => void;
     ariaLabel: string;
@@ -65,9 +69,12 @@ vi.mock('@/components/Common/Select', () => ({
       disabled={disabled}
       onChange={(event) => onChange(event.target.value)}
     >
-      <option value="">Unconfigured</option>
       {options.map((option) => (
-        <option key={option.value} value={option.value}>
+        <option
+          key={option.value}
+          value={option.value}
+          disabled={option.disabled}
+        >
           {option.label}
         </option>
       ))}
@@ -81,24 +88,41 @@ let container: HTMLDivElement;
 const initial: AgentDefaultsResponse = {
   defaults: { profileId: 'external', functionalModel: 'fast' },
   selectionState: 'available',
-  modelCapability: 'unknown',
+  modelCapability: 'supported',
+};
+const observation = {
+  source: 'profile',
+  sessionMeta: {
+    availableModes: [],
+    currentModeId: null,
+    availableModels: [
+      { modelId: 'fast', name: 'Fast' },
+      { modelId: 'other', name: 'Other' },
+    ],
+    currentModelId: 'other',
+    configOptions: [],
+    selections: {},
+    sessionInfo: null,
+    usage: null,
+    updatedAt: 1,
+  },
 };
 
 beforeEach(() => {
-  vi.useFakeTimers();
   vi.resetAllMocks();
   mocks.get.mockResolvedValue(initial);
   mocks.update.mockImplementation(async (defaults: AgentDefaults) => ({
     ...initial,
-    defaults: { ...defaults, functionalModel: defaults.functionalModel.trim() },
+    defaults,
   }));
+  mocks.loadCapabilities.mockResolvedValue(observation);
   mocks.state.profiles = [
     {
       id: 'external',
       alias: 'External Agent',
       agentletId: 'machine',
       workingDirPath: '/work',
-      launch: { kind: 'acp-command', command: 'copilot --acp' },
+      launch: { kind: 'acp-harness', harnessId: 'copilot' },
     },
   ];
   mocks.state.loaded = true;
@@ -110,259 +134,280 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
-  vi.useRealTimers();
 });
-
 async function render() {
   await act(async () => root.render(<AgentDefaultsSettings />));
 }
-
-async function blurModel() {
+function modelSelect() {
+  return container.querySelector<HTMLSelectElement>(
+    'select[aria-label="settings.agentDefaultsModel"]',
+  );
+}
+async function select(value: string, model = false) {
   await act(async () => {
-    container
-      .querySelector('input')
-      ?.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    const element = model ? modelSelect() : container.querySelector('select');
+    if (!element) throw new Error('Missing selector');
+    element.value = value;
+    element.dispatchEvent(new Event('change', { bubbles: true }));
   });
 }
 
-async function selectProfile(value: string) {
-  await act(async () => {
-    const select = container.querySelector('select') as HTMLSelectElement;
-    select.value = value;
-    select.dispatchEvent(new Event('change', { bubbles: true }));
-  });
-}
-
-async function editModel(value: string) {
-  const input = container.querySelector('input') as HTMLInputElement;
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(
-      HTMLInputElement.prototype,
-      'value',
-    )?.set?.call(input, value);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-  });
-}
-
-describe('Agent defaults Settings', () => {
-  it('places the Utility Agent explanation inside the Profile row card', async () => {
+describe('Utility Agent model catalogue', () => {
+  it('loads a Profile catalogue automatically and shows a selector, not an input', async () => {
     await render();
-    const description = [...container.querySelectorAll('p')].find(
-      (element) =>
-        element.textContent === 'settings.agentDefaultsSectionDescription',
-    );
-    expect(description?.closest('.ring-1')).not.toBeNull();
-  });
-
-  it('omits the status row when there is no status to show', async () => {
-    mocks.state.profiles = [
-      {
-        ...mocks.state.profiles[0],
-        launch: { kind: 'acp-harness', harnessId: 'copilot' },
-      },
-    ];
-    mocks.get.mockResolvedValueOnce({
-      ...initial,
-      defaults: { ...initial.defaults, functionalModel: '' },
-    });
-    await render();
-    expect(container.querySelectorAll('.ring-1 > *')).toHaveLength(2);
-  });
-
-  it('allows Built-In while the external catalogue is unavailable, retaining the external model', async () => {
-    mocks.state.loaded = false;
-    mocks.state.error = new Error('Registry unavailable');
-    await render();
-    expect(container.querySelector('select')?.disabled).toBe(false);
-    await selectProfile('huabu');
-    expect(mocks.update).toHaveBeenCalledWith({
-      profileId: 'huabu',
-      functionalModel: 'fast',
-    });
+    expect(mocks.loadCapabilities).toHaveBeenCalledExactlyOnceWith('external');
     expect(container.querySelector('input')).toBeNull();
-    expect(container.textContent).not.toContain(
-      'settings.agentDefaultsDeleted',
-    );
-    expect(container.textContent).not.toContain(
-      'settings.agentDefaultsModelUnknown',
-    );
-    await selectProfile('external');
-    expect(container.querySelector('input')?.value).toBe('fast');
-  });
-  it('loads shared Profiles and warns that model support is unknown', async () => {
-    await render();
-    expect(mocks.state.refresh).toHaveBeenCalled();
-    expect(container.textContent).toContain('External Agent');
-    expect(container.textContent).toContain(
-      'settings.agentDefaultsModelUnknown',
-    );
-    expect(container.querySelector('button')).toBeNull();
+    expect(modelSelect()?.textContent).toContain('Fast');
+    expect(modelSelect()?.value).toBe('fast');
     expect(mocks.update).not.toHaveBeenCalled();
   });
 
-  it('retains a missing selection and requires an explicit replacement', async () => {
+  it('normalizes modern grouped config options through the shared selector builder', async () => {
+    mocks.loadCapabilities.mockResolvedValue({
+      ...observation,
+      sessionMeta: {
+        ...observation.sessionMeta,
+        availableModels: [],
+        configOptions: [
+          {
+            id: 'model_id',
+            name: 'Model',
+            category: 'model',
+            type: 'select',
+            currentValue: 'fast',
+            options: [
+              {
+                group: 'premium',
+                name: 'Premium',
+                options: [{ value: 'fast', name: 'Fast model' }],
+              },
+            ],
+          },
+        ],
+      },
+    });
+    await render();
+    expect(modelSelect()?.textContent).toContain('Fast model');
+    await select('fast', true);
+    expect(mocks.update).toHaveBeenCalledWith({
+      profileId: 'external',
+      functionalModel: 'fast',
+    });
+  });
+
+  it('saves a chosen model immediately without adopting the probe current value', async () => {
+    await render();
+    expect(modelSelect()?.value).toBe('fast');
+    await select('other', true);
+    expect(mocks.update).toHaveBeenCalledExactlyOnceWith({
+      profileId: 'external',
+      functionalModel: 'other',
+    });
+  });
+
+  it('keeps the empty value for following the default model', async () => {
+    await render();
+    await select('', true);
+    expect(mocks.update).toHaveBeenCalledWith({
+      profileId: 'external',
+      functionalModel: '',
+    });
+    expect(modelSelect()?.value).toBe('');
+  });
+
+  it('shows loading without saving or blocking the Profile picker', async () => {
+    mocks.loadCapabilities.mockReturnValue(new Promise(() => {}));
+    await render();
+    expect(modelSelect()?.disabled).toBe(true);
+    expect(container.querySelector('select')?.disabled).toBe(false);
+    expect(container.textContent).toContain('chat.loadingAgentOptionsProgress');
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('reports an empty model list separately from errors and retains a saved model', async () => {
+    mocks.loadCapabilities.mockResolvedValue({
+      ...observation,
+      sessionMeta: { ...observation.sessionMeta, availableModels: [] },
+    });
+    await render();
+    expect(container.textContent).toContain('settings.agentDefaultsNoModels');
+    expect(modelSelect()?.value).toBe('fast');
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('retains unavailable saved IDs rather than silently choosing another model', async () => {
+    mocks.get.mockResolvedValue({
+      ...initial,
+      defaults: { profileId: 'external', functionalModel: 'retired' },
+    });
+    await render();
+    expect(modelSelect()?.value).toBe('retired');
+    expect(container.textContent).toContain(
+      'settings.agentDefaultsModelUnavailable',
+    );
+    expect(
+      modelSelect()?.querySelector<HTMLOptionElement>('option[value="retired"]')
+        ?.disabled,
+    ).toBe(true);
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('surfaces discovery failure and retries explicitly', async () => {
+    mocks.loadCapabilities.mockRejectedValueOnce(new Error('Please log in'));
+    await render();
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      'Please log in',
+    );
+    await act(async () => {
+      [...container.querySelectorAll('button')]
+        .find((button) => button.textContent === 'chat.retryAgentOptions')
+        ?.click();
+    });
+    expect(mocks.loadCapabilities).toHaveBeenCalledTimes(2);
+    expect(modelSelect()?.textContent).toContain('Fast');
+  });
+
+  it('does not offer model overrides for custom command Profiles even if previously reported supported', async () => {
+    mocks.state.profiles[0].launch = {
+      kind: 'acp-command',
+      command: 'copilot --acp',
+    };
+    await render();
+    expect(modelSelect()?.disabled).toBe(true);
+    expect(mocks.loadCapabilities).not.toHaveBeenCalled();
+    expect(container.textContent).toContain(
+      'settings.agentDefaultsModelUnsupported',
+    );
+  });
+
+  it('keeps the standard inline row and puts wrapping feedback outside the control column', async () => {
+    mocks.state.profiles[0].launch = {
+      kind: 'acp-command',
+      command: 'copilot --acp',
+    };
+    await render();
+    const row = modelSelect()?.parentElement?.parentElement?.parentElement;
+    const profileRow =
+      container.querySelector('select')?.parentElement?.parentElement;
+    expect(row?.className).toBe(profileRow?.className);
+    expect(row?.classList.contains('items-center')).toBe(true);
+    expect(row?.classList.contains('flex-col')).toBe(false);
+    expect(modelSelect()?.parentElement?.classList.contains('w-40')).toBe(true);
+    const warning = [...container.querySelectorAll('[role="status"]')].find(
+      (element) =>
+        element.textContent === 'settings.agentDefaultsModelUnsupported',
+    );
+    expect(warning?.parentElement?.previousElementSibling).toBe(row);
+    expect(
+      warning?.parentElement?.classList.contains('[overflow-wrap:anywhere]'),
+    ).toBe(true);
+    expect(row?.querySelector('[role="status"]')).toBeNull();
+  });
+
+  it.each(['fast', 'retired', ''])(
+    'preserves model override %j when reselecting the current external Profile',
+    async (functionalModel) => {
+      mocks.get.mockResolvedValue({
+        ...initial,
+        defaults: { profileId: 'external', functionalModel },
+      });
+      await render();
+      await select('external');
+      expect(mocks.update).toHaveBeenCalledExactlyOnceWith({
+        profileId: 'external',
+        functionalModel,
+      });
+      expect(modelSelect()?.value).toBe(functionalModel);
+    },
+  );
+
+  it('clears a prior Profile model when choosing a different external Profile', async () => {
+    mocks.state.profiles.push({ ...mocks.state.profiles[0], id: 'second' });
+    await render();
+    await select('second');
+    expect(mocks.update).toHaveBeenLastCalledWith({
+      profileId: 'second',
+      functionalModel: '',
+    });
+    expect(mocks.loadCapabilities).toHaveBeenLastCalledWith('second');
+  });
+
+  it('does not apply a late catalogue after switching Profiles', async () => {
+    let finish!: (value: typeof observation) => void;
+    mocks.loadCapabilities.mockImplementationOnce(
+      () =>
+        new Promise<typeof observation>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    mocks.state.profiles.push({ ...mocks.state.profiles[0], id: 'second' });
+    await render();
+    await select('second');
+    await act(async () =>
+      finish({
+        ...observation,
+        sessionMeta: {
+          ...observation.sessionMeta,
+          availableModels: [{ modelId: 'wrong', name: 'Wrong' }],
+        },
+      }),
+    );
+    expect(modelSelect()?.textContent).not.toContain('Wrong');
+  });
+
+  it('leaves Built-In Pi on its existing LLM settings path', async () => {
+    mocks.get.mockResolvedValue({
+      ...initial,
+      defaults: { profileId: 'huabu', functionalModel: '' },
+    });
+    await render();
+    expect(modelSelect()).toBeNull();
+    expect(mocks.loadCapabilities).not.toHaveBeenCalled();
+  });
+
+  it('preserves missing Profile selections and does not probe them', async () => {
     mocks.get.mockResolvedValue({
       ...initial,
       defaults: { profileId: 'deleted', functionalModel: '' },
       selectionState: 'deleted',
     });
     await render();
-    expect(container.textContent).toContain(
-      'settings.agentDefaultsMissing:deleted',
-    );
     expect(container.textContent).toContain('settings.agentDefaultsDeleted');
-    expect(container.querySelector('input')?.disabled).toBe(true);
-    await selectProfile('external');
-    expect(mocks.update).toHaveBeenCalledWith({
-      profileId: 'external',
-      functionalModel: '',
-    });
+    expect(modelSelect()?.disabled).toBe(true);
+    expect(mocks.loadCapabilities).not.toHaveBeenCalled();
   });
 
-  it('keeps failed drafts, displays errors and retries on blur', async () => {
-    mocks.update.mockRejectedValueOnce(new Error('disk is read-only'));
-    await render();
-    await editModel('other-model');
-    await blurModel();
-    expect(container.querySelector('[role="alert"]')?.textContent).toBe(
-      'disk is read-only',
-    );
-    expect(container.querySelector('input')?.value).toBe('other-model');
-    expect(container.textContent).not.toContain('settings.agentDefaultsSaved');
-    await blurModel();
-    expect(mocks.update).toHaveBeenCalledTimes(2);
-    expect(container.querySelector('[role="alert"]')).toBeNull();
-    expect(container.textContent).not.toContain('settings.agentDefaultsSaved');
-  });
-
-  it('saves an empty model as inheritance without a save status row', async () => {
-    mocks.update.mockResolvedValue({
-      ...initial,
-      defaults: { profileId: 'external', functionalModel: '' },
-    });
-    await render();
-    await editModel('');
-    await blurModel();
-    expect(mocks.update).toHaveBeenCalledWith({
-      profileId: 'external',
-      functionalModel: '',
-    });
-    expect(container.textContent).not.toContain('settings.agentDefaultsSaved');
-    expect(container.querySelectorAll('.ring-1 > *')).toHaveLength(2);
-    expect(container.textContent).not.toContain(
-      'settings.agentDefaultsModelUnknown',
-    );
-  });
-
-  it('shows load errors rather than an editable fallback', async () => {
-    mocks.get.mockRejectedValue(new Error('Invalid Agent defaults file'));
-    await render();
-    expect(container.textContent).toContain('Invalid Agent defaults file');
-    expect(container.querySelector('input')).toBeNull();
-  });
-
-  it('does not treat an unloaded Profile catalogue as a deleted selection', async () => {
+  it('does not treat an unloaded catalogue as a deleted Profile', async () => {
     mocks.state.loaded = false;
     mocks.state.profiles = [];
     await render();
     expect(container.textContent).not.toContain(
       'settings.agentDefaultsDeleted',
     );
+    expect(modelSelect()?.disabled).toBe(true);
     expect(container.querySelector('select')?.disabled).toBe(false);
-    expect(container.querySelector('input')?.disabled).toBe(true);
+    expect(mocks.loadCapabilities).not.toHaveBeenCalled();
   });
 
-  it('distinguishes known unsupported model selection from unknown support', async () => {
-    mocks.get.mockResolvedValue({ ...initial, modelCapability: 'unsupported' });
+  it('retains failed model drafts and offers save retry', async () => {
+    mocks.update.mockRejectedValueOnce(new Error('disk is read-only'));
     await render();
-    expect(container.textContent).toContain(
-      'settings.agentDefaultsModelUnsupported',
-    );
-    expect(container.textContent).not.toContain(
-      'settings.agentDefaultsModelUnknown',
-    );
-  });
-
-  it('treats a newly selected legacy command as custom despite known CLI metadata', async () => {
-    mocks.get.mockResolvedValue({
-      ...initial,
-      defaults: { profileId: 'other', functionalModel: 'fast' },
-      modelCapability: 'supported',
-    });
-    mocks.state.profiles[0].metadata = { cliId: 'copilot' };
-    mocks.update.mockResolvedValue({
-      ...initial,
-      modelCapability: 'unsupported',
-    });
-    await render();
-    const select = container.querySelector('select') as HTMLSelectElement;
+    await select('other', true);
+    expect(container.textContent).toContain('disk is read-only');
+    expect(modelSelect()?.value).toBe('other');
     await act(async () => {
-      select.value = 'external';
-      select.dispatchEvent(new Event('change', { bubbles: true }));
+      [...container.querySelectorAll('button')]
+        .find(
+          (button) => button.textContent === 'settings.agentDefaultsRetrySave',
+        )
+        ?.click();
     });
-    expect(container.textContent).toContain(
-      'settings.agentDefaultsModelUnsupported',
-    );
+    expect(mocks.update).toHaveBeenCalledTimes(2);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
   });
 
-  it('honors separately reported runtime ACP model support for a custom Profile', async () => {
-    mocks.get.mockResolvedValue({ ...initial, modelCapability: 'supported' });
-    await render();
-    expect(container.textContent).not.toContain(
-      'settings.agentDefaultsModelUnsupported',
-    );
-    expect(container.textContent).not.toContain(
-      'settings.agentDefaultsModelUnknown',
-    );
-  });
-
-  it('debounces model edits for 600 ms and saves only the latest value', async () => {
-    await render();
-    await editModel('first');
-    await act(async () => vi.advanceTimersByTimeAsync(400));
-    await editModel('  latest  ');
-    await act(async () => vi.advanceTimersByTimeAsync(599));
-    expect(mocks.update).not.toHaveBeenCalled();
-    await act(async () => vi.advanceTimersByTimeAsync(1));
-    expect(mocks.update).toHaveBeenCalledExactlyOnceWith({
-      profileId: 'external',
-      functionalModel: '  latest  ',
-    });
-    expect(container.querySelector('input')?.value).toBe('latest');
-  });
-
-  it('flushes pending model edits on blur without another delayed save', async () => {
-    await render();
-    await editModel('latest');
-    await blurModel();
-    await act(async () => vi.advanceTimersByTimeAsync(600));
-    expect(mocks.update).toHaveBeenCalledTimes(1);
-  });
-
-  it('flushes pending model edits when Settings closes', async () => {
-    await render();
-    await editModel('on-close');
-    await act(async () => root.render(null));
-    expect(mocks.update).toHaveBeenCalledExactlyOnceWith({
-      profileId: 'external',
-      functionalModel: 'on-close',
-    });
-  });
-
-  it('selecting a Profile includes pending model edits without a stale delayed write', async () => {
-    mocks.state.profiles.push({ ...mocks.state.profiles[0], id: 'other' });
-    await render();
-    await editModel('new-model');
-    await selectProfile('other');
-    await act(async () => vi.advanceTimersByTimeAsync(600));
-    expect(mocks.update).toHaveBeenCalledExactlyOnceWith({
-      profileId: 'other',
-      functionalModel: 'new-model',
-    });
-  });
-
-  it('does not let an older response replace an edit made during saving', async () => {
-    let finish!: (response: AgentDefaultsResponse) => void;
+  it('does not let an old save response replace a newer selection', async () => {
+    let finish!: (value: AgentDefaultsResponse) => void;
     mocks.update.mockImplementationOnce(
       () =>
         new Promise<AgentDefaultsResponse>((resolve) => {
@@ -370,24 +415,22 @@ describe('Agent defaults Settings', () => {
         }),
     );
     await render();
-    await editModel('first');
-    await blurModel();
-    expect(container.textContent).not.toContain('settings.saving');
-    expect(container.querySelector('input')?.disabled).toBe(false);
-    await editModel('latest');
+    await select('other', true);
+    await select('fast', true);
     await act(async () =>
       finish({
         ...initial,
-        defaults: { profileId: 'external', functionalModel: 'first' },
+        defaults: { profileId: 'external', functionalModel: 'other' },
       }),
     );
-    expect(container.querySelector('input')?.value).toBe('latest');
-    expect(container.textContent).not.toContain('settings.agentDefaultsSaved');
-    await act(async () => vi.advanceTimersByTimeAsync(600));
-    expect(mocks.update).toHaveBeenLastCalledWith({
-      profileId: 'external',
-      functionalModel: 'latest',
-    });
-    expect(container.textContent).not.toContain('settings.agentDefaultsSaved');
+    expect(modelSelect()?.value).toBe('fast');
+  });
+
+  it('shows configuration load errors without an editable fallback', async () => {
+    mocks.get.mockRejectedValue(new Error('Invalid Agent defaults file'));
+    await render();
+    expect(container.textContent).toContain('Invalid Agent defaults file');
+    expect(modelSelect()).toBeNull();
+    expect(mocks.loadCapabilities).not.toHaveBeenCalled();
   });
 });

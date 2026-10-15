@@ -1,14 +1,17 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { Select } from '@/components/Common/Select';
-import { TextInput } from '@/components/Common/TextInput';
+import { buildAcpSessionSelectors } from '@huabu/shared';
+
+import { Button } from '@/components/Common/Button';
+import { Select, type SelectOption } from '@/components/Common/Select';
 import { SettingRow } from '@/components/Settings/Common/SettingRow';
 import { SettingSection } from '@/components/Settings/Common/SettingSection';
 import { useDebouncedSave } from '@/components/Settings/utils';
+import { useAcpProfileCapabilities } from '@/hooks/useAcpProfileCapabilities';
 import { useAcpProfilesStore } from '@/store/acpProfilesStore';
 
 import type { AgentDefaults, AgentDefaultsResponse } from '@huabu/shared';
@@ -24,7 +27,6 @@ export function AgentDefaultsSettings() {
   const [snapshot, setSnapshot] = useState<AgentDefaultsResponse | null>(null);
   const [draft, setDraft] = useState<AgentDefaults | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const modelId = useId();
   const active = useRef(false);
   const editRevision = useRef(0);
 
@@ -88,6 +90,35 @@ export function AgentDefaultsSettings() {
 
   const externalProfiles = profiles.filter((profile) => profile.id !== 'huabu');
   const isBuiltIn = draft?.profileId === 'huabu';
+  const selectedProfile = externalProfiles.find(
+    (profile) => profile.id === draft?.profileId,
+  );
+  const supportsModel = selectedProfile?.launch.kind === 'acp-harness';
+  const capabilities = useAcpProfileCapabilities(
+    draft?.profileId ?? null,
+    profilesLoaded && supportsModel,
+  );
+  const models = capabilities.data
+    ? (buildAcpSessionSelectors(capabilities.data.sessionMeta).find(
+        (selector) =>
+          selector.category === 'model' && selector.kind === 'select',
+      )?.options ?? [])
+    : [];
+  const modelOptions: SelectOption[] = [
+    { value: '', label: t('settings.agentDefaultsInherit') },
+    ...models,
+  ];
+  const unavailableModel = Boolean(
+    draft?.functionalModel &&
+    !models.some((model) => model.value === draft.functionalModel),
+  );
+  if (unavailableModel && draft?.functionalModel) {
+    modelOptions.push({
+      value: draft.functionalModel,
+      label: draft.functionalModel,
+      disabled: true,
+    });
+  }
   const missing =
     profilesLoaded &&
     !isBuiltIn &&
@@ -113,13 +144,11 @@ export function AgentDefaultsSettings() {
       description: undefined,
     });
   }
-  const modelCapability =
-    snapshot?.defaults.profileId === draft?.profileId
-      ? (snapshot?.modelCapability ?? 'unknown')
-      : externalProfiles.find((profile) => profile.id === draft?.profileId)
-            ?.launch.kind === 'acp-command'
-        ? 'unsupported'
-        : 'unknown';
+  const modelCapability = !supportsModel
+    ? 'unsupported'
+    : models.length > 0
+      ? 'supported'
+      : 'unknown';
   const showStatus =
     missing ||
     draft?.profileId === null ||
@@ -152,31 +181,88 @@ export function AgentDefaultsSettings() {
               placeholder={t('settings.agentDefaultsUnconfigured')}
               onOpen={() => void refresh()}
               onChange={(profileId) => {
-                edit({ ...draft, profileId }, true);
+                edit(
+                  {
+                    ...draft,
+                    profileId,
+                    functionalModel:
+                      profileId === 'huabu' || profileId === draft.profileId
+                        ? draft.functionalModel
+                        : '',
+                  },
+                  true,
+                );
               }}
             />
           </SettingRow>
           {!isBuiltIn && (
-            <SettingRow
-              title={t('settings.agentDefaultsModel')}
-              description={t('settings.agentDefaultsModelDescription')}
-              labelFor={modelId}
-            >
-              <TextInput
-                id={modelId}
-                value={draft.functionalModel}
-                placeholder={t('settings.agentDefaultsInherit')}
-                maxLength={500}
-                disabled={missing || !profilesLoaded}
-                onChange={(event) => {
-                  edit({ ...draft, functionalModel: event.target.value });
-                }}
-                onBlur={() => {
-                  if (error) edit(draft, true);
-                  else debouncedSave.flush();
-                }}
-              />
-            </SettingRow>
+            <div>
+              <SettingRow
+                title={t('settings.agentDefaultsModel')}
+                description={t('settings.agentDefaultsModelDescription')}
+              >
+                <div className="w-40 min-w-0 sm:w-48">
+                  <Select
+                    ariaLabel={t('settings.agentDefaultsModel')}
+                    className="justify-between"
+                    options={modelOptions}
+                    value={draft.functionalModel}
+                    placeholder={t('settings.agentDefaultsInherit')}
+                    disabled={
+                      missing ||
+                      !profilesLoaded ||
+                      !supportsModel ||
+                      capabilities.loading
+                    }
+                    onChange={(functionalModel) =>
+                      edit({ ...draft, functionalModel }, true)
+                    }
+                  />
+                </div>
+              </SettingRow>
+              <div className="flex min-w-0 flex-col items-start gap-2 px-3 pb-2.5 [overflow-wrap:anywhere] empty:hidden">
+                {capabilities.loading && (
+                  <span role="status" className="text-fg-muted text-xs">
+                    {t('chat.loadingAgentOptionsProgress')}
+                  </span>
+                )}
+                {capabilities.error ? (
+                  <div className="text-danger text-xs" role="alert">
+                    {capabilities.error.message}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={capabilities.retry}
+                    >
+                      {t('chat.retryAgentOptions')}
+                    </Button>
+                  </div>
+                ) : capabilities.data && models.length === 0 ? (
+                  <span role="status" className="text-fg-muted text-xs">
+                    {t('settings.agentDefaultsNoModels')}
+                  </span>
+                ) : unavailableModel &&
+                  !capabilities.loading &&
+                  supportsModel ? (
+                  <span role="status" className="text-warning text-xs">
+                    {t('settings.agentDefaultsModelUnavailable')}
+                  </span>
+                ) : !supportsModel && selectedProfile ? (
+                  <span role="status" className="text-warning text-xs">
+                    {t('settings.agentDefaultsModelUnsupported')}
+                  </span>
+                ) : null}
+                {error && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => edit(draft, true)}
+                  >
+                    {t('settings.agentDefaultsRetrySave')}
+                  </Button>
+                )}
+              </div>
+            </div>
           )}
           {showStatus && (
             <div className="space-y-2 px-3 py-2 text-xs">
