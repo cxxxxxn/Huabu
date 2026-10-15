@@ -316,7 +316,7 @@ export const AIMessage = memo(function AIMessage({
                   threadId={threadId}
                   messageId={messageId}
                   segmentIndex={idx}
-                  enableComments={enableComments && showMessageActions}
+                  enableComments={enableComments}
                 />
               </div>
             </div>

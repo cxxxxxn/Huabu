@@ -1,14 +1,15 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { Copy, MessageSquare, Quote } from 'lucide-react';
+import { ArrowUp, Copy, MessageSquare, Quote } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/Common/Button';
 import { Popover } from '@/components/Common/Popover';
-import { TextInput } from '@/components/Common/TextInput';
+import { TextArea } from '@/components/Common/TextArea';
 import { NODE_ICON } from '@/config/nodeIcons';
+import { useAutoSizeTextArea } from '@/hooks/useAutoSizeTextArea';
 
 import type { MilkdownPreviewSelection } from '@/components/Milkdown/MilkdownPreview';
 
@@ -34,7 +35,8 @@ export function FragmentCommentPopover({
   const [comment, setComment] = useState('');
   const [copyError, setCopyError] = useState(false);
   const [copying, setCopying] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  useAutoSizeTextArea(inputRef, comment, editing);
   const NoteIcon = NODE_ICON.note;
 
   return (
@@ -42,7 +44,7 @@ export function FragmentCommentPopover({
       position={selection.position}
       offset={{ x: 4, y: 8 }}
       onDismiss={onDismiss}
-      className={editing ? 'w-80 p-3' : 'p-1'}
+      className={editing ? 'w-80 rounded-lg p-3' : 'p-1'}
       onOpenAutoFocus={
         editing
           ? () => inputRef.current?.focus({ preventScroll: true })
@@ -51,15 +53,15 @@ export function FragmentCommentPopover({
     >
       {editing ? (
         <form
-          className="flex flex-col gap-3"
+          className="flex flex-col gap-2"
           onSubmit={(event) => {
             event.preventDefault();
             if (comment.trim()) onAdd(comment);
           }}
         >
-          <figure className="bg-hover flex min-w-0 items-start gap-2 rounded-md p-2">
+          <figure className="bg-hover/60 flex min-w-0 items-start gap-2 rounded-md px-2 py-1.5">
             <figcaption className="text-fg-subtle mt-0.5 shrink-0">
-              <Quote aria-hidden="true" className="h-3 w-3" />
+              <Quote aria-hidden="true" className="h-3 w-3 opacity-60" />
               <span className="sr-only">
                 {t('messages.fragmentQuotedPassage')}
               </span>
@@ -68,24 +70,40 @@ export function FragmentCommentPopover({
               {selection.text.trim()}
             </blockquote>
           </figure>
-          <TextInput
-            ref={inputRef}
-            aria-label={t('messages.fragmentComment')}
-            placeholder={t('messages.fragmentCommentPlaceholder')}
-            value={comment}
-            onChange={(event) => setComment(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && event.nativeEvent.isComposing) {
+          <div className="relative">
+            <TextArea
+              ref={inputRef}
+              rows={2}
+              className="focus:border-info block max-h-[calc(6lh+0.875rem)] min-h-[calc(2lh+0.875rem)] w-full resize-none overflow-y-auto overscroll-contain pr-9 focus:ring-0"
+              aria-label={t('messages.fragmentComment')}
+              placeholder={t('messages.fragmentCommentPlaceholder')}
+              value={comment}
+              onChange={(event) => setComment(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter') return;
+                if (
+                  event.nativeEvent.isComposing ||
+                  event.nativeEvent.keyCode === 229
+                ) {
+                  event.preventDefault();
+                  return;
+                }
+                if (event.shiftKey) return;
                 event.preventDefault();
-              }
-            }}
-          />
-          <div className="flex justify-end gap-2">
-            <Button size="sm" variant="ghost" onClick={onDismiss}>
-              {t('actions.cancel')}
-            </Button>
-            <Button size="sm" type="submit" disabled={!comment.trim()}>
-              {t('messages.addCommentToInput')}
+                event.currentTarget.form?.requestSubmit();
+              }}
+            />
+            <Button
+              size="sm"
+              variant="ghost"
+              shape="pill"
+              iconOnly
+              type="submit"
+              title={t('messages.addCommentToInput')}
+              tooltipWrapperClassName="absolute right-1 bottom-1"
+              disabled={!comment.trim()}
+            >
+              <ArrowUp aria-hidden="true" />
             </Button>
           </div>
         </form>

@@ -30,9 +30,11 @@ vi.mock('./AIMessage', async () => {
     AIMessage: memo(function MockAIMessage({
       messageId,
       endStatus,
+      enableComments,
     }: {
       messageId: string;
       endStatus?: 'interrupted' | 'error';
+      enableComments?: boolean;
     }) {
       renderCounts.assistant.set(
         messageId,
@@ -42,7 +44,11 @@ vi.mock('./AIMessage', async () => {
         renderCounts.assistantEffects.push(messageId);
       }, [messageId]);
       return (
-        <div data-assistant-message={messageId} data-end-status={endStatus} />
+        <div
+          data-assistant-message={messageId}
+          data-end-status={endStatus}
+          data-comments={enableComments}
+        />
       );
     }),
   };
@@ -132,6 +138,38 @@ afterEach(() => {
   container = undefined;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe('MessageList comment availability', () => {
+  it.each([
+    [true, false],
+    [true, true],
+    [false, false],
+    [false, true],
+  ])(
+    'follows panel visibility (%s) independently of history hydration (%s)',
+    (isActive, isHistoryLoading) => {
+      mount(
+        <MessageList
+          messages={[
+            {
+              id: 'visible-answer',
+              role: 'assistant',
+              segments: [{ kind: 'text', text: 'An already rendered answer' }],
+            },
+          ]}
+          isLoading={false}
+          isActive={isActive}
+          isHistoryLoading={isHistoryLoading}
+        />,
+      );
+      expect(
+        container
+          ?.querySelector('[data-assistant-message="visible-answer"]')
+          ?.getAttribute('data-comments'),
+      ).toBe(String(isActive));
+    },
+  );
 });
 
 describe('MessageList empty state', () => {

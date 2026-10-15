@@ -126,6 +126,7 @@ export function MilkdownPreview(
   const instanceRef = useRef<MilkdownInstance | null>(null);
   const lastSyncedRef = useRef<string>(normalizeMarkdown(markdown));
   const pendingMarkdownRef = useRef<string | null>(null);
+  const selectingWithMouseRef = useRef(false);
   // Keep the latest drag callback in a ref so the mount effect stays
   // stable while still reading fresh closures.
   const onBlockDragStartRef = useRef(onBlockDragStart);
@@ -141,6 +142,16 @@ export function MilkdownPreview(
   const onTextSelectionRef = useRef(onTextSelection);
   onTextSelectionRef.current = onTextSelection;
   const reportsTextSelection = !!onTextSelection;
+
+  const syncPendingMarkdown = useCallback(() => {
+    const instance = instanceRef.current;
+    const pending = pendingMarkdownRef.current;
+    if (!instance || pending === null) return;
+    pendingMarkdownRef.current = null;
+    if (pending === lastSyncedRef.current) return;
+    lastSyncedRef.current = pending;
+    instance.setMarkdown(pending);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -224,7 +235,6 @@ export function MilkdownPreview(
     let hasReportedSelection = false;
     let mousePosition: { x: number; y: number } | null = null;
     let mouseSelectionRect: DOMRect | null = null;
-    let selectingWithMouse = false;
     const clearMousePosition = () => {
       mousePosition = null;
       mouseSelectionRect = null;
@@ -248,6 +258,7 @@ export function MilkdownPreview(
         hasReportedSelection = false;
         clearMousePosition();
         onTextSelectionRef.current?.(null);
+        if (!selectingWithMouseRef.current) syncPendingMarkdown();
         return;
       }
       const snapshot = instance.getTextSelection();
@@ -256,6 +267,7 @@ export function MilkdownPreview(
       if (!snapshot || !rect) {
         clearMousePosition();
         onTextSelectionRef.current?.(null);
+        if (!selectingWithMouseRef.current) syncPendingMarkdown();
         return;
       }
       let position: { x: number; y: number };
@@ -281,6 +293,7 @@ export function MilkdownPreview(
       const native = mountRoot.ownerDocument.getSelection();
       if (
         !hasReportedSelection &&
+        pendingMarkdownRef.current === null &&
         !mountRoot.contains(native?.anchorNode ?? null) &&
         !mountRoot.contains(native?.focusNode ?? null)
       ) {
@@ -291,18 +304,18 @@ export function MilkdownPreview(
     };
     const handleMouseDown = (event: MouseEvent) => {
       if (event.button !== 0) return;
-      selectingWithMouse = true;
+      selectingWithMouseRef.current = true;
       clearMousePosition();
     };
     const handleMouseUp = (event: MouseEvent) => {
       if (event.button !== 0) return;
       if (
-        !selectingWithMouse &&
+        !selectingWithMouseRef.current &&
         (!(event.target instanceof Node) || !mountRoot.contains(event.target))
       ) {
         return;
       }
-      selectingWithMouse = false;
+      selectingWithMouseRef.current = false;
       mousePosition = { x: event.clientX, y: event.clientY };
       mouseSelectionRect = null;
       schedule();
@@ -326,21 +339,37 @@ export function MilkdownPreview(
       mountRoot.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('scroll', schedule, true);
       window.removeEventListener('resize', schedule);
+      selectingWithMouseRef.current = false;
       onTextSelectionRef.current?.(null);
+      syncPendingMarkdown();
     };
-  }, [reportsTextSelection]);
+  }, [reportsTextSelection, syncPendingMarkdown]);
 
   useEffect(() => {
-    if (markdownEquals(markdown, lastSyncedRef.current)) return;
-    const next = normalizeMarkdown(markdown);
-    const instance = instanceRef.current;
-    if (!instance) {
-      pendingMarkdownRef.current = next;
+    if (markdownEquals(markdown, lastSyncedRef.current)) {
+      pendingMarkdownRef.current = null;
       return;
     }
-    lastSyncedRef.current = next;
-    instance.setMarkdown(next);
-  }, [markdown]);
+    const next = normalizeMarkdown(markdown);
+    pendingMarkdownRef.current = next;
+    if (reportsTextSelection) {
+      const container = containerRef.current;
+      const editor = container?.querySelector('.ProseMirror');
+      const native = container?.ownerDocument.getSelection();
+      // Replacing the document during selection would destroy the quoted range.
+      if (
+        selectingWithMouseRef.current ||
+        (native &&
+          !native.isCollapsed &&
+          native.rangeCount === 1 &&
+          editor?.contains(native.anchorNode) &&
+          editor.contains(native.focusNode))
+      ) {
+        return;
+      }
+    }
+    syncPendingMarkdown();
+  }, [markdown, reportsTextSelection, syncPendingMarkdown]);
 
   // The editor mounts asynchronously, so the mount path above applies the
   // initial name. Keep the live textbox in sync when the caller overrides

@@ -10,6 +10,7 @@ import { MilkdownPreview } from '../MilkdownPreview';
 const mocks = vi.hoisted(() => ({
   getSelectionClientRect: vi.fn(),
   getTextSelection: vi.fn(),
+  setMarkdown: vi.fn(),
 }));
 
 vi.mock('../createMilkdown', () => ({
@@ -23,6 +24,7 @@ vi.mock('../createMilkdown', () => ({
       destroy: vi.fn(),
       getSelectionClientRect: mocks.getSelectionClientRect,
       getTextSelection: mocks.getTextSelection,
+      setMarkdown: mocks.setMarkdown,
     };
   },
 }));
@@ -45,6 +47,7 @@ beforeEach(async () => {
     contextAfter: '',
   });
   onTextSelection.mockClear();
+  mocks.setMarkdown.mockClear();
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
@@ -86,6 +89,67 @@ async function dispatch(target: EventTarget, event: Event) {
 }
 
 describe('preview selection popover positioning', () => {
+  async function update(markdown: string, enabled = true) {
+    await act(async () => {
+      root.render(
+        <MilkdownPreview
+          markdown={markdown}
+          onTextSelection={enabled ? onTextSelection : undefined}
+        />,
+      );
+    });
+  }
+
+  it('defers streaming updates until the selection clears and applies only the latest', async () => {
+    await dispatch(editor, new MouseEvent('mouseup', { bubbles: true }));
+    await update('Selected passage, more');
+    await update('Selected passage, latest');
+    expect(mocks.setMarkdown).not.toHaveBeenCalled();
+    expect(document.getSelection()?.toString()).toBe('Selected passage');
+    document.getSelection()?.collapseToEnd();
+    await dispatch(document, new Event('selectionchange'));
+    expect(mocks.setMarkdown).toHaveBeenCalledExactlyOnceWith(
+      'Selected passage, latest',
+    );
+    expect(onTextSelection).toHaveBeenLastCalledWith(null);
+  });
+
+  it('defers updates during a mouse drag even before a text range exists', async () => {
+    document.getSelection()?.removeAllRanges();
+    await dispatch(editor, new MouseEvent('mousedown', { bubbles: true }));
+    await update('Selected passage, streaming');
+    expect(mocks.setMarkdown).not.toHaveBeenCalled();
+    await dispatch(document.body, new MouseEvent('mouseup', { bubbles: true }));
+    expect(mocks.setMarkdown).toHaveBeenCalledExactlyOnceWith(
+      'Selected passage, streaming',
+    );
+  });
+
+  it('applies pending content when the panel disables selection reporting', async () => {
+    await update('Selected passage, streaming');
+    expect(mocks.setMarkdown).not.toHaveBeenCalled();
+    await update('Selected passage, streaming', false);
+    expect(mocks.setMarkdown).toHaveBeenCalledExactlyOnceWith(
+      'Selected passage, streaming',
+    );
+  });
+
+  it('discards a deferred update when the source returns to the displayed content', async () => {
+    await update('Selected passage, temporary');
+    await update('Selected passage');
+    document.getSelection()?.collapseToEnd();
+    await dispatch(document, new Event('selectionchange'));
+    expect(mocks.setMarkdown).not.toHaveBeenCalled();
+  });
+
+  it('updates immediately when there is no text selection', async () => {
+    document.getSelection()?.removeAllRanges();
+    await update('Selected passage, streaming');
+    expect(mocks.setMarkdown).toHaveBeenCalledExactlyOnceWith(
+      'Selected passage, streaming',
+    );
+  });
+
   it.each([
     [170, 65],
     [25, 35],
