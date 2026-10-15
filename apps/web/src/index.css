@@ -37,21 +37,21 @@
   --info-bg-hover: #dbeafe;
 
   /* Status: success */
-  --success: #1b5e20;
+  --success: #1e7a3f;
   --success-light: #a4c9a4;
-  --success-bg: #f3f9f3;
+  --success-bg: #e3f2e8;
   --success-bg-hover: #deeedd;
 
   /* Status: warning */
-  --warning: #d97a2b;
+  --warning: #eb7f31;
   --warning-light: #e2b38d;
   --warning-bg: #fdf6f1;
   --warning-bg-hover: #f7e5d6;
 
   /* Status: danger */
-  --danger: #b82132;
+  --danger: #c0392b;
   --danger-light: #e3b2a9;
-  --danger-bg: #fcf8f8;
+  --danger-bg: #fbe5e2;
   --danger-bg-hover: #fbe2e1;
 
   /* AI colors */
