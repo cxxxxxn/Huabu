@@ -804,10 +804,10 @@ export const ChatPanel = ({
     agentBinding.kind === 'external'
       ? acpProfiles.find((profile) => profile.id === agentBinding.profileId)
       : undefined;
-  const workingDirectoryOverride = preparation.workingDirPath;
+  const workingDirectoryOverride = preparation.workingDirectoryOverride;
   const showWorkingDirectoryOverride =
     agentBinding.kind === 'external' &&
-    (!!selectedExternalProfile || !!workingDirectoryOverride);
+    (!!selectedExternalProfile || !!preparation.workingDirPath);
   const handleSaveWorkingDirectory = useCallback(
     async (workingDirPath: string | null) => {
       setSavingWorkingDirectory(true);

@@ -292,6 +292,69 @@ it('does not serialize controls from independent conversations', async () => {
   await first;
 });
 
+it.each([false, true])(
+  'restores the prior execution lock after draft preparation fails (previously locked=%s)',
+  async (locked) => {
+    const session = createSession(true);
+    useConversationPreparationStore.setState((state) => ({
+      locked: { ...state.locked, [preparationKey(session)]: locked },
+    }));
+    ownerMocks.awaitDraft.mockRejectedValueOnce(new Error('Draft save failed'));
+    const control = vi.fn();
+    const refresh = vi.fn().mockRejectedValue(new Error('Cache unavailable'));
+    await expect(
+      runConversationControl(session, control, refresh),
+    ).rejects.toThrow('Draft save failed');
+    expect(control).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(resolveConversationPreparation(session)).toMatchObject({
+      editable: !locked,
+      pending: false,
+    });
+    expect(useConversationPreparationStore.getState().queuedControls).toEqual(
+      {},
+    );
+    if (!locked) {
+      await saveConversationAgent(session, { binding, mode: 'ask' });
+      expect(ownerMocks.saveDraft).toHaveBeenCalledOnce();
+    }
+  },
+);
+
+it('keeps an attempted control locked when both dispatch and cache refresh fail', async () => {
+  const session = createSession(true);
+  const control = vi.fn().mockRejectedValue(new Error('Transport unavailable'));
+  const refresh = vi.fn().mockRejectedValue(new Error('Cache unavailable'));
+  await expect(
+    runConversationControl(session, control, refresh),
+  ).rejects.toThrow('Cache unavailable');
+  expect(control).toHaveBeenCalledOnce();
+  expect(refresh).toHaveBeenCalledOnce();
+  expect(resolveConversationPreparation(session)).toMatchObject({
+    editable: false,
+    pending: false,
+  });
+});
+
+it('runs the next queued control after a failed draft preflight', async () => {
+  const session = createSession(true);
+  ownerMocks.awaitDraft.mockRejectedValueOnce(new Error('Draft save failed'));
+  const firstControl = vi.fn();
+  const refresh = vi.fn();
+  const first = runConversationControl(session, firstControl, refresh);
+  const rejection = expect(first).rejects.toThrow('Draft save failed');
+  const nextControl = vi.fn().mockResolvedValue(undefined);
+  const next = runConversationControl(session, nextControl, refresh);
+  await Promise.all([rejection, next]);
+  expect(firstControl).not.toHaveBeenCalled();
+  expect(nextControl).toHaveBeenCalledOnce();
+  expect(refresh).toHaveBeenCalledOnce();
+  expect(resolveConversationPreparation(session)).toMatchObject({
+    pending: false,
+    editable: false,
+  });
+});
+
 it('keeps browser directory intent across cache eviction and never leaks it to another conversation', async () => {
   const session = createSession(false);
   await saveConversationWorkingDirectory(session, '/project');

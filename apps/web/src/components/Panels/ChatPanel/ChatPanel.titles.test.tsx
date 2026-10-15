@@ -1246,9 +1246,14 @@ describe('rendered conversation titles', () => {
     },
   );
 
-  it.each([undefined, '/chat/project'])(
-    'transfers naming and directory ownership when saving a Question (cwd=%s)',
-    async (cwd) => {
+  it.each([
+    { cwd: undefined, override: undefined },
+    { cwd: '/chat/project', override: '/chat/project' },
+    { cwd: '/profile/original', override: null },
+    { cwd: '/legacy/directory', override: undefined },
+  ])(
+    'transfers naming without turning inherited or unknown directory origin into an override (%j)',
+    async ({ cwd, override }) => {
       const addNode = vi.fn((input) =>
         useCanvasStore.setState({
           nodes: [
@@ -1268,6 +1273,7 @@ describe('rendered conversation titles', () => {
         observeConversationExecution('canvas', 'thread', {
           binding: { kind: 'external', alias: 'Agent', profileId: 'profile-1' },
           workingDirPath: cwd,
+          workingDirectoryOverride: override,
         });
       }
       useChatStore
@@ -1283,8 +1289,15 @@ describe('rendered conversation titles', () => {
         label: 'Keep this name',
         labelSource: 'user',
         threadId: 'thread',
-        ...(cwd ? { agentLaunchOverrides: { workingDirPath: cwd } } : {}),
+        ...(override
+          ? { agentLaunchOverrides: { workingDirPath: override } }
+          : {}),
       });
+      if (!override) {
+        expect(addNode.mock.calls[0][0].data).not.toHaveProperty(
+          'agentLaunchOverrides',
+        );
+      }
       expect(replaceTabTarget).toHaveBeenCalledOnce();
     },
   );

@@ -2,13 +2,13 @@
 // Licensed under the MIT license.
 
 /**
- * The no-spawn meta route, now that both of its reads are awaited.
+ * The no-spawn meta route awaits a single durable-record snapshot.
  *
  * The route answers in a fixed priority order — live session, then this
  * thread's durable record, then the profile-wide schema cache, then nothing —
  * and the agentlet the live lookup is keyed by is itself read from the record.
- * Asynchronous persistence turns both of those reads into awaits, so a missed
- * one degrades quietly: a live session becomes invisible, and a known thread
+ * Missing the asynchronous persistence await degrades quietly:
+ * a live session becomes invisible, and a known thread
  * answers as if it had never been used. Each case here holds the read open to
  * be sure the handler waited for the answer it acts on.
  */
@@ -213,6 +213,9 @@ describe('ACP cached-meta across awaited persistence', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
       source: 'thread',
+      execution: {
+        binding: { kind: 'external', alias: 'A', profileId: 'profile-1' },
+      },
       availableCommands: [{ name: 'compact', description: 'Compact context' }],
       commandsUpdatedAt: 11,
       sessionMeta: {
@@ -227,8 +230,7 @@ describe('ACP cached-meta across awaited persistence', () => {
         updatedAt: 12,
       },
     });
-    // The agentlet lookup and the metadata read are two separate reads.
-    expect(mocks.recordReads).toBe(2);
+    expect(mocks.recordReads).toBe(1);
   });
 
   it('reports a neutral snapshot for a thread nothing has ever opened', async () => {

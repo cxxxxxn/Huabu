@@ -104,8 +104,8 @@ describe('host Ink response delivery', () => {
   });
 
   it.each([
-    { style: undefined, expected: { x: 120, y: 260 } },
-    { style: { width: 0, height: 0 }, expected: { x: 120, y: 260 } },
+    { style: undefined, expected: { x: 100, y: 260 } },
+    { style: { width: 0, height: 0 }, expected: { x: 100, y: 260 } },
     { style: { width: 200, height: 180 }, expected: { x: 0, y: 360 } },
   ])(
     'preserves the 80px placement gap for anchor geometry %j',

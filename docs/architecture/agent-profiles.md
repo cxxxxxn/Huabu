@@ -53,6 +53,8 @@ The editable Profile is a template, not an execution. A conversation freezes its
 
 The execution snapshot also preserves directory origin as `workingDirectoryOverride`: an explicit path or `null` for Profile inheritance. The ACP driver's spec validator preserves this field across persistence and recovery. Cached metadata returns it separately from the effective frozen cwd, so an inherited directory never gains an override marker and later Profile edits cannot change the displayed execution path. Legacy snapshots without origin remain valid and display a neutral session-directory label rather than guessing from the current Profile or browser intent.
 
+Saving Chat as a Question copies only its explicit directory override, never its effective inherited cwd. The existing thread keeps its frozen execution directory; a copied node with a new thread inherits the current Profile unless an explicit override was saved. Draft preparation failures before a control callback starts restore the prior execution lock and skip the unnecessary cache refresh; potentially dispatched requests retain the lock until execution facts are confirmed.
+
 Runtime-relevant edits invalidate the Profile schema cache. Cache warm-starts and metadata writes are fenced against the frozen execution revision, so an old thread cannot repopulate or consume the new template's cache. Successful model/thought-level choices may update known-harness Profile preferences only from a matching execution revision; Custom keeps such choices session-local. Existing thread metadata remains authoritative for its live controls regardless of Profile edits.
 
 Huabu stores the reserved automatic-source marker in `customData.discoveredAgent`:

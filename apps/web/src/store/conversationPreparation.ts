@@ -292,14 +292,17 @@ export async function runConversationControl(
   }));
   const operation = (predecessor ?? Promise.resolve()).then(async () => {
     const release = firstRelease ?? beginConversationRealization(session, true);
+    let attempted = false;
     try {
       if (session.conversationView) {
         await awaitConversationDraft(session.conversationView);
       }
-      await control(conversationControlTarget(session));
+      const target = conversationControlTarget(session);
+      attempted = true;
+      await control(target);
     } finally {
-      release();
-      await refresh();
+      release(attempted);
+      if (attempted) await refresh();
     }
   });
   // Failures still reject the caller; only the sequencing barrier is fulfilled.
