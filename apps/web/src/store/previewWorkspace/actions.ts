@@ -5,7 +5,7 @@ import { toast } from '@/components/Common/Toast';
 
 import { loadDefaultAgentBinding } from '../acpProfilesStore';
 import useCanvasStore, { settleNodePreprocess } from '../canvasStore';
-import { useChatStore } from '../chatStore';
+import { createConversation } from '../conversationPreparation';
 import { usePanelStore } from '../panelStore';
 import { findTabByTarget, groupOfTab, normalizePreviewTarget } from './model';
 import {
@@ -85,7 +85,7 @@ export async function openNewChat(
       (entry) => entry.id === (groupId ?? preview.workspace.activeGroupId),
     );
     if (!group) return '';
-    const threadId = useChatStore.getState().createThread({ binding });
+    const threadId = createConversation({ canvasId, binding });
     if (group.activeTabId) settleTab?.(group.activeTabId);
     usePanelStore.getState().requestOpenRightPanel();
     const tabId = preview.openPreviewTarget(

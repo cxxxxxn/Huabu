@@ -75,6 +75,124 @@ async function createApp(): Promise<FastifyInstance> {
 }
 
 describe('ACP cached capability route', () => {
+  it.each([
+    ['mode', { modeId: 'plan' }],
+    ['model', { modelId: 'model-1' }],
+    ['config-option', { configOptionId: 'effort', value: 'high' }],
+    ['warm', {}],
+  ])(
+    'passes Chat directory intent through the %s realization entry point',
+    async (operation, settings) => {
+      mocks.realize.mockResolvedValue({
+        binding: { kind: 'external', profileId: 'profile-1', alias: 'Agent' },
+        spec: { spec: {} },
+        handle: { control: mocks.control },
+      });
+      mocks.ensureSession.mockResolvedValue({
+        availableModes: [],
+        availableModels: [],
+        configOptions: [],
+        metaUpdatedAt: 0,
+      });
+      mocks.control.mockResolvedValue({ ok: true });
+      const server = await createApp();
+      const response = await server.inject({
+        method: 'POST',
+        url: `/api/acp/threads/thread-1/${operation}`,
+        payload: {
+          ...settings,
+          binding: { kind: 'external', profileId: 'profile-1', alias: 'Agent' },
+          canvasId: 'canvas-1',
+          cwd: '/chat/project',
+        },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(mocks.realize).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestedCwd: '/chat/project',
+        }),
+      );
+    },
+  );
+
+  it.each(['relative/path', ' /path', '', '/'.repeat(4097)])(
+    'rejects invalid control cwd %j before realization',
+    async (cwd) => {
+      const server = await createApp();
+      const response = await server.inject({
+        method: 'POST',
+        url: '/api/acp/threads/thread-1/mode',
+        payload: {
+          modeId: 'plan',
+          binding: { kind: 'external', profileId: 'profile-1', alias: 'Agent' },
+          cwd,
+        },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(mocks.realize).not.toHaveBeenCalled();
+    },
+  );
+  it('returns frozen execution identity even without live metadata or a Profile', async () => {
+    mocks.record = {
+      spec: {
+        kind: 'external',
+        spec: {
+          binding: { alias: 'Removed Profile', profileId: 'profile-removed' },
+          cwd: '/frozen/project',
+          agentletId: 'machine',
+        },
+      },
+      state: {},
+    };
+    const server = await createApp();
+    const response = await server.inject({
+      method: 'GET',
+      url: '/api/acp/threads/thread-1/cached-meta?canvasId=canvas-1',
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      source: 'thread',
+      execution: {
+        binding: {
+          kind: 'external',
+          profileId: 'profile-removed',
+          alias: 'Removed Profile',
+        },
+        workingDirPath: '/frozen/project',
+      },
+    });
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(response.json().execution).not.toHaveProperty(
+      'workingDirectoryOverride',
+    );
+  });
+  it.each([null, '/frozen/project'])(
+    'preserves frozen directory origin %s without consulting the current Profile',
+    async (workingDirectoryOverride) => {
+      mocks.record = {
+        spec: {
+          kind: 'external',
+          spec: {
+            binding: { alias: 'Profile', profileId: 'profile-1' },
+            cwd: '/frozen/project',
+            workingDirectoryOverride,
+          },
+        },
+        state: {},
+      };
+      const server = await createApp();
+      const response = await server.inject({
+        method: 'GET',
+        url: '/api/acp/threads/thread-1/cached-meta?canvasId=canvas-1',
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().execution).toMatchObject({
+        workingDirPath: '/frozen/project',
+        workingDirectoryOverride,
+      });
+      expect(mocks.create).not.toHaveBeenCalled();
+    },
+  );
   it('projects commands and selector catalogues from the Profile cache', async () => {
     mocks.profileCache = {
       availableCommands: [{ name: 'review', description: 'Review changes' }],

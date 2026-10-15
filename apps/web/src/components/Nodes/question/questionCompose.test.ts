@@ -22,6 +22,7 @@ import { useAcpProfilesStore } from '@/store/acpProfilesStore';
 import useCanvasStore from '@/store/canvasStore';
 import {
   selectThreadBinding,
+  selectThreadHistoryLoaded,
   selectThreadLastAction,
   useChatStore,
 } from '@/store/chatStore';
@@ -194,6 +195,9 @@ describe('Question conversation presentation', () => {
     expect(
       selectThreadBinding(useChatStore.getState(), created.threadId),
     ).toEqual({ kind: 'internal' });
+    expect(
+      selectThreadHistoryLoaded(useChatStore.getState(), created.threadId),
+    ).toBe(true);
   });
 
   it('creates and focuses the browser fallback instead of inheriting the Canvas selection', async () => {

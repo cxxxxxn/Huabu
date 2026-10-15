@@ -196,6 +196,26 @@ function createHarness(options?: {
 }
 
 describe('ExternalAgentRealizationService', () => {
+  it('freezes an unbound Chat directory and rejects later changes without replacing the workload', async () => {
+    const harness = createHarness({ agentTarget: null });
+    const options = {
+      threadId: 'thread-1',
+      canvasId: 'canvas-1',
+      requestedBinding: targetBinding,
+      requestedCwd: '/chat/project',
+      fixedTarget: null,
+      logger,
+    };
+    const first = await harness.service.realize(options);
+    expect(first.spec.spec.cwd).toBe('/chat/project');
+    await expect(
+      harness.service.realize({
+        ...options,
+        requestedCwd: '/different',
+      }),
+    ).rejects.toMatchObject({ code: 'external_working_directory_conflict' });
+    expect(harness.createHandle).toHaveBeenCalledOnce();
+  });
   it('rejects a persisted internal node before opening its mismatched external execution', async () => {
     const node = {
       ...target,

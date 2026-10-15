@@ -31,10 +31,7 @@ import { useActivelyViewingQuestionNode } from '@/hooks/useActivelyViewingQuesti
 import { useBuiltinThreadSettings } from '@/hooks/useBuiltinThreadSettings';
 import { ChatSessionProvider, type ChatSession } from '@/hooks/useChatSession';
 import { useInternalSlashCommands } from '@/hooks/useInternalSlashCommands';
-import {
-  rememberConversationAgentBinding,
-  useAcpProfilesStore,
-} from '@/store/acpProfilesStore';
+import { useAcpProfilesStore } from '@/store/acpProfilesStore';
 import { useAcpThreadChangesStore } from '@/store/acpThreadChangesStore';
 import useCanvasStore from '@/store/canvasStore';
 import { useChatPreferencesStore } from '@/store/chatPreferencesStore';
@@ -49,12 +46,16 @@ import {
 import { findPendingPermissionRequest } from '@/store/chatTypes';
 import {
   acknowledgeConversationResult,
-  awaitConversationDraft,
-  saveConversationDraft,
-  saveConversationWorkingDirectoryOverride,
-  resolveConversationAgentBinding,
   resolveConversationOwnerSource,
 } from '@/store/conversationOwner';
+import {
+  resolveConversationPreparation,
+  preparationKey,
+  runConversationControl,
+  saveConversationAgent,
+  saveConversationWorkingDirectory,
+  useConversationPreparationStore,
+} from '@/store/conversationPreparation';
 import {
   conversationTitleKey,
   clearPendingConversationTitle,
@@ -149,9 +150,6 @@ export const ChatPanel = ({
   // (their mode is ACP-managed), so they pin to ask. Falls back to ask
   // for legacy nodes that pre-date the `@` picker.
   const { threadId, ownerCanvasId } = session;
-  const setThreadLastAction = useChatStore(
-    (state) => state.setThreadLastAction,
-  );
   const lastAction = useChatStore((state) =>
     selectThreadLastAction(state, threadId),
   );
@@ -183,9 +181,6 @@ export const ChatPanel = ({
     const d = conversationOwnerSource;
     return d.agentBinding?.kind === 'external' ? 'ask' : (d.agentMode ?? 'ask');
   })();
-  const viewingQuestionBindingIsFixed =
-    conversationOwnerSource?.agentBindingPolicy === 'fixed' ||
-    conversationOwnerSource?.bindingState === 'bound';
   const [savingAgentDraft, setSavingAgentDraft] = useState(false);
   const [savingWorkingDirectory, setSavingWorkingDirectory] = useState(false);
   const activelyViewingOwner = useActivelyViewingQuestionNode(
@@ -284,11 +279,8 @@ export const ChatPanel = ({
     useAgentStream(session, previewTabId);
 
   // Chat history hook — loads history and handles reconnection
-  const loadOlderHistory = useChatHistory(
-    session,
-    setIsLoading,
-    previewTabId,
-  )?.loadOlderHistory;
+  const historyWindow = useChatHistory(session, setIsLoading, previewTabId);
+  const loadOlderHistory = historyWindow?.loadOlderHistory;
 
   // Persistent chat state. Messages are per-thread (see chatStore.ts);
   // every read names this session's thread, so a stream running in another
@@ -305,6 +297,9 @@ export const ChatPanel = ({
   );
   const isHistoryLoaded = useChatStore((state) =>
     selectThreadHistoryLoaded(state, threadId),
+  );
+  const historyError = useChatStore(
+    (state) => state.threadsById[threadId]?.historyError,
   );
   const historyPage = useChatStore(
     useShallow((state) => selectThreadHistoryPageState(state, threadId)),
@@ -326,10 +321,18 @@ export const ChatPanel = ({
   // node, while the thread cache deliberately stops persisting that mirror.
   // Resolve the owner synchronously so refresh never renders or dispatches a
   // follow-up through the built-in fallback before the cache is rehydrated.
-  const agentBinding = resolveConversationAgentBinding(
-    conversationOwnerSource,
-    cachedAgentBinding,
+  const preparationAddress = preparationKey(session);
+  useConversationPreparationStore(
+    useShallow((state) => [
+      state.directories[preparationAddress],
+      state.executions[preparationAddress],
+      state.pending[preparationAddress],
+      state.queuedControls[preparationAddress],
+      state.locked[preparationAddress],
+    ]),
   );
+  const preparation = resolveConversationPreparation(session);
+  const agentBinding = preparation.binding;
   const setAgentBinding = useChatStore((state) => state.setAgentBinding);
   const makeThreadMetadataEphemeral = useChatStore(
     (state) => state.makeThreadMetadataEphemeral,
@@ -341,7 +344,7 @@ export const ChatPanel = ({
     if (bindingsEqual(cachedAgentBinding, agentBinding)) {
       return;
     }
-    makeThreadMetadataEphemeral(threadId);
+    if (activeConversationView) makeThreadMetadataEphemeral(threadId);
     setAgentBinding(threadId, agentBinding);
   }, [
     agentBinding,
@@ -349,6 +352,7 @@ export const ChatPanel = ({
     makeThreadMetadataEphemeral,
     setAgentBinding,
     threadId,
+    activeConversationView,
   ]);
 
   // Load the persisted change-review records when a thread opens so the
@@ -454,9 +458,11 @@ export const ChatPanel = ({
   // read prior values for revert without re-creating themselves (and
   // their downstream consumers) on every meta tick.
   const acpSessionMetaRef = useRef(acpSessionMeta);
+  const acpControlAddressRef = useRef(preparationAddress);
   useEffect(() => {
     acpSessionMetaRef.current = acpSessionMeta;
-  }, [acpSessionMeta]);
+    acpControlAddressRef.current = preparationAddress;
+  }, [acpSessionMeta, preparationAddress]);
 
   // Built-in agent per-thread selectors (model + reasoning effort). Data
   // source is Huabu's own model capability, not an ACP agent's
@@ -513,10 +519,8 @@ export const ChatPanel = ({
   ]);
   const connectionInTab = hideDuplicateTitle && !!onConnectionChange;
 
-  // Optimistic onChange handlers for the ACP selectors: merge the
-  // chosen value into the local snapshot immediately, then fire the
-  // REST set-RPC. On failure, revert the snapshot and surface a toast
-  // so the user knows the agent rejected the change.
+  // Apply optimism when the queued RPC starts, and revert before refreshing
+  // on failure so an older operation cannot overwrite a later selection.
   //
   // Spawn context threaded into every set-RPC: the selector dropdowns
   // are seeded from the no-spawn cached-meta snapshot, so the user can
@@ -524,12 +528,40 @@ export const ChatPanel = ({
   // `{ binding, canvasId }` lets the server realize the complete workload
   // and open its session
   // on-demand instead of rejecting the switch with `session_not_found`.
-  const acpControlTarget = useMemo(
-    () => ({
-      binding: agentBinding.kind === 'external' ? agentBinding : undefined,
-      canvasId: ownerCanvasId ?? undefined,
-    }),
-    [agentBinding, ownerCanvasId],
+  const runAcpControl = useCallback(
+    (control: Parameters<typeof runConversationControl>[1]) =>
+      runConversationControl(session, control, async () => {
+        if (acpControlAddressRef.current === preparationAddress) {
+          await refreshAcpSessionMeta();
+        }
+      }),
+    [session, refreshAcpSessionMeta, preparationAddress],
+  );
+  const runAcpSelectionControl = useCallback(
+    (
+      id: string,
+      value: string | boolean,
+      control: Parameters<typeof runConversationControl>[1],
+    ) =>
+      runAcpControl(async (target) => {
+        const isCurrent = () =>
+          acpControlAddressRef.current === preparationAddress;
+        const previous = acpSessionMetaRef.current.selections[id] ?? null;
+        if (isCurrent()) {
+          applyAcpSessionMetaOptimistic({ selection: { id, value } });
+        }
+        try {
+          await control(target);
+        } catch (error) {
+          if (isCurrent()) {
+            applyAcpSessionMetaOptimistic({
+              selection: { id, value: previous },
+            });
+          }
+          throw error;
+        }
+      }),
+    [runAcpControl, applyAcpSessionMetaOptimistic, preparationAddress],
   );
 
   // Set-RPC handlers.
@@ -543,26 +575,12 @@ export const ChatPanel = ({
   const handleAcpSelectMode = useCallback(
     async (modeId: string) => {
       if (!threadId) return;
-      const previous =
-        acpSessionMetaRef.current.selections[MODE_SELECTION_ID] ?? null;
-      applyAcpSessionMetaOptimistic({
-        selection: { id: MODE_SELECTION_ID, value: modeId },
-      });
       try {
-        if (activeConversationView)
-          await awaitConversationDraft(activeConversationView);
-        if (!acpControlTarget.binding) return;
-        await setAcpSessionMode(threadId, {
-          modeId,
-          binding: acpControlTarget.binding,
-          canvasId: acpControlTarget.canvasId,
-        });
-        await refreshAcpSessionMeta();
+        await runAcpSelectionControl(MODE_SELECTION_ID, modeId, (target) =>
+          setAcpSessionMode(threadId, { ...target, modeId }),
+        );
         onCommit?.();
       } catch (err) {
-        applyAcpSessionMetaOptimistic({
-          selection: { id: MODE_SELECTION_ID, value: previous },
-        });
         toast(
           err instanceof Error
             ? t('chat.failedSwitchModeWithMessage', { message: err.message })
@@ -571,40 +589,18 @@ export const ChatPanel = ({
         );
       }
     },
-    [
-      threadId,
-      applyAcpSessionMetaOptimistic,
-      acpControlTarget,
-      activeConversationView,
-      refreshAcpSessionMeta,
-      onCommit,
-      t,
-    ],
+    [threadId, runAcpSelectionControl, onCommit, t],
   );
 
   const handleAcpSelectModel = useCallback(
     async (modelId: string) => {
       if (!threadId) return;
-      const previous =
-        acpSessionMetaRef.current.selections[MODEL_SELECTION_ID] ?? null;
-      applyAcpSessionMetaOptimistic({
-        selection: { id: MODEL_SELECTION_ID, value: modelId },
-      });
       try {
-        if (activeConversationView)
-          await awaitConversationDraft(activeConversationView);
-        if (!acpControlTarget.binding) return;
-        await setAcpSessionModel(threadId, {
-          modelId,
-          binding: acpControlTarget.binding,
-          canvasId: acpControlTarget.canvasId,
-        });
-        await refreshAcpSessionMeta();
+        await runAcpSelectionControl(MODEL_SELECTION_ID, modelId, (target) =>
+          setAcpSessionModel(threadId, { ...target, modelId }),
+        );
         onCommit?.();
       } catch (err) {
-        applyAcpSessionMetaOptimistic({
-          selection: { id: MODEL_SELECTION_ID, value: previous },
-        });
         toast(
           err instanceof Error
             ? t('chat.failedSwitchModelWithMessage', { message: err.message })
@@ -613,40 +609,22 @@ export const ChatPanel = ({
         );
       }
     },
-    [
-      threadId,
-      applyAcpSessionMetaOptimistic,
-      acpControlTarget,
-      activeConversationView,
-      refreshAcpSessionMeta,
-      onCommit,
-      t,
-    ],
+    [threadId, runAcpSelectionControl, onCommit, t],
   );
 
   const handleAcpSelectConfigOption = useCallback(
     async (optionId: string, value: string | boolean) => {
       if (!threadId) return;
-      const previous = acpSessionMetaRef.current.selections[optionId] ?? null;
-      applyAcpSessionMetaOptimistic({
-        selection: { id: optionId, value },
-      });
       try {
-        if (activeConversationView)
-          await awaitConversationDraft(activeConversationView);
-        if (!acpControlTarget.binding) return;
-        await setAcpSessionConfigOption(threadId, {
-          configOptionId: optionId,
-          value,
-          binding: acpControlTarget.binding,
-          canvasId: acpControlTarget.canvasId,
-        });
-        await refreshAcpSessionMeta();
+        await runAcpSelectionControl(optionId, value, (target) =>
+          setAcpSessionConfigOption(threadId, {
+            ...target,
+            configOptionId: optionId,
+            value,
+          }),
+        );
         onCommit?.();
       } catch (err) {
-        applyAcpSessionMetaOptimistic({
-          selection: { id: optionId, value: previous },
-        });
         toast(
           err instanceof Error
             ? t('chat.failedUpdateOptionWithMessage', { message: err.message })
@@ -655,15 +633,7 @@ export const ChatPanel = ({
         );
       }
     },
-    [
-      threadId,
-      applyAcpSessionMetaOptimistic,
-      acpControlTarget,
-      activeConversationView,
-      refreshAcpSessionMeta,
-      onCommit,
-      t,
-    ],
+    [threadId, runAcpSelectionControl, onCommit, t],
   );
 
   // User-opt-in warm-up for a Profile the cache has never observed
@@ -675,14 +645,10 @@ export const ChatPanel = ({
   // makes the selectors exist.
   const [warmingAcpSession, setWarmingAcpSession] = useState(false);
   const handleAcpWarmSession = useCallback(async () => {
-    if (!threadId || !acpControlTarget.binding) return;
+    if (!threadId || agentBinding.kind !== 'external') return;
     setWarmingAcpSession(true);
     try {
-      await warmAcpSession(threadId, {
-        binding: acpControlTarget.binding,
-        canvasId: acpControlTarget.canvasId,
-      });
-      await refreshAcpSessionMeta();
+      await runAcpControl((target) => warmAcpSession(threadId, target));
     } catch (err) {
       toast(
         err instanceof Error
@@ -695,7 +661,7 @@ export const ChatPanel = ({
     } finally {
       setWarmingAcpSession(false);
     }
-  }, [threadId, acpControlTarget, refreshAcpSessionMeta, t]);
+  }, [threadId, agentBinding.kind, runAcpControl, t]);
 
   useEffect(() => {
     if (agentBinding.kind === 'internal' && !llmConfig && !llmLoading) {
@@ -805,6 +771,7 @@ export const ChatPanel = ({
   const handleSubmit = useCallback(
     async (e: React.FormEvent, agentMode: AgentMode, draft: string) => {
       e.preventDefault();
+      if (!selectThreadHistoryLoaded(useChatStore.getState(), threadId)) return;
       // Strip leading `/<id>` tokens that match a known slash command
       // and forward them as `invokedSkills`. Skill invocation is gated
       // to **internal + operate mode** only:
@@ -842,7 +809,7 @@ export const ChatPanel = ({
         invokedSkills.length > 0 ? invokedSkills : undefined,
       );
     },
-    [agentBinding.kind, knownSlashIds, onCommit, startStream],
+    [agentBinding.kind, knownSlashIds, onCommit, startStream, threadId],
   );
 
   const handleRetry = useCallback(() => {
@@ -854,105 +821,76 @@ export const ChatPanel = ({
     }
   }, [messages, mode, retryStream]);
 
-  // Inline agent selector (left of the chat input toolbar). The binding
-  // is mutable only while the thread has no user message yet — once a
-  // turn is sent, 1-thread-1-binding locks it and the selector renders
-  // read-only. Picking an agent rebinds the *current* (empty) thread in
-  // place; it never mints a new thread.
-  const threadHasUserMessage = messages.some((m) => m.role === 'user');
+  // Both presentations share preparation admission and frozen execution identity.
   const preparationEditable =
-    !viewingQuestionBindingIsFixed &&
-    (activeConversationView
-      ? conversationOwnerSource?.bindingState !== 'bound'
-      : !threadHasUserMessage) &&
+    preparation.editable &&
+    isHistoryLoaded &&
     !savingAgentDraft &&
-    !isLoading;
-  const agentSelectorEditable = preparationEditable && !savingWorkingDirectory;
+    !savingWorkingDirectory;
+  const agentSelectorEditable = preparationEditable;
   const selectedExternalProfile =
     agentBinding.kind === 'external'
       ? acpProfiles.find((profile) => profile.id === agentBinding.profileId)
       : undefined;
-  const workingDirectoryOverride =
-    conversationOwnerSource?.agentLaunchOverrides?.workingDirPath;
+  const workingDirectoryOverride = preparation.workingDirPath;
   const showWorkingDirectoryOverride =
-    !!activeConversationView &&
     agentBinding.kind === 'external' &&
-    ((!!selectedExternalProfile && !!selectedExternalProfile.workingDirPath) ||
-      !!workingDirectoryOverride);
+    (!!selectedExternalProfile || !!workingDirectoryOverride);
   const handleSaveWorkingDirectory = useCallback(
     async (workingDirPath: string | null) => {
-      if (!activeConversationView) return;
       setSavingWorkingDirectory(true);
       try {
-        await saveConversationWorkingDirectoryOverride(
-          activeConversationView,
-          workingDirPath,
-        );
+        await saveConversationWorkingDirectory(session, workingDirPath);
         onCommit?.();
       } finally {
         setSavingWorkingDirectory(false);
       }
     },
-    [activeConversationView, onCommit],
+    [session, onCommit],
   );
   const handleSelectAgent = useCallback(
     async (choice: AgentChoice) => {
       // Agent binding is immutable once a turn starts (1 thread = 1 binding).
       // The selector is already read-only then; keep this guard as defense in
       // depth in case a stale menu event arrives during the transition.
-      if (isLoading || savingAgentDraft || viewingQuestionBindingIsFixed)
+      if (
+        !resolveConversationPreparation(session).editable ||
+        savingAgentDraft ||
+        savingWorkingDirectory
+      )
         return;
-      if (activeConversationView) {
-        setSavingAgentDraft(true);
-        try {
-          await saveConversationDraft(activeConversationView, {
-            agentBinding: choice.binding,
-            agentMode: choice.mode,
-            agentIcon: snapshotAgentIcon(
-              choice.binding,
-              useAcpProfilesStore.getState().profiles,
-            ),
-          });
-          makeThreadMetadataEphemeral(threadId, { preserveSettings: true });
-        } catch (error) {
-          toast(
-            error instanceof Error
-              ? error.message
-              : 'Failed to save Agent selection',
-            { tone: 'danger' },
-          );
-          return;
-        } finally {
-          setSavingAgentDraft(false);
-        }
+      setSavingAgentDraft(true);
+      try {
+        await saveConversationAgent(session, {
+          binding: choice.binding,
+          mode: choice.mode,
+          icon: snapshotAgentIcon(
+            choice.binding,
+            useAcpProfilesStore.getState().profiles,
+          ),
+        });
+        onCommit?.();
+      } catch (error) {
+        toast(
+          error instanceof Error
+            ? error.message
+            : 'Failed to save Agent selection',
+          { tone: 'danger' },
+        );
+      } finally {
+        setSavingAgentDraft(false);
       }
-      if (!activeConversationView) {
-        rememberConversationAgentBinding(choice.binding);
-      }
-      setAgentBinding(threadId, choice.binding, canvasId || undefined);
-      setThreadLastAction(threadId, choice.mode);
-      onCommit?.();
     },
-    [
-      isLoading,
-      savingAgentDraft,
-      activeConversationView,
-      makeThreadMetadataEphemeral,
-      onCommit,
-      viewingQuestionBindingIsFixed,
-      setAgentBinding,
-      setThreadLastAction,
-      canvasId,
-      threadId,
-    ],
+    [savingAgentDraft, onCommit, session, savingWorkingDirectory],
   );
 
   const canSave =
     !activeConversationView &&
+    preparation.ready &&
     !isLoading &&
     messages.some((m) => m.role === 'user' && m.content.trim().length > 0);
   const handleSaveChat = useCallback(() => {
-    if (isLoading) return;
+    if (isLoading || preparation.pending || !preparation.ready) return;
     const firstUser = messages.find(
       (m): m is Extract<typeof m, { role: 'user' }> => m.role === 'user',
     );
@@ -975,6 +913,13 @@ export const ChatPanel = ({
             useAcpProfilesStore.getState().profiles,
           ),
           agentMode: mode,
+          ...(workingDirectoryOverride
+            ? {
+                agentLaunchOverrides: {
+                  workingDirPath: workingDirectoryOverride,
+                },
+              }
+            : {}),
         },
       },
       {
@@ -999,6 +944,9 @@ export const ChatPanel = ({
     addNode,
     previewTabId,
     ownerCanvasId,
+    workingDirectoryOverride,
+    preparation.pending,
+    preparation.ready,
   ]);
 
   const titleControl = (
@@ -1072,7 +1020,11 @@ export const ChatPanel = ({
             <PreviewHeaderButton
               onClick={handleSaveChat}
               disabled={
-                !isHistoryLoaded || isLoading || isSavingTitle || !canSave
+                !isHistoryLoaded ||
+                isLoading ||
+                preparation.pending ||
+                isSavingTitle ||
+                !canSave
               }
               title={t('chat.saveAsQuestion')}
             >
@@ -1082,6 +1034,23 @@ export const ChatPanel = ({
         }
       >
         <div className="flex h-full flex-col gap-2 overflow-visible pt-3">
+          {historyError && (
+            <div
+              role="alert"
+              className="text-danger flex items-center gap-2 px-3 text-xs"
+            >
+              <span>
+                {t('chat.historyLoadFailed')}: {historyError}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={historyWindow?.retryHistory}
+              >
+                {t('messages.retry')}
+              </Button>
+            </div>
+          )}
           {acpConnectionStatus === 'failed' && (
             <div
               role="alert"
@@ -1127,7 +1096,7 @@ export const ChatPanel = ({
             completedTurnId={completedTurnId}
             threadId={threadId}
             isLoading={isLoading}
-            isHistoryLoading={!isHistoryLoaded}
+            isHistoryLoading={!isHistoryLoaded && !historyError}
             hasOlderHistory={historyPage.hasOlderHistory}
             olderTurnBatchSize={recentTurnCount}
             isLoadingOlderHistory={historyPage.isLoadingOlderHistory}
@@ -1192,7 +1161,13 @@ export const ChatPanel = ({
                       profileWorkingDirPath={
                         selectedExternalProfile?.workingDirPath ?? ''
                       }
-                      workingDirPath={workingDirectoryOverride}
+                      workingDirPath={preparation.workingDirectoryOverride}
+                      effectiveWorkingDirPath={
+                        preparation.realized
+                          ? (preparation.workingDirPath ?? null)
+                          : undefined
+                      }
+                      directorySource={preparation.workingDirectorySource}
                       editable={
                         preparationEditable && !!selectedExternalProfile
                       }
@@ -1209,7 +1184,7 @@ export const ChatPanel = ({
                     source={acpSessionMetaSource}
                     loading={acpSessionMetaLoading || warmingAcpSession}
                     onWarm={
-                      acpControlTarget.binding
+                      agentBinding.kind === 'external'
                         ? handleAcpWarmSession
                         : undefined
                     }
@@ -1252,11 +1227,12 @@ export const ChatPanel = ({
               // snapshot. Transport-health gating is now expressed via the
               // connection badge above; we keep the input enabled so the
               // user can retry / trigger a re-ensure on the next send.
-              // Only gate the composer on history load, not on streaming: the
-              // user can keep drafting while the Send button is replaced by
-              // Stop. The Agent selector remains locked by the thread's
-              // 1-thread-1-binding contract; only the draft carries forward.
-              disabled={!isHistoryLoaded}
+              submitDisabled={
+                !isHistoryLoaded ||
+                preparation.pending ||
+                savingAgentDraft ||
+                savingWorkingDirectory
+              }
             />
           </div>
         </div>

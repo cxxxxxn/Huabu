@@ -1,11 +1,14 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import path from 'node:path';
+import {
+  isAgentWorkingDirectory,
+  MAX_AGENT_WORKING_DIR_PATH_LENGTH,
+} from '@huabu/shared/agent-working-directory';
 
 import type { AgentLaunchOverrides } from '@huabu/shared';
 
-export const MAX_AGENT_WORKING_DIR_PATH_LENGTH = 4096;
+export { MAX_AGENT_WORKING_DIR_PATH_LENGTH };
 export const MAX_AGENT_ADDITIONAL_PREAMBLE_BYTES = 16 * 1024;
 
 export class InvalidAgentLaunchOverridesError extends Error {
@@ -13,14 +16,6 @@ export class InvalidAgentLaunchOverridesError extends Error {
     super(message);
     this.name = 'InvalidAgentLaunchOverridesError';
   }
-}
-
-function isAbsolutePath(value: string): boolean {
-  return (
-    path.isAbsolute(value) ||
-    /^[A-Za-z]:[\\/]/.test(value) ||
-    value.startsWith('\\\\')
-  );
 }
 
 /** Validate persisted or incoming launch overrides at the application boundary. */
@@ -47,11 +42,7 @@ export function parseAgentLaunchOverrides(
   const workingDirPath = record.workingDirPath;
   if (
     workingDirPath !== undefined &&
-    (typeof workingDirPath !== 'string' ||
-      workingDirPath.length === 0 ||
-      workingDirPath.trim() !== workingDirPath ||
-      workingDirPath.length > MAX_AGENT_WORKING_DIR_PATH_LENGTH ||
-      !isAbsolutePath(workingDirPath))
+    !isAgentWorkingDirectory(workingDirPath)
   ) {
     throw new InvalidAgentLaunchOverridesError(
       `workingDirPath must be an absolute path no longer than ${MAX_AGENT_WORKING_DIR_PATH_LENGTH} characters`,

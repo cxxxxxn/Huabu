@@ -14,6 +14,8 @@ interface WorkingDirectoryOverrideProps {
   profileAlias: string;
   profileWorkingDirPath: string;
   workingDirPath?: string;
+  effectiveWorkingDirPath?: string | null;
+  directorySource?: 'override' | 'profile' | 'unknown';
   editable: boolean;
   saving: boolean;
   onSave: (workingDirPath: string | null) => Promise<void>;
@@ -23,6 +25,8 @@ export function WorkingDirectoryOverride({
   profileAlias,
   profileWorkingDirPath,
   workingDirPath,
+  effectiveWorkingDirPath,
+  directorySource,
   editable,
   saving,
   onSave,
@@ -39,13 +43,19 @@ export function WorkingDirectoryOverride({
     setError(null);
   }, [workingDirPath]);
 
-  const hasOverride = Boolean(workingDirPath);
-  const effectivePath = workingDirPath ?? profileWorkingDirPath;
+  const hasOverride =
+    (directorySource ?? (workingDirPath ? 'override' : 'profile')) ===
+    'override';
+  const effectivePath =
+    effectiveWorkingDirPath === undefined
+      ? (workingDirPath ?? profileWorkingDirPath)
+      : (effectiveWorkingDirPath ?? '');
+  const displayedPath = effectivePath || t('chat.workingDirectoryUnspecified');
   const triggerTitle = hasOverride
-    ? t('chat.workingDirectoryOverrideActive', { path: workingDirPath })
-    : t('chat.workingDirectoryOverrideInherited', {
-        path: profileWorkingDirPath,
-      });
+    ? t('chat.workingDirectoryOverrideActive', { path: displayedPath })
+    : directorySource === 'unknown'
+      ? t('chat.workingDirectoryFrozen', { path: displayedPath })
+      : t('chat.workingDirectoryOverrideInherited', { path: displayedPath });
 
   const commit = async () => {
     const trimmed = draft.trim();
@@ -96,7 +106,7 @@ export function WorkingDirectoryOverride({
               <div className="text-fg-subtle mt-0.5 text-xs">
                 {editable
                   ? t('chat.workingDirectoryOverrideDescription')
-                  : t('chat.workingDirectoryNodeOnlyLocked')}
+                  : t('chat.workingDirectoryConversationLocked')}
               </div>
             </div>
             <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
@@ -118,13 +128,13 @@ export function WorkingDirectoryOverride({
                 {t('chat.workingDirectoryEffective')}
               </dt>
               <dd className="text-fg-muted truncate font-mono">
-                {effectivePath}
+                {displayedPath}
               </dd>
             </dl>
             {editable ? (
               <div>
                 <label className="text-fg-muted mb-1 block text-xs font-medium">
-                  {t('chat.workingDirectoryNodeOverride')}
+                  {t('chat.workingDirectoryConversationOverride')}
                 </label>
                 <TextInput
                   ref={inputRef}
@@ -141,14 +151,14 @@ export function WorkingDirectoryOverride({
                     }
                   }}
                   placeholder={profileWorkingDirPath}
-                  aria-label={t('chat.workingDirectoryNodeOverride')}
+                  aria-label={t('chat.workingDirectoryConversationOverride')}
                   mono
                   disabled={saving}
                   className="w-full"
                 />
                 <div className="text-fg-subtle mt-1 text-[10px]">
                   {draft.trim()
-                    ? t('chat.workingDirectoryNodeOnly')
+                    ? t('chat.workingDirectoryConversationOnly')
                     : t('chat.workingDirectoryInherited', {
                         path: profileWorkingDirPath,
                       })}

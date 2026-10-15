@@ -48,6 +48,7 @@ export interface ChatThreadState {
   excludeCanvasSelection: boolean;
   /** Whether history has been fetched from the server at least once. */
   historyLoaded: boolean;
+  historyError?: string | null;
   /** Exclusive cursor for the next older server history page. */
   historyBefore: string | null;
   /** Whether complete display turns exist before the loaded window. */
@@ -167,6 +168,7 @@ export interface ChatState {
   ) => void;
   /** Mark a thread as history-loaded so `useChatHistory` skips it. */
   setHistoryLoaded: (threadId: string, loaded: boolean) => void;
+  setHistoryError: (threadId: string, error: string | null) => void;
   setHistoryPageState: (
     threadId: string,
     state: {
@@ -474,6 +476,9 @@ export const useChatStore = create<ChatState>()(
           if (threadOf(state, threadId).historyLoaded === loaded) return {};
           return patchThread(state, threadId, { historyLoaded: loaded });
         }),
+
+      setHistoryError: (threadId, historyError) =>
+        set((state) => patchThread(state, threadId, { historyError })),
 
       setHistoryPageState: (threadId, page) =>
         set((state) =>

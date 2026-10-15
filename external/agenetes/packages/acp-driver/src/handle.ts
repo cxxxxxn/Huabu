@@ -175,6 +175,8 @@ export interface AcpSpec {
   readonly agentletId?: string;
   /** `cwd` for `session/new`; when omitted, derived from the bound recipe. */
   readonly cwd?: string;
+  /** Explicit override, null for inheritance, or absent for legacy unknown origin. */
+  readonly workingDirectoryOverride?: string | null;
   /** Pre-resolved spawn recipe for a first-time thread (host-resolved). */
   readonly recipe?: AcpBindingRecipe | null;
   /**

@@ -119,6 +119,51 @@ afterEach(() => {
 });
 
 describe('POST /agent', () => {
+  it('passes external Chat directory intent to the prompt realization path', async () => {
+    const binding = {
+      kind: 'external' as const,
+      profileId: 'profile-1',
+      alias: 'Agent',
+    };
+    mocks.beginPreparation.mockReturnValue({
+      signal: new AbortController().signal,
+      finish: vi.fn(),
+    });
+    mocks.resolveFixedTarget.mockResolvedValue(null);
+    mocks.resolveTarget.mockResolvedValue(null);
+    mocks.resolveBinding.mockResolvedValueOnce(binding);
+    mocks.invoke.mockResolvedValueOnce({
+      binding,
+      fixedTarget: null,
+      signal: new AbortController().signal,
+      acceptance: Promise.resolve({ threadId: 'thread-a', turnStartSeq: 1 }),
+      events: events(),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    });
+    const app = Fastify();
+    await app.register(agentRoutes, { prefix: '/agent' });
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/agent',
+        payload: {
+          content: 'Hello',
+          threadId: 'thread-a',
+          canvasId: 'canvas-a',
+          agentBinding: binding,
+          cwd: '/chat/project',
+        },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(mocks.invoke).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestedCwd: '/chat/project',
+        }),
+      );
+    } finally {
+      await app.close();
+    }
+  });
   it('admits Ink in Ask mode and streams acceptance without upgrading the request', async () => {
     mocks.beginPreparation.mockReturnValue({
       signal: new AbortController().signal,

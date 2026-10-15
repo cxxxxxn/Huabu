@@ -28,7 +28,10 @@ import {
   ZAcpSessionMode,
 } from './acp-tool.js';
 import { agentDefaultsSchema } from './agent-defaults.js';
-import { agentProfileSchema } from './agent-profile.js';
+import {
+  agentProfileSchema,
+  agentWorkingDirectorySchema,
+} from './agent-profile.js';
 
 import type { AgentProfileView } from './agent-profile.js';
 import type {
@@ -412,6 +415,19 @@ export const acpThreadCachedMetaResponseSchema = z.object({
   availableCommands: z.array(availableCommandSchema),
   commandsUpdatedAt: z.number().int().nonnegative(),
   sessionMeta: acpSessionMetaSnapshotSchema,
+  /** Frozen execution identity, independent of live metadata availability. */
+  execution: z
+    .object({
+      binding: z.object({
+        kind: z.literal('external'),
+        alias: z.string().min(1),
+        profileId: z.string().min(1),
+      }),
+      workingDirPath: z.string().optional(),
+      /** Null denotes inheritance; absent on legacy execution snapshots. */
+      workingDirectoryOverride: z.string().nullable().optional(),
+    })
+    .optional(),
 });
 
 /** Schema mirror of {@link AcpPermissionDecisionRequest}. */
@@ -435,7 +451,7 @@ const externalAgentInteractionTargetSchema = z.object({
     profileId: z.string().min(1),
   }),
   canvasId: z.string().min(1).optional(),
-  cwd: z.string().min(1).optional(),
+  cwd: agentWorkingDirectorySchema.optional(),
 });
 
 export const setAcpSessionModeRequestSchema =

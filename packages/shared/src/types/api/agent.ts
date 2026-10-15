@@ -18,6 +18,7 @@
 
 import { z } from 'zod';
 
+import { agentWorkingDirectorySchema } from './agent-profile.js';
 import { REASONING_EFFORT_VALUES } from './llm.js';
 import {
   INK_INTERPRETATION_TEXT_LIMIT,
@@ -351,6 +352,8 @@ export const agentRequestSchema = z
      * the persistent ChatStore on the client is the source of truth.
      */
     agentBinding: agentBindingSchema.optional(),
+    /** External conversation directory, frozen at first realization. */
+    cwd: agentWorkingDirectorySchema.optional(),
     /**
      * User-invoked skill ids parsed from leading `/<id>` tokens in the
      * chat input (see `useInternalSlashCommands` on the web side). The

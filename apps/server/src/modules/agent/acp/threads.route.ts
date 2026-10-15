@@ -26,6 +26,7 @@ import { canvasAcpNamespace } from '../../workspace/paths.js';
 import { agenetes } from '../agenetes/index.js';
 
 import type { AcpProfileSchemaCacheEntry } from './profile-schema-cache.js';
+import type { AcpWorkloadSpec } from '../agenetes/drivers.js';
 import type { AcpSessionEntry } from '@agenetes/acp-driver';
 import type { AgentMetadata } from '@agenetes/protocol';
 import type {
@@ -137,24 +138,17 @@ export async function awaitSchemaQuiescence(
   }
 }
 
-async function resolveThreadAgentletId(
-  threadId: string,
-  canvasId?: string,
-): Promise<string | undefined> {
-  if (canvasId) {
-    const record = await agenetes.record(
-      canvasAcpNamespace(canvasId),
-      threadId,
-    );
-    const driverSpec = record?.spec.spec;
-    if (
-      driverSpec &&
-      typeof driverSpec === 'object' &&
-      typeof (driverSpec as { agentletId?: unknown }).agentletId === 'string'
-    ) {
-      const agentletId = (driverSpec as { agentletId: string }).agentletId;
-      return resolveConnectedAgentletId(agentletId) ?? agentletId;
-    }
+function resolveThreadAgentletId(
+  record: Awaited<ReturnType<typeof agenetes.record>> | undefined,
+): string | undefined {
+  const driverSpec = record?.spec.spec;
+  if (
+    driverSpec &&
+    typeof driverSpec === 'object' &&
+    typeof (driverSpec as { agentletId?: unknown }).agentletId === 'string'
+  ) {
+    const agentletId = (driverSpec as { agentletId: string }).agentletId;
+    return resolveConnectedAgentletId(agentletId) ?? agentletId;
   }
   return undefined;
 }
@@ -285,7 +279,27 @@ const acpThreadsRoutes: FastifyPluginAsync = async (app) => {
       });
     }
     const { canvasId, profileId } = parsed.data;
-    const agentletId = await resolveThreadAgentletId(threadId, canvasId);
+    const record = canvasId
+      ? await agenetes.record(canvasAcpNamespace(canvasId), threadId)
+      : undefined;
+    const spec =
+      record?.spec.kind === 'external'
+        ? (record.spec as AcpWorkloadSpec).spec
+        : undefined;
+    const execution = spec
+      ? {
+          binding: {
+            kind: 'external' as const,
+            alias: spec.binding.alias,
+            profileId: spec.binding.profileId,
+          },
+          ...(spec.cwd !== undefined ? { workingDirPath: spec.cwd } : {}),
+          ...(spec.workingDirectoryOverride !== undefined
+            ? { workingDirectoryOverride: spec.workingDirectoryOverride }
+            : {}),
+        }
+      : undefined;
+    const agentletId = resolveThreadAgentletId(record);
     const live = agentletId
       ? acpSessionRegistry.get(agentletId, threadId)
       : undefined;
@@ -295,22 +309,18 @@ const acpThreadsRoutes: FastifyPluginAsync = async (app) => {
         availableCommands: live.availableCommands,
         commandsUpdatedAt: live.commandsUpdatedAt,
         sessionMeta: snapshotSessionMeta(live),
+        execution,
       };
     }
-    if (canvasId) {
-      const record = await agenetes.record(
-        canvasAcpNamespace(canvasId),
-        threadId,
-      );
-      if (record) {
-        const persistedMeta = record.state?.metadata ?? {};
-        return {
-          source: 'thread',
-          availableCommands: persistedMeta.availableCommands ?? [],
-          commandsUpdatedAt: persistedMeta.commandsUpdatedAt ?? 0,
-          sessionMeta: snapshotMetaFromPersisted(persistedMeta),
-        };
-      }
+    if (record) {
+      const persistedMeta = record.state?.metadata ?? {};
+      return {
+        source: 'thread',
+        availableCommands: persistedMeta.availableCommands ?? [],
+        commandsUpdatedAt: persistedMeta.commandsUpdatedAt ?? 0,
+        sessionMeta: snapshotMetaFromPersisted(persistedMeta),
+        execution,
+      };
     }
     if (profileId) {
       const profileCache = getProfileSchemaCache(profileId);

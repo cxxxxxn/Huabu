@@ -25,6 +25,10 @@
     "./conversation-title": {
       "types": "./src/utils/conversation-title.ts",
       "import": "./src/utils/conversation-title.ts"
+    },
+    "./agent-working-directory": {
+      "types": "./src/utils/agent-working-directory.ts",
+      "import": "./src/utils/agent-working-directory.ts"
     }
   },
   "files": [

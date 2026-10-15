@@ -112,6 +112,30 @@ function bindingFromSpec(spec: AcpWorkloadSpec): ExternalBinding {
   };
 }
 
+function validateRequestedExecution(
+  spec: AcpWorkloadSpec,
+  options: RealizeExternalAgentThreadOptions,
+): void {
+  if (
+    options.requestedBinding &&
+    options.requestedBinding.profileId !== spec.spec.binding.profileId
+  ) {
+    throw new ExternalAgentRealizationError(
+      'external_binding_conflict',
+      `Thread ${options.threadId} is realized with Profile ${spec.spec.binding.profileId}`,
+    );
+  }
+  if (
+    options.requestedCwd !== undefined &&
+    options.requestedCwd !== spec.spec.cwd
+  ) {
+    throw new ExternalAgentRealizationError(
+      'external_working_directory_conflict',
+      `Thread ${options.threadId} is realized with working directory ${spec.spec.cwd ?? '(profile default)'}`,
+    );
+  }
+}
+
 async function ensureSessionFromCanonicalSpec(
   realized: RealizedExternalAgentThread,
   logger: FastifyBaseLogger,
@@ -291,6 +315,7 @@ export class ExternalAgentRealizationService {
         );
       }
       const spec = record.spec as AcpWorkloadSpec;
+      validateRequestedExecution(spec, options);
       const binding = bindingFromSpec(spec);
       const realized = {
         binding,
@@ -430,24 +455,7 @@ export class ExternalAgentRealizationService {
         `Fixed Agent Node for thread ${options.threadId} does not match its realized working directory`,
       );
     }
-    if (
-      options.requestedBinding &&
-      options.requestedBinding.profileId !== realized.binding.profileId
-    ) {
-      throw new ExternalAgentRealizationError(
-        'external_binding_conflict',
-        `Thread ${options.threadId} is realized with Profile ${realized.binding.profileId}`,
-      );
-    }
-    if (
-      options.requestedCwd !== undefined &&
-      options.requestedCwd !== realized.spec.spec.cwd
-    ) {
-      throw new ExternalAgentRealizationError(
-        'external_working_directory_conflict',
-        `Thread ${options.threadId} is realized with working directory ${realized.spec.spec.cwd ?? '(profile default)'}`,
-      );
-    }
+    validateRequestedExecution(realized.spec, options);
   }
 }
 

@@ -94,6 +94,7 @@ export interface ChatInputProps {
   /** Active node shown in the other Preview split group. */
   adjacentNodeSourceId?: string;
   disabled?: boolean;
+  submitDisabled?: boolean;
   placeholder?: string;
   /**
    * When true, the change-review card is attached directly above the
@@ -119,6 +120,7 @@ export const ChatInput = ({
   contextUsageOverride,
   adjacentNodeSourceId,
   disabled = false,
+  submitDisabled = false,
   placeholder,
   connectedTop = false,
 }: ChatInputProps) => {
@@ -170,6 +172,7 @@ export const ChatInput = ({
   const setQuotedComments = useChatStore((state) => state.setQuotedComments);
   const isSubmitDisabled =
     disabled ||
+    submitDisabled ||
     (!value.trim() && quotedComments.length === 0) ||
     quotedComments.some((item) => !item.comment.trim());
   const addPendingAttachment = useChatStore((s) => s.addPendingAttachment);

@@ -14,6 +14,11 @@ import {
   registerAcpSessionMetaSink,
   type AcpSessionMetaStreamEvent,
 } from '@/hooks/useAgentStream';
+import { selectThreadIsLoading, useChatStore } from '@/store/chatStore';
+import {
+  observeConversationExecution,
+  useConversationPreparationStore,
+} from '@/store/conversationPreparation';
 
 import type {
   AcpSessionMetaSnapshot,
@@ -119,6 +124,10 @@ export function useAcpSessionMeta({
 
   const bindingKind = binding.kind;
   const profileId = binding.kind === 'external' ? binding.profileId : '';
+  const isStreaming = useChatStore(
+    (state) => !!threadId && selectThreadIsLoading(state, threadId),
+  );
+  const wasStreaming = useRef(false);
 
   const refresh = useCallback(async () => {
     const myEpoch = ++epochRef.current;
@@ -140,12 +149,22 @@ export function useAcpSessionMeta({
     setLoading(true);
     loadingRef.current = true;
     try {
+      const preparationRevision =
+        useConversationPreparationStore.getState().revisions[
+          JSON.stringify([canvasId ?? '', threadId])
+        ] ?? 0;
       const res = await getAcpThreadCachedMeta(
         threadId,
         canvasId ?? undefined,
         profileId,
       );
       if (!isCurrent()) return;
+      observeConversationExecution(
+        canvasId ?? '',
+        threadId,
+        res.execution,
+        preparationRevision,
+      );
       setMeta(res.sessionMeta);
       setSource(res.source);
       setError(null);
@@ -263,6 +282,12 @@ export function useAcpSessionMeta({
     },
     [],
   );
+
+  useEffect(() => {
+    const finished = wasStreaming.current && !isStreaming;
+    wasStreaming.current = isStreaming;
+    if (finished) void refresh();
+  }, [isStreaming, refresh]);
 
   useEffect(() => {
     setMeta(EMPTY_META);

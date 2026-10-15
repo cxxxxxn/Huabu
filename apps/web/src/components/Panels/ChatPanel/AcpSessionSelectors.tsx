@@ -16,9 +16,8 @@
  * about the agent's shape to drift out of sync.
  *
  * All `onChange` handlers fire optimistically: the parent records the choice
- * in the snapshot's `selections` map before the server round-trip resolves,
- * so the pill reflects it immediately. A `502` from the agent surfaces as a
- * thrown error the parent reverts by dropping that selection again.
+ * in the snapshot's `selections` map when the queued RPC starts. A rejected
+ * change is reverted before refreshing the cache; later choices remain queued.
  */
 
 import { RefreshCcw, TriangleAlert } from 'lucide-react';

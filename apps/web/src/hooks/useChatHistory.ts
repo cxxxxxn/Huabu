@@ -172,6 +172,7 @@ function applyInitialHistoryPage(response: AgentHistoryPageResponse): void {
     error: null,
   });
   state.setHistoryLoaded(response.threadId, true);
+  state.setHistoryError(response.threadId, null);
 }
 
 interface LatestHistoryWindow {
@@ -232,6 +233,7 @@ function applyLatestHistoryWindow(window: LatestHistoryWindow): void {
 
 export interface ChatHistoryWindow {
   loadOlderHistory: () => void;
+  retryHistory: () => void;
 }
 
 /**
@@ -255,6 +257,9 @@ export function useChatHistory(
     selectThreadHistoryLoaded(state, threadId),
   );
   const addMessage = useChatStore((state) => state.addMessage);
+  const historyError = useChatStore(
+    (state) => state.threadsById[threadId]?.historyError ?? null,
+  );
   const recentTurnCount = useChatPreferencesStore(
     (state) => state.recentTurnCount,
   );
@@ -279,12 +284,12 @@ export function useChatHistory(
     // thread (cache survives navigation) rather than the current one.
     const tid = threadId;
     if (selectThreadHistoryLoaded(useChatStore.getState(), tid)) return;
+    if (historyError) return;
 
     let cancelled = false;
 
     const currentState = useChatStore.getState();
     const action = selectThreadLastAction(currentState, tid);
-    const { setHistoryLoaded: setLoaded } = currentState;
 
     const fetchValidatedHistory = async () => {
       if (effectiveConversationView) {
@@ -332,7 +337,12 @@ export function useChatHistory(
       .catch((err: unknown) => {
         if (cancelled) return;
         console.warn(`Could not load ${action} history:`, err);
-        setLoaded(tid, true);
+        useChatStore
+          .getState()
+          .setHistoryError(
+            tid,
+            err instanceof Error ? err.message : 'Failed to load history',
+          );
       });
 
     return () => {
@@ -345,6 +355,7 @@ export function useChatHistory(
     previewTabId,
     canvasId,
     recentTurnCount,
+    historyError,
   ]);
 
   const loadOlderHistory = useCallback(() => {
@@ -634,5 +645,9 @@ export function useChatHistory(
     recentTurnCount,
   ]);
 
-  return { loadOlderHistory };
+  const retryHistory = useCallback(() => {
+    useChatStore.getState().setHistoryError(threadId, null);
+  }, [threadId]);
+
+  return { loadOlderHistory, retryHistory };
 }

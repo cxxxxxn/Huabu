@@ -63,6 +63,7 @@ export const acpSpecSchema = agentSpecSchema.extend({
   }),
   agentletId: z.string().optional(),
   cwd: z.string().optional(),
+  workingDirectoryOverride: z.string().nullable().optional(),
   recipe: acpBindingRecipeSchema.nullable().optional(),
   resolveRecipe: recipeResolverSchema.optional(),
   env: z.record(z.string(), z.string()).optional(),
