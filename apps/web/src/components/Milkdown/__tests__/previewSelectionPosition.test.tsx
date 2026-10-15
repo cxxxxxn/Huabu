@@ -125,6 +125,50 @@ describe('preview selection popover positioning', () => {
     );
   });
 
+  it.each(['copy', 'none'])(
+    'resumes updates after native image dragging ends without mouseup (dropEffect=%s)',
+    async (dropEffect) => {
+      document.getSelection()?.removeAllRanges();
+      const image = document.createElement('img');
+      editor.appendChild(image);
+      await dispatch(image, new MouseEvent('mousedown', { bubbles: true }));
+      await dispatch(image, new Event('dragstart', { bubbles: true }));
+      await update('Selected passage, more');
+      await update('Selected passage, latest');
+      expect(mocks.setMarkdown).not.toHaveBeenCalled();
+      const dragEnd = new Event('dragend', { bubbles: true });
+      Object.defineProperty(dragEnd, 'dataTransfer', {
+        value: { dropEffect },
+      });
+      await dispatch(image, dragEnd);
+      expect(mocks.setMarkdown).toHaveBeenCalledExactlyOnceWith(
+        'Selected passage, latest',
+      );
+      expect(onTextSelection).toHaveBeenLastCalledWith(null);
+      await update('Selected passage, next');
+      expect(mocks.setMarkdown).toHaveBeenLastCalledWith(
+        'Selected passage, next',
+      );
+    },
+  );
+
+  it('preserves a genuine text-selection hold after native drag ends', async () => {
+    await dispatch(editor, new MouseEvent('mousedown', { bubbles: true }));
+    await dispatch(editor, new Event('dragstart', { bubbles: true }));
+    await update('Selected passage, streaming');
+    await dispatch(editor, new Event('dragend', { bubbles: true }));
+    expect(mocks.setMarkdown).not.toHaveBeenCalled();
+    expect(document.getSelection()?.toString()).toBe('Selected passage');
+    expect(onTextSelection).toHaveBeenLastCalledWith(
+      expect.objectContaining({ text: 'Selected passage' }),
+    );
+    document.getSelection()?.collapseToEnd();
+    await dispatch(document, new Event('selectionchange'));
+    expect(mocks.setMarkdown).toHaveBeenCalledExactlyOnceWith(
+      'Selected passage, streaming',
+    );
+  });
+
   it('applies pending content when the panel disables selection reporting', async () => {
     await update('Selected passage, streaming');
     expect(mocks.setMarkdown).not.toHaveBeenCalled();

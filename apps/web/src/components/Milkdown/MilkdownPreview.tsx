@@ -320,6 +320,11 @@ export function MilkdownPreview(
       mouseSelectionRect = null;
       schedule();
     };
+    const handleDragEnd = () => {
+      selectingWithMouseRef.current = false;
+      clearMousePosition();
+      schedule();
+    };
     const handleKeyUp = () => {
       clearMousePosition();
       schedule();
@@ -327,6 +332,7 @@ export function MilkdownPreview(
     const doc = mountRoot.ownerDocument;
     doc.addEventListener('selectionchange', schedule);
     mountRoot.addEventListener('mousedown', handleMouseDown);
+    mountRoot.addEventListener('dragend', handleDragEnd);
     doc.addEventListener('mouseup', handleMouseUp);
     mountRoot.addEventListener('keyup', handleKeyUp);
     window.addEventListener('scroll', schedule, true);
@@ -335,6 +341,7 @@ export function MilkdownPreview(
       if (frame !== undefined) cancelAnimationFrame(frame);
       doc.removeEventListener('selectionchange', schedule);
       mountRoot.removeEventListener('mousedown', handleMouseDown);
+      mountRoot.removeEventListener('dragend', handleDragEnd);
       doc.removeEventListener('mouseup', handleMouseUp);
       mountRoot.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('scroll', schedule, true);

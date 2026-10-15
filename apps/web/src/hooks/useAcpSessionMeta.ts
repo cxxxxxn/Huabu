@@ -159,16 +159,16 @@ export function useAcpSessionMeta({
         profileId,
       );
       if (!isCurrent()) return;
-      if (res.source !== 'thread' && res.sessionMeta.updatedAt === 0) {
-        res = await loadAcpProfileCapabilities(profileId);
-        if (!isCurrent()) return;
-      }
       observeConversationExecution(
         canvasId ?? '',
         threadId,
         res.execution,
         preparationRevision,
       );
+      if (res.source !== 'thread' && res.sessionMeta.updatedAt === 0) {
+        res = await loadAcpProfileCapabilities(profileId);
+        if (!isCurrent()) return;
+      }
       setMeta(res.sessionMeta);
       setSource(res.source);
       setError(null);

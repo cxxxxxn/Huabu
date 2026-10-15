@@ -6,7 +6,11 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { useChatStore } from '@/store/chatStore';
-import { useConversationPreparationStore } from '@/store/conversationPreparation';
+import {
+  beginConversationRealization,
+  resolveConversationPreparation,
+  useConversationPreparationStore,
+} from '@/store/conversationPreparation';
 
 import { useAcpSessionMeta } from './useAcpSessionMeta';
 
@@ -36,6 +40,14 @@ const EMPTY_META = {
   usage: null,
   updatedAt: 0,
 };
+
+const session = {
+  threadId: 'thread-1',
+  canvasId: 'canvas-1',
+  ownerCanvasId: 'canvas-1',
+  conversationView: null,
+};
+const preparationKey = '["canvas-1","thread-1"]';
 
 function Harness({ profileId = 'profile-1' }: { profileId?: string }) {
   const { loading, source, meta, error, refresh } = useAcpSessionMeta({
@@ -67,11 +79,12 @@ afterEach(() => {
   apiMocks.getCached.mockReset();
   apiMocks.loadProfile.mockReset();
   apiMocks.sink.mockReset();
-  useChatStore.setState({ threadsById: {} });
+  useChatStore.setState({ threadsById: {}, bindingByThread: {} });
   useConversationPreparationStore.setState({
     directories: {},
     executions: {},
     pending: {},
+    queuedControls: {},
     locked: {},
     revisions: {},
   });
@@ -89,23 +102,111 @@ async function renderHarness(): Promise<void> {
 }
 
 describe('useAcpSessionMeta', () => {
-  it('surfaces discovery errors and retries without setting execution facts', async () => {
+  it.each([undefined, true])(
+    'records an unrealized draft before failed discovery and allows retry (prior lock=%s)',
+    async (locked) => {
+      useChatStore.setState({
+        bindingByThread: {
+          'thread-1': {
+            kind: 'external',
+            profileId: 'profile-1',
+            alias: 'Profile',
+          },
+        },
+      });
+      if (locked !== undefined) {
+        useConversationPreparationStore.setState({
+          locked: { [preparationKey]: locked },
+        });
+      }
+      apiMocks.getCached.mockResolvedValue({
+        source: 'none',
+        sessionMeta: EMPTY_META,
+      });
+      apiMocks.loadProfile
+        .mockRejectedValueOnce(new Error('Login required'))
+        .mockResolvedValueOnce({
+          source: 'profile',
+          sessionMeta: { ...EMPTY_META, updatedAt: 1 },
+        });
+      await renderHarness();
+      expect(container?.textContent).toBe('Login required');
+      expect(resolveConversationPreparation(session)).toMatchObject({
+        editable: true,
+        realized: false,
+      });
+      await act(async () => container?.querySelector('button')?.click());
+      expect(container?.textContent).toBe('profile:0');
+      expect(apiMocks.loadProfile).toHaveBeenCalledTimes(2);
+      expect(useConversationPreparationStore.getState().executions).toEqual({});
+    },
+  );
+
+  it('does not let discovery completion unlock a newer realization', async () => {
+    let finish!: (value: {
+      source: 'profile';
+      sessionMeta: typeof EMPTY_META;
+    }) => void;
     apiMocks.getCached.mockResolvedValue({
       source: 'none',
       sessionMeta: EMPTY_META,
     });
-    apiMocks.loadProfile
-      .mockRejectedValueOnce(new Error('Login required'))
-      .mockResolvedValueOnce({
+    apiMocks.loadProfile.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await renderHarness();
+    expect(
+      useConversationPreparationStore.getState().locked[preparationKey],
+    ).toBe(false);
+    const release = beginConversationRealization(session);
+    release();
+    await act(async () =>
+      finish({
         source: 'profile',
         sessionMeta: { ...EMPTY_META, updatedAt: 1 },
-      });
+      }),
+    );
+    expect(
+      useConversationPreparationStore.getState().locked[preparationKey],
+    ).toBe(true);
+  });
+
+  it('does not let an older cache response unlock a newer realization', async () => {
+    let finish!: (value: {
+      source: 'none';
+      sessionMeta: typeof EMPTY_META;
+    }) => void;
+    apiMocks.getCached.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    apiMocks.loadProfile.mockRejectedValueOnce(new Error('Agentlet offline'));
     await renderHarness();
-    expect(container?.textContent).toBe('Login required');
-    await act(async () => container?.querySelector('button')?.click());
-    expect(container?.textContent).toBe('profile:0');
-    expect(apiMocks.loadProfile).toHaveBeenCalledTimes(2);
-    expect(useConversationPreparationStore.getState().executions).toEqual({});
+    const release = beginConversationRealization(session);
+    release();
+    await act(async () => finish({ source: 'none', sessionMeta: EMPTY_META }));
+    expect(container?.textContent).toBe('Agentlet offline');
+    expect(
+      useConversationPreparationStore.getState().locked[preparationKey],
+    ).toBe(true);
+  });
+
+  it('keeps the lock unchanged when the execution lookup itself fails', async () => {
+    useConversationPreparationStore.setState({
+      locked: { [preparationKey]: true },
+    });
+    apiMocks.getCached.mockRejectedValueOnce(new Error('Cache unavailable'));
+    await renderHarness();
+    expect(container?.textContent).toBe('Cache unavailable');
+    expect(apiMocks.loadProfile).not.toHaveBeenCalled();
+    expect(
+      useConversationPreparationStore.getState().locked[preparationKey],
+    ).toBe(true);
   });
 
   it('ignores discovery from a previous Profile', async () => {
@@ -198,6 +299,11 @@ describe('useAcpSessionMeta', () => {
         '["canvas-1","thread-1"]'
       ],
     ).toEqual(execution);
+    expect(resolveConversationPreparation(session)).toMatchObject({
+      realized: true,
+      editable: false,
+    });
+    expect(apiMocks.loadProfile).not.toHaveBeenCalled();
     await act(async () => {
       useChatStore.getState().setThreadLoading('thread-1', true);
     });

@@ -55,6 +55,8 @@ The execution snapshot also preserves directory origin as `workingDirectoryOverr
 
 Saving Chat as a Question copies only its explicit directory override, never its effective inherited cwd. The existing thread keeps its frozen execution directory; a copied node with a new thread inherits the current Profile unless an explicit override was saved. Draft preparation failures before a control callback starts restore the prior execution lock and skip the unnecessary cache refresh; potentially dispatched requests retain the lock until execution facts are confirmed.
 
+The client records revision-fenced execution facts immediately after a successful cached-metadata lookup, before Profile capability discovery. Discovery errors remain visible but cannot prevent editing a confirmed unrealized draft, and discovery results do not overwrite execution locks.
+
 Runtime-relevant edits invalidate the Profile schema cache. Cache warm-starts and metadata writes are fenced against the frozen execution revision, so an old thread cannot repopulate or consume the new template's cache. Successful model/thought-level choices may update known-harness Profile preferences only from a matching execution revision; Custom keeps such choices session-local. Existing thread metadata remains authoritative for its live controls regardless of Profile edits.
 
 Huabu stores the reserved automatic-source marker in `customData.discoveredAgent`:
