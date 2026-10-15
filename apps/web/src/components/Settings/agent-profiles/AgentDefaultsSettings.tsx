@@ -186,7 +186,9 @@ export function AgentDefaultsSettings() {
                     ...draft,
                     profileId,
                     functionalModel:
-                      profileId === 'huabu' ? draft.functionalModel : '',
+                      profileId === 'huabu' || profileId === draft.profileId
+                        ? draft.functionalModel
+                        : '',
                   },
                   true,
                 );

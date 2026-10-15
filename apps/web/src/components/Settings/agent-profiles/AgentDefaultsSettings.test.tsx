@@ -304,6 +304,23 @@ describe('Utility Agent model catalogue', () => {
     expect(row?.querySelector('[role="status"]')).toBeNull();
   });
 
+  it.each(['fast', 'retired', ''])(
+    'preserves model override %j when reselecting the current external Profile',
+    async (functionalModel) => {
+      mocks.get.mockResolvedValue({
+        ...initial,
+        defaults: { profileId: 'external', functionalModel },
+      });
+      await render();
+      await select('external');
+      expect(mocks.update).toHaveBeenCalledExactlyOnceWith({
+        profileId: 'external',
+        functionalModel,
+      });
+      expect(modelSelect()?.value).toBe(functionalModel);
+    },
+  );
+
   it('clears a prior Profile model when choosing a different external Profile', async () => {
     mocks.state.profiles.push({ ...mocks.state.profiles[0], id: 'second' });
     await render();
