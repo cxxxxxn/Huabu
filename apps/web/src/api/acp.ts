@@ -47,8 +47,7 @@ import type {
   ConnectionShell,
   ConnectionCopyFormat,
   AgentletConnectionCommandResponse,
-  WarmAcpSessionRequest,
-  WarmAcpSessionResponse,
+  AcpProfileCapabilitiesResponse,
 } from '@huabu/shared';
 
 export type {
@@ -81,8 +80,7 @@ export type {
   ConnectionCopyFormat,
   AgentletConnectionCommandResponse,
   ConnectedAgentletDevice,
-  WarmAcpSessionRequest,
-  WarmAcpSessionResponse,
+  AcpProfileCapabilitiesResponse,
 } from '@huabu/shared';
 
 // ── Agent CLI detection ──────────────────────────────────────────────
@@ -287,21 +285,16 @@ export async function setAcpSessionConfigOption(
   );
 }
 
-/**
- * User-triggered warm-up: realize the thread's workload and open its ACP
- * session with no accompanying `set_*` control, purely to seed the
- * mode/model/config-option catalogue for a Profile the cached-meta route
- * reports as `source: 'none'` (never observed on this server). Only ever
- * called from an explicit click on the control row's placeholder pill —
- * see `AcpSessionSelectors`'s `onWarm`.
- */
-export async function warmAcpSession(
-  threadId: string,
-  payload: WarmAcpSessionRequest,
-): Promise<WarmAcpSessionResponse> {
-  return apiFetch<WarmAcpSessionResponse>(routes.acpThreadWarm(threadId), {
-    method: 'POST',
-    json: payload,
-    fallbackMessage: 'Failed to load agent options',
-  });
+export async function loadAcpProfileCapabilities(
+  profileId: string,
+): Promise<AcpProfileCapabilitiesResponse> {
+  const cached = await apiFetch<AcpProfileCapabilitiesResponse>(
+    routes.acpProfileCapabilities(profileId),
+    { fallbackMessage: 'Failed to read agent options' },
+  );
+  if (cached.source === 'profile') return cached;
+  return apiFetch<AcpProfileCapabilitiesResponse>(
+    routes.acpProfileCapabilitiesDiscover(profileId),
+    { method: 'POST', fallbackMessage: 'Failed to load agent options' },
+  );
 }

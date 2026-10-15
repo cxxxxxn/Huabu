@@ -17,7 +17,6 @@ import {
   setAcpSessionConfigOption,
   setAcpSessionMode,
   setAcpSessionModel,
-  warmAcpSession,
 } from '@/api/acp';
 import { Button } from '@/components/Common/Button';
 import { InlineEditableTitle } from '@/components/Common/InlineEditableTitle';
@@ -636,33 +635,6 @@ export const ChatPanel = ({
     [threadId, runAcpSelectionControl, onCommit, t],
   );
 
-  // User-opt-in warm-up for a Profile the cache has never observed
-  // (`source: 'none'`): pressing the control row's placeholder pill
-  // realizes the workload and opens a real ACP session purely to seed
-  // the mode/model/config-option catalogue, then re-reads the now-warm
-  // cache. Unlike the set-RPC handlers above there is no optimistic
-  // value to apply or revert — this call changes no selection, it only
-  // makes the selectors exist.
-  const [warmingAcpSession, setWarmingAcpSession] = useState(false);
-  const handleAcpWarmSession = useCallback(async () => {
-    if (!threadId || agentBinding.kind !== 'external') return;
-    setWarmingAcpSession(true);
-    try {
-      await runAcpControl((target) => warmAcpSession(threadId, target));
-    } catch (err) {
-      toast(
-        err instanceof Error
-          ? t('chat.failedWarmAgentOptionsWithMessage', {
-              message: err.message,
-            })
-          : t('chat.failedWarmAgentOptions'),
-        { tone: 'danger' },
-      );
-    } finally {
-      setWarmingAcpSession(false);
-    }
-  }, [threadId, agentBinding.kind, runAcpControl, t]);
-
   useEffect(() => {
     if (agentBinding.kind === 'internal' && !llmConfig && !llmLoading) {
       void llmInit();
@@ -1182,12 +1154,9 @@ export const ChatPanel = ({
                   <AcpSessionSelectors
                     meta={acpSessionMeta}
                     source={acpSessionMetaSource}
-                    loading={acpSessionMetaLoading || warmingAcpSession}
-                    onWarm={
-                      agentBinding.kind === 'external'
-                        ? handleAcpWarmSession
-                        : undefined
-                    }
+                    loading={acpSessionMetaLoading}
+                    error={acpSessionMetaError}
+                    onRetry={refreshAcpSessionMeta}
                     onSelectMode={handleAcpSelectMode}
                     onSelectModel={handleAcpSelectModel}
                     onSelectConfigOption={handleAcpSelectConfigOption}

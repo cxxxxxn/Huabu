@@ -31,7 +31,7 @@ import type {
   AgentBinding,
   AgentIcon,
   AgentMode,
-  WarmAcpSessionRequest,
+  ExternalAgentInteractionTarget,
 } from '@huabu/shared';
 
 type Execution = NonNullable<AcpThreadCachedMetaResponse['execution']>;
@@ -257,7 +257,7 @@ export async function saveConversationAgent(
 /** Node preparation remains server-owned; ordinary Chat carries draft intent. */
 export function conversationControlTarget(
   session: ChatSession,
-): WarmAcpSessionRequest {
+): ExternalAgentInteractionTarget {
   const preparation = resolveConversationPreparation(session);
   if (preparation.binding.kind !== 'external') {
     throw new Error('Conversation has no external Agent binding');
@@ -275,7 +275,7 @@ const controlQueues = new Map<string, Promise<void>>();
 
 export async function runConversationControl(
   session: ChatSession,
-  control: (target: WarmAcpSessionRequest) => Promise<unknown>,
+  control: (target: ExternalAgentInteractionTarget) => Promise<unknown>,
   refresh: () => Promise<void>,
 ): Promise<void> {
   const key = preparationKey(session);

@@ -4,12 +4,12 @@
 /**
  * Reads thread/Profile capability observations through the GET-only cache
  * endpoint and merges live metadata events after a real interaction starts.
- * Cache misses are normal and never create a workload or ACP process.
+ * Cache misses discover Profile capabilities without realizing this thread.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { getAcpThreadCachedMeta } from '@/api/acp';
+import { getAcpThreadCachedMeta, loadAcpProfileCapabilities } from '@/api/acp';
 import {
   registerAcpSessionMetaSink,
   type AcpSessionMetaStreamEvent,
@@ -153,12 +153,16 @@ export function useAcpSessionMeta({
         useConversationPreparationStore.getState().revisions[
           JSON.stringify([canvasId ?? '', threadId])
         ] ?? 0;
-      const res = await getAcpThreadCachedMeta(
+      let res = await getAcpThreadCachedMeta(
         threadId,
         canvasId ?? undefined,
         profileId,
       );
       if (!isCurrent()) return;
+      if (res.source !== 'thread' && res.sessionMeta.updatedAt === 0) {
+        res = await loadAcpProfileCapabilities(profileId);
+        if (!isCurrent()) return;
+      }
       observeConversationExecution(
         canvasId ?? '',
         threadId,
@@ -173,8 +177,10 @@ export function useAcpSessionMeta({
       if (!isCurrent()) return;
       setError(err instanceof Error ? err : new Error(String(err)));
     } finally {
-      if (isCurrent()) setLoading(false);
-      loadingRef.current = false;
+      if (isCurrent()) {
+        setLoading(false);
+        loadingRef.current = false;
+      }
     }
   }, [threadId, canvasId, bindingKind, profileId, enabled]);
 
@@ -189,6 +195,10 @@ export function useAcpSessionMeta({
   );
 
   const applyEvent = useCallback((event: AcpSessionMetaEvent) => {
+    epochRef.current++;
+    loadingRef.current = false;
+    setLoading(false);
+    setError(null);
     setSource('thread');
     setMeta((prev) => {
       switch (event.type) {

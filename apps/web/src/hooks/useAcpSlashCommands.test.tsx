@@ -9,10 +9,12 @@ import { useAcpSlashCommands } from './useAcpSlashCommands';
 
 const apiMocks = vi.hoisted(() => ({
   getCached: vi.fn(),
+  loadProfile: vi.fn(),
 }));
 
 vi.mock('@/api/acp', () => ({
   getAcpThreadCachedMeta: apiMocks.getCached,
+  loadAcpProfileCapabilities: apiMocks.loadProfile,
 }));
 
 function Harness() {
@@ -41,6 +43,7 @@ afterEach(() => {
   root = undefined;
   container = undefined;
   apiMocks.getCached.mockReset();
+  apiMocks.loadProfile.mockReset();
 });
 
 async function renderHarness(): Promise<void> {
@@ -55,7 +58,7 @@ async function renderHarness(): Promise<void> {
 }
 
 describe('useAcpSlashCommands', () => {
-  it('hydrates a cold cache with one GET and no polling', async () => {
+  it('automatically loads commands from a cold Profile without polling', async () => {
     apiMocks.getCached.mockResolvedValue({
       source: 'none',
       availableCommands: [],
@@ -72,11 +75,16 @@ describe('useAcpSlashCommands', () => {
         updatedAt: 0,
       },
     });
+    apiMocks.loadProfile.mockResolvedValue({
+      source: 'profile',
+      availableCommands: [{ name: 'review' }],
+    });
 
     await renderHarness();
 
     expect(apiMocks.getCached).toHaveBeenCalledOnce();
-    expect(container?.textContent).toBe('');
+    expect(apiMocks.loadProfile).toHaveBeenCalledExactlyOnceWith('profile-1');
+    expect(container?.textContent).toBe('review');
   });
 
   it('falls back to an empty list when the response omits availableCommands', async () => {
@@ -121,7 +129,7 @@ describe('useAcpSlashCommands', () => {
           selections: {},
           sessionInfo: null,
           usage: null,
-          updatedAt: 0,
+          updatedAt: 1,
         },
       })
       .mockResolvedValueOnce({

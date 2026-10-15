@@ -189,7 +189,6 @@ vi.mock('@/api/acp', async (original) => ({
   setAcpSessionMode: vi.fn(),
   setAcpSessionModel: vi.fn(),
   setAcpSessionConfigOption: vi.fn(),
-  warmAcpSession: vi.fn(),
 }));
 vi.mock('@/store/canvasStore', async (importOriginal) => ({
   ...(await importOriginal<typeof CanvasStore>()),

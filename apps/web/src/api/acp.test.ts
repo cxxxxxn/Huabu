@@ -4,11 +4,59 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from './_client';
-import { listAcpAgentClis, updateAcpProfile } from './acp';
+import {
+  listAcpAgentClis,
+  loadAcpProfileCapabilities,
+  updateAcpProfile,
+} from './acp';
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe('ACP Profile editing API', () => {
+  it('reuses a Profile capability cache without a POST', async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(new Response('{"source":"profile"}'));
+    vi.stubGlobal('fetch', fetch);
+    expect(await loadAcpProfileCapabilities('profile/#1')).toEqual({
+      source: 'profile',
+    });
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(
+      expect.stringMatching(/\/acp\/profiles\/profile%2F%231\/capabilities$/),
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('automatically discovers capabilities on a cache miss, without any thread identity', async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('{"source":"none"}'))
+      .mockResolvedValueOnce(new Response('{"source":"profile"}'));
+    vi.stubGlobal('fetch', fetch);
+    expect(await loadAcpProfileCapabilities('profile')).toEqual({
+      source: 'profile',
+    });
+    expect(fetch).toHaveBeenLastCalledWith(
+      expect.stringMatching(
+        /\/acp\/profiles\/profile\/capabilities\/discover$/,
+      ),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetch.mock.calls[1][1].body).toBeUndefined();
+  });
+
+  it('surfaces discovery failure rather than returning an empty list', async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('{"source":"none"}'))
+      .mockResolvedValueOnce(
+        new Response('{"message":"Login required"}', { status: 503 }),
+      );
+    vi.stubGlobal('fetch', fetch);
+    await expect(loadAcpProfileCapabilities('profile')).rejects.toThrow(
+      'Login required',
+    );
+  });
   it('routes discovery to the saved Profile and encodes its identity', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response('{"agents":[]}'));
     vi.stubGlobal('fetch', fetch);

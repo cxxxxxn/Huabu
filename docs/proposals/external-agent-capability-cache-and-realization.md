@@ -3,6 +3,8 @@
 Status: Shipped
 Last updated: 2026-09-05
 
+Update (2026-10-15): the no-background-discovery decision below is superseded by Profile-scoped, cache-first capability discovery. Chat and Utility Settings now automatically request an isolated ephemeral probe on cache miss, without realizing a user workload or freezing its binding/Space Prompt. GET endpoints remain read-only; discovery is a separate POST, coalesced by execution revision and placement, with process cleanup before return. Empty observations are cached and failures are retryable. See [Agent architecture](../architecture/agent-architecture.md) for the current behavior. The canonical first-control/message realization boundary described below is unchanged.
+
 ## Context
 
 Issue [#160](https://github.com/microsoft/Huabu/issues/160) adds Space Prompt Frames whose content is frozen into an Agent Node's durable WorkloadSpec when that Agent is first realized.

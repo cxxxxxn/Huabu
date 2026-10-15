@@ -42,6 +42,11 @@ import {
   hasDiscoverySource,
   mergeProfileCustomData,
 } from './harness-profile-discovery.js';
+import {
+  discoverProfileCapabilities,
+  ProfileCapabilitiesError,
+  readProfileCapabilities,
+} from './profile-capabilities.js';
 import { invalidateProfileSchemaCache } from './profile-schema-cache.js';
 import { isOwnerRequest } from '../../security/owner.js';
 import {
@@ -54,6 +59,7 @@ import type { AgentletConnection } from '@agenetes/agentlet-host';
 import type {
   AcpProfileMutationResponse,
   AcpProfilesListResponse,
+  AcpProfileCapabilitiesResponse,
   AgentProfileView,
   ApiResult,
 } from '@huabu/shared';
@@ -128,6 +134,53 @@ async function validateHarnessLaunch(
 }
 
 const acpProfilesRoutes: FastifyPluginAsync = async (app) => {
+  for (const method of ['GET', 'POST'] as const) {
+    app.route<{
+      Params: { id: string };
+      Reply: ApiResult<AcpProfileCapabilitiesResponse>;
+    }>({
+      method,
+      url: `/profiles/:id/capabilities${method === 'POST' ? '/discover' : ''}`,
+      handler: async (request, reply) => {
+        if (denyRemote(request, reply)) return;
+        const parsed = agentProfileParamsSchema.safeParse(request.params);
+        if (!parsed.success) {
+          request.log.warn(
+            { issues: parsed.error.issues },
+            'Invalid capability Profile',
+          );
+          return reply.status(400).send({
+            message: 'Invalid Agent Profile',
+            code: 'validation_failed',
+          });
+        }
+        try {
+          return method === 'GET'
+            ? readProfileCapabilities(parsed.data.id)
+            : await discoverProfileCapabilities(parsed.data.id, request.log);
+        } catch (error) {
+          request.log.warn(
+            { err: error, profileId: parsed.data.id },
+            'Agent capability discovery failed',
+          );
+          return reply
+            .status(
+              error instanceof ProfileCapabilitiesError ? error.status : 503,
+            )
+            .send({
+              code:
+                error instanceof ProfileCapabilitiesError
+                  ? error.code
+                  : 'capability_discovery_failed',
+              message:
+                error instanceof Error
+                  ? error.message
+                  : 'Failed to load agent options',
+            });
+        }
+      },
+    });
+  }
   // ── List ─────────────────────────────────────────────────────────────
   app.get<{ Reply: ApiResult<AcpProfilesListResponse> }>(
     '/profiles',

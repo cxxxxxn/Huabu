@@ -430,6 +430,16 @@ export const acpThreadCachedMetaResponseSchema = z.object({
     .optional(),
 });
 
+export const acpProfileCapabilitiesResponseSchema = z.object({
+  source: z.enum(['profile', 'none']),
+  availableCommands: z.array(availableCommandSchema),
+  commandsUpdatedAt: z.number().int().nonnegative(),
+  sessionMeta: acpSessionMetaSnapshotSchema,
+});
+export type AcpProfileCapabilitiesResponse = z.infer<
+  typeof acpProfileCapabilitiesResponseSchema
+>;
+
 /** Schema mirror of {@link AcpPermissionDecisionRequest}. */
 export const acpPermissionDecisionSchema = z.object({
   requestId: z.string().min(1),
@@ -453,6 +463,9 @@ const externalAgentInteractionTargetSchema = z.object({
   canvasId: z.string().min(1).optional(),
   cwd: agentWorkingDirectorySchema.optional(),
 });
+export type ExternalAgentInteractionTarget = z.infer<
+  typeof externalAgentInteractionTargetSchema
+>;
 
 export const setAcpSessionModeRequestSchema =
   externalAgentInteractionTargetSchema.extend({
@@ -502,24 +515,6 @@ export const setAcpSessionConfigOptionResponseSchema = z.object({
 });
 export type SetAcpSessionConfigOptionResponse = z.infer<
   typeof setAcpSessionConfigOptionResponseSchema
->;
-
-/**
- * Request body for the user-triggered "warm" RPC: realize the thread's
- * canonical workload and open its ACP session with no accompanying
- * `set_*` control, purely so the resulting `session/new` schema
- * (modes / models / configOptions) lands in the profile/thread cache for
- * a Profile that has never been observed on this server. Same target
- * shape as the other set-RPCs so it reuses `realizeControlThread`.
- */
-export const warmAcpSessionRequestSchema = externalAgentInteractionTargetSchema;
-export type WarmAcpSessionRequest = z.infer<typeof warmAcpSessionRequestSchema>;
-
-export const warmAcpSessionResponseSchema = z.object({
-  ok: z.literal(true),
-});
-export type WarmAcpSessionResponse = z.infer<
-  typeof warmAcpSessionResponseSchema
 >;
 
 // ─── Agent-profile / daemon schemas ────────────────────────────────────
