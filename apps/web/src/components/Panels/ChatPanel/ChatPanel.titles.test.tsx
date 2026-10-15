@@ -509,9 +509,7 @@ describe('rendered conversation titles', () => {
       ]);
       expect(toast).toHaveBeenCalledTimes(firstFailure ? 1 : 0);
       expect(
-        container.querySelector(
-          '[aria-label="Working directory inherited from Profile: /frozen"]',
-        ),
+        container.querySelector('[aria-label="Working directory: /frozen"]'),
       ).not.toBeNull();
     },
   );
@@ -587,7 +585,7 @@ describe('rendered conversation titles', () => {
     await renderPanel();
     expect(
       container.querySelector(
-        '[aria-label="Conversation working directory: /chat/project"]',
+        '[aria-label="Working directory: /chat/project"]',
       ),
     ).not.toBeNull();
     await act(async () => {

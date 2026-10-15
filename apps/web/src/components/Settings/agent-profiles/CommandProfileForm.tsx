@@ -18,6 +18,7 @@ import {
   randomAgentIcon,
   withAgentIcon,
 } from '@/utils/agentIcon';
+import { resolveConnectedDevice } from '@/utils/agentletDevice';
 
 import { AgentIconField } from './AgentIconField';
 import { ProfileEditActions } from './ProfileEditActions';
@@ -64,18 +65,6 @@ function displayNameFor(agent: string, cwd: string) {
     .split('/')
     .at(-1);
   return folder ? `${agent} (${folder})` : agent;
-}
-
-function resolveConnectedDevice(
-  target: string,
-  devices: ConnectedAgentletDevice[],
-): ConnectedAgentletDevice | undefined {
-  const exact = devices.find((device) => device.agentletId === target);
-  if (exact) return exact;
-  const hostnameMatches = devices.filter(
-    (device) => device.hostname === target,
-  );
-  return hostnameMatches.length === 1 ? hostnameMatches[0] : undefined;
 }
 
 /** One capability-driven form for both structured and raw-command Profiles. */

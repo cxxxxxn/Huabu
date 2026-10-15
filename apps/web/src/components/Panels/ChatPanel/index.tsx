@@ -67,6 +67,7 @@ import { useLLMStore } from '@/store/llmStore';
 import { messageListViewKey } from '@/store/previewWorkspace/scrollMemory';
 import { usePreviewWorkspaceStore } from '@/store/previewWorkspace/store';
 import { snapshotAgentIcon } from '@/utils/agentIcon';
+import { resolveConnectedDevice } from '@/utils/agentletDevice';
 
 import {
   AcpConnectionBadge,
@@ -338,6 +339,9 @@ export const ChatPanel = ({
   );
   const { profiles: acpProfiles, refresh: refreshAcpProfiles } =
     useAcpProfiles();
+  const connectedDevices = useAcpProfilesStore(
+    (state) => state.connectedDevices,
+  );
 
   useEffect(() => {
     if (bindingsEqual(cachedAgentBinding, agentBinding)) {
@@ -804,6 +808,12 @@ export const ChatPanel = ({
     agentBinding.kind === 'external'
       ? acpProfiles.find((profile) => profile.id === agentBinding.profileId)
       : undefined;
+  const selectedExternalDevice = selectedExternalProfile
+    ? resolveConnectedDevice(
+        selectedExternalProfile.agentletId,
+        connectedDevices,
+      )
+    : undefined;
   const workingDirectoryOverride = preparation.workingDirectoryOverride;
   const showWorkingDirectoryOverride =
     agentBinding.kind === 'external' &&
@@ -1124,12 +1134,7 @@ export const ChatPanel = ({
                   />
                   {showWorkingDirectoryOverride ? (
                     <WorkingDirectoryOverride
-                      profileAlias={
-                        selectedExternalProfile?.alias ??
-                        (agentBinding.kind === 'external'
-                          ? agentBinding.alias
-                          : '')
-                      }
+                      deviceName={selectedExternalDevice?.displayName}
                       profileWorkingDirPath={
                         selectedExternalProfile?.workingDirPath ?? ''
                       }
