@@ -14,6 +14,7 @@ import {
   Undo2,
 } from 'lucide-react';
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 
 import { Button } from '@/components/Common/Button';
 import { DragToCanvasHandleButton } from '@/components/Common/DragToCanvasHandleButton';
@@ -329,6 +330,12 @@ export default function ComponentShowcasePage() {
           <h1 className="text-fg-default text-lg font-semibold">
             Common Component Showcase
           </h1>
+          <Link
+            to="/playground/settings-components"
+            className="text-info text-xs underline"
+          >
+            Settings component specimens
+          </Link>
         </div>
       </Header>
 

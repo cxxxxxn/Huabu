@@ -1,0 +1,93 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
+.settings-specimen-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+}
+
+.settings-specimen {
+  min-width: 0;
+  scroll-margin-top: 24px;
+  border: 1px solid var(--edge-default);
+  border-radius: 10px;
+  background: var(--bg-surface);
+}
+
+.settings-specimen-stage {
+  min-width: 0;
+  padding: 16px;
+}
+
+.settings-secret-specimen > div > div:last-child > div {
+  max-width: 100%;
+}
+
+.settings-control-standard {
+  width: 240px;
+  max-width: 100%;
+}
+
+.settings-control-compact {
+  width: 160px;
+  max-width: 100%;
+}
+
+.settings-number-control {
+  max-width: 184px;
+}
+
+.settings-demo-row-feedback {
+  align-items: flex-start;
+}
+
+.settings-credential-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.settings-credential-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--success-bg);
+  color: var(--success);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.settings-feedback-actions {
+  border-radius: 8px;
+  padding: 12px 14px;
+  gap: 16px;
+}
+
+#field-feedback {
+  margin-top: 8px;
+  line-height: 18px;
+}
+
+@media (max-width: 1100px) {
+  .settings-specimen-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .settings-control-standard,
+  .settings-control-compact {
+    width: 100%;
+  }
+
+  .settings-feedback-actions > div:last-child {
+    margin-left: auto;
+  }
+}
