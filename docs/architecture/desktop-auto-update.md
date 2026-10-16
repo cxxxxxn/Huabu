@@ -56,6 +56,12 @@ The `dist:*` scripts pass `--publish never`: electron-builder generates the upda
 
 The `.dmg` / `.exe` are the human-facing first installs; the `.zip` (Squirrel.Mac) and `latest*.yml` feeds are what the running app consumes. When a build is relocated from the build-source repo to the public distribution repo, these metadata files must move with it.
 
+## macOS signing dependency
+
+Desktop packaging pins `electron-builder` to `26.16.1` in `apps/desktop/package.json` and resolves it through the shared `pnpm-lock.yaml`. This is the first stable v26 release containing the upstream [keychain password fix](https://github.com/electron-userland/electron-builder/pull/10172): `security import -P` needs the certificate password, but `security set-key-partition-list -k` needs the temporary keychain's own unlock password. Version `26.15.3` incorrectly reused the certificate password for the latter command, causing `SecKeychainUnlock` failures before signing or notarization.
+
+Local builds, GitHub Actions, and Azure Pipelines use the same packaging dependency. Both CI paths install with `--frozen-lockfile`; no workflow-specific password substitution or signing bypass is required. Developer ID signing and Apple notarization remain enabled.
+
 ## Azure Pipelines packaging
 
 The root [azure-pipelines.yml](../../azure-pipelines.yml) adds independent Microsoft-hosted Windows and macOS packaging jobs alongside the existing GitHub Actions release workflow. In Azure DevOps, select **New Pipeline > GitHub > microsoft/Huabu > Existing Azure Pipelines YAML file** and choose `/azure-pipelines.yml`; authorize repository access through the Azure DevOps GitHub integration. This pipeline publishes build artifacts only, not GitHub Releases, and does not change the application's GitHub update feed.
