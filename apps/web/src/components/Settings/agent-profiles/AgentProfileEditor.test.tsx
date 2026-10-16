@@ -217,6 +217,22 @@ afterEach(() => {
 });
 
 describe('AgentProfileEditor', () => {
+  it('labels the device as fixed only while editing', () => {
+    renderEditor();
+    expect(container?.textContent).toContain('settings.profileMachine');
+    expect(container?.textContent).not.toContain(
+      'settings.profileMachineFixed',
+    );
+    expect(
+      container?.querySelector('select[aria-label="settings.profileMachine"]'),
+    ).not.toBeNull();
+    renderEditor(structured);
+    expect(container?.textContent).toContain('settings.profileMachineFixed');
+    expect(
+      container?.querySelector('select[aria-label="settings.profileMachine"]'),
+    ).toBeNull();
+  });
+
   it('uses launch identity only and never parses known-looking legacy commands', async () => {
     renderEditor(legacy);
     expect(container?.querySelector('select')).toBeNull();

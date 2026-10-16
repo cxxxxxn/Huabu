@@ -217,13 +217,13 @@ describe('InkOcrSettings', () => {
     expect(labels).toHaveLength(2);
     for (const label of labels ?? []) {
       expect(label.control?.id).toBe(label.htmlFor);
-      const row = label.closest('.px-3');
+      const row = label.closest('.setting-row');
       expect(row?.parentElement).toBe(card);
-      expect(row?.classList.contains('py-2.5')).toBe(true);
+      expect(row?.classList.contains('py-3')).toBe(true);
       expect(row?.classList.contains('items-center')).toBe(true);
-      expect(label.classList.contains('text-xs')).toBe(true);
+      expect(label.classList.contains('text-[13px]')).toBe(true);
       expect(label.classList.contains('font-medium')).toBe(true);
-      expect(label.control?.closest('.w-72')?.parentElement).toBe(
+      expect(label.control?.closest('.w-60')?.parentElement).toBe(
         row?.lastElementChild,
       );
     }

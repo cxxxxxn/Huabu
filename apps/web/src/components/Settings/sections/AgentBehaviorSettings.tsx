@@ -104,6 +104,7 @@ export function AgentBehaviorSettings() {
         description={t('settings.recentChatTurnsDescription')}
       >
         <Select
+          appearance="field"
           options={RECENT_TURN_OPTIONS}
           value={String(recentTurnCount)}
           onChange={(value) => setRecentTurnCount(Number(value))}

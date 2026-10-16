@@ -22,6 +22,8 @@
   /* Backgrounds */
   --bg-default: #f5f5f5;
   --bg-surface: #ffffff;
+  --bg-sidebar: #fbfaf7;
+  --bg-sidebar-selected: #eae7e0;
   --bg-note-surface: var(--bg-surface);
 
   --bg-hover: #f2f2f2;
@@ -92,6 +94,8 @@
   --fg-inverse: #191919;
   --bg-default: oklch(0.145 0 0);
   --bg-surface: oklch(0.22 0 0);
+  --bg-sidebar: var(--bg-default);
+  --bg-sidebar-selected: var(--bg-hover);
   --bg-note-surface: color-mix(
     in srgb,
     var(--bg-surface) 92%,
@@ -157,6 +161,8 @@
   --color-fg-inverse: var(--fg-inverse);
 
   --color-bg-default: var(--bg-default);
+  --color-sidebar: var(--bg-sidebar);
+  --color-sidebar-selected: var(--bg-sidebar-selected);
   --color-surface: var(--bg-surface);
   --color-hover: var(--bg-hover);
   --color-inverse: var(--bg-inverse);

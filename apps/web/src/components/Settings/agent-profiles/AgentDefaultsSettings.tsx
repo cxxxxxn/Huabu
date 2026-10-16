@@ -8,11 +8,14 @@ import { buildAcpSessionSelectors } from '@huabu/shared';
 
 import { Button } from '@/components/Common/Button';
 import { Select, type SelectOption } from '@/components/Common/Select';
+import { SettingControl } from '@/components/Settings/Common/SettingControl';
 import { SettingRow } from '@/components/Settings/Common/SettingRow';
 import { SettingSection } from '@/components/Settings/Common/SettingSection';
 import { useDebouncedSave } from '@/components/Settings/utils';
 import { useAcpProfileCapabilities } from '@/hooks/useAcpProfileCapabilities';
 import { useAcpProfilesStore } from '@/store/acpProfilesStore';
+
+import { BuiltinUtilityModelSettings } from '../sections/LLMSettings';
 
 import type { AgentDefaults, AgentDefaultsResponse } from '@huabu/shared';
 
@@ -160,7 +163,11 @@ export function AgentDefaultsSettings() {
     Boolean(error || profilesError);
 
   return (
-    <SettingSection title={t('settings.agentDefaultsTitle')}>
+    <SettingSection
+      title={t('settings.agentDefaultsTitle')}
+      collapsible
+      keepMounted
+    >
       {!draft ? (
         <p
           className="text-fg-muted px-3 py-2 text-xs"
@@ -174,35 +181,39 @@ export function AgentDefaultsSettings() {
             title={t('settings.agentDefaultsProfile')}
             description={t('settings.agentDefaultsSectionDescription')}
           >
-            <Select
-              ariaLabel={t('settings.agentDefaultsProfile')}
-              options={options}
-              value={draft.profileId ?? ''}
-              placeholder={t('settings.agentDefaultsUnconfigured')}
-              onOpen={() => void refresh()}
-              onChange={(profileId) => {
-                edit(
-                  {
-                    ...draft,
-                    profileId,
-                    functionalModel:
-                      profileId === 'huabu' || profileId === draft.profileId
-                        ? draft.functionalModel
-                        : '',
-                  },
-                  true,
-                );
-              }}
-            />
+            <SettingControl>
+              <Select
+                className="w-full"
+                appearance="field"
+                ariaLabel={t('settings.agentDefaultsProfile')}
+                options={options}
+                value={draft.profileId ?? ''}
+                placeholder={t('settings.agentDefaultsUnconfigured')}
+                onOpen={() => void refresh()}
+                onChange={(profileId) => {
+                  edit(
+                    {
+                      ...draft,
+                      profileId,
+                      functionalModel:
+                        profileId === 'huabu' || profileId === draft.profileId
+                          ? draft.functionalModel
+                          : '',
+                    },
+                    true,
+                  );
+                }}
+              />
+            </SettingControl>
           </SettingRow>
-          {!isBuiltIn && (
+          {isBuiltIn ? (
+            <BuiltinUtilityModelSettings />
+          ) : (
             <div>
-              <SettingRow
-                title={t('settings.agentDefaultsModel')}
-                description={t('settings.agentDefaultsModelDescription')}
-              >
+              <SettingRow title={t('settings.agentDefaultsModel')}>
                 <div className="w-40 min-w-0 sm:w-48">
                   <Select
+                    appearance="field"
                     ariaLabel={t('settings.agentDefaultsModel')}
                     className="justify-between"
                     options={modelOptions}
@@ -230,7 +241,7 @@ export function AgentDefaultsSettings() {
                   <div className="text-danger text-xs" role="alert">
                     {capabilities.error.message}
                     <Button
-                      size="sm"
+                      size="field"
                       variant="ghost"
                       onClick={capabilities.retry}
                     >
@@ -254,7 +265,7 @@ export function AgentDefaultsSettings() {
                 ) : null}
                 {error && (
                   <Button
-                    size="sm"
+                    size="field"
                     variant="ghost"
                     onClick={() => edit(draft, true)}
                   >

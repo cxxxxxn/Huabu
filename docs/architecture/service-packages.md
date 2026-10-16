@@ -1,6 +1,6 @@
 # Service Packages
 
-> Current architecture for Huabu-managed third-party services. Last updated: 2026-10-12
+> Current architecture for Huabu-managed third-party services. Last updated: 2026-10-15
 
 ## Scope
 
@@ -61,6 +61,12 @@ PUT /api/services/:serviceId
 ```
 
 Wire schemas live in `packages/shared/src/types/api/service-package.ts`. The Web app imports only their inferred types and renders `ServicesSettings` from the returned manifests. Existing service-specific endpoints remain compatible for non-migrated callers, but the Services tab uses only the generic API.
+
+The Services UI localizes bundled service names, short descriptions, fields, and enum labels by stable service/field IDs using the existing Web i18n resources. Unknown services, fields, and options retain manifest text. Field IDs, option values, server validation, and persistence remain manifest-owned. Configured service headers omit success-status text; incomplete services show a muted Needs setup hint only while collapsed. Expanded services rely on their field-level credential controls, validation, and save feedback rather than duplicating configuration status in the header. Configuration completeness does not imply verified connectivity or service availability.
+
+Services has no card-wide Save/Discard footer. Text and URL fields save on blur or Enter, not while typing; enum and boolean fields save immediately on selection. Required empty fields and non-HTTPS URLs remain local drafts with inline validation. Unchanged values do not write. If a required key is missing, ordinary edits remain local with an explicit waiting-for-key message; submitting the key validates required ordinary settings and sends them together, including staged optional edits. Secret fields reuse Settings/Common ApiKeyRow: the default view shows the shared credential status and Set/Update action rather than an empty password field with a configured placeholder. Keys require explicit submission, are never read back, and clear from the editor only after an acknowledged successful save. Removal is a separate explicit confirmation, not an empty-key save. Environment fallbacks remain storage-adapter-owned, so removing a stored key does not necessarily remove an environment-provided credential.
+
+Per-service writes are serialized, duplicate in-flight field submissions are suppressed, and masked acknowledgements refresh status without overwriting unrelated drafts. Failed saves retain drafts and show inline errors with field retry or credential resubmission. Collapsing a service hides its previously mounted fields without losing drafts or feedback. Credential writes, including the entire secret-backed Ink OCR record, remain disabled while deployment readiness is unknown, failed, or read-only. Existing Generic Settings HTTP schemas and namespace adapters are unchanged.
 
 ## External Agent RFS API
 

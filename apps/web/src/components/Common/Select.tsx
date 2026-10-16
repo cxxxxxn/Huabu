@@ -2,7 +2,7 @@
 // Licensed under the MIT license.
 
 import clsx from 'clsx';
-import { Check, ChevronDown } from 'lucide-react';
+import { Check, ChevronDown, ChevronsUpDown } from 'lucide-react';
 import { Fragment, useCallback, useRef, useState, type ReactNode } from 'react';
 
 import { Button, type ButtonProps } from './Button';
@@ -17,6 +17,7 @@ import {
   MENU_SURFACE_CLASS,
 } from './menuStyles';
 import { Popover } from './Popover';
+import { textInputClassName } from './TextInput';
 import { Tooltip } from './Tooltip';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -57,11 +58,14 @@ type SelectProps<T extends string = string> = {
   title?: string;
   /** Accessible name when the visual row label is not a native label. */
   ariaLabel?: string;
+  'aria-describedby'?: string;
   /** Trigger button props forwarded to `<Button>`. Defaults to outline/neutral/sm. */
   variant?: ButtonProps['variant'];
   tone?: ButtonProps['tone'];
   size?: ButtonProps['size'];
   shape?: ButtonProps['shape'];
+  /** Field appearance matches text inputs; default preserves the compact trigger. */
+  appearance?: 'default' | 'field';
   /**
    * Which edge of the trigger to align the panel to.
    * `"bottom-left"` (default) opens below, left-aligned.
@@ -72,7 +76,7 @@ type SelectProps<T extends string = string> = {
   align?: 'bottom-left' | 'bottom-right' | 'top-left' | 'top-right';
   /**
    * When true, the trigger button only shows the current option's icon
-   * (plus the chevron). The label text in the dropdown is unaffected.
+   * (plus the appearance's indicator). The label text in the dropdown is unaffected.
    */
   iconOnly?: boolean;
   /**
@@ -123,10 +127,12 @@ export function Select<T extends string = string>({
   menuClassName,
   title,
   ariaLabel,
+  'aria-describedby': ariaDescribedBy,
   variant = 'outline',
   tone = 'neutral',
   size = 'sm',
   shape = 'default',
+  appearance = 'default',
   align = 'bottom-left',
   iconOnly = false,
   onOpen,
@@ -186,18 +192,25 @@ export function Select<T extends string = string>({
         <Button
           variant={variant}
           tone={tone}
-          size={size}
+          size={appearance === 'field' ? 'field' : size}
           shape={shape}
           disabled={disabled}
           onClick={handleToggle}
           aria-expanded={isOpen}
           aria-label={ariaLabel}
+          aria-describedby={ariaDescribedBy}
           title={title}
           tooltipWrapperClassName="flex min-w-0 shrink"
           className={cn(
             selectShapeClasses[shape],
             isOpen && 'bg-bg-default',
             iconOnly ? 'gap-0.5 px-1' : 'w-full min-w-0 overflow-hidden',
+            appearance === 'field' &&
+              textInputClassName({
+                size: 'field',
+                className:
+                  '[&>svg:last-child]:text-fg-subtle justify-between text-left',
+              }),
             className,
           )}
         >
@@ -207,9 +220,14 @@ export function Select<T extends string = string>({
               {current?.label ?? placeholder}
             </span>
           )}
-          <ChevronDown
-            className={clsx('transition-transform', isOpen && 'rotate-180')}
-          />
+          {appearance === 'field' ? (
+            <ChevronsUpDown aria-hidden />
+          ) : (
+            <ChevronDown
+              aria-hidden
+              className={clsx('transition-transform', isOpen && 'rotate-180')}
+            />
+          )}
         </Button>
       </div>
       {isOpen && (

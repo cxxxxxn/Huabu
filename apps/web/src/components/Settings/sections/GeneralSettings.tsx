@@ -69,6 +69,7 @@ export const GeneralSettings: React.FC = () => {
         description={t('settings.languageDescription')}
       >
         <Select
+          appearance="field"
           options={LANGUAGE_OPTIONS}
           value={current}
           onChange={handleChange}
@@ -116,7 +117,7 @@ export const GeneralSettings: React.FC = () => {
           <Button
             variant="outline"
             tone="neutral"
-            size="sm"
+            size="field"
             onClick={checkForUpdates}
             disabled={!canCheckForUpdates(updateStatus)}
           >
@@ -132,6 +133,7 @@ export const GeneralSettings: React.FC = () => {
         description={t('settings.inputModeDescription')}
       >
         <Select<InputModePreference>
+          appearance="field"
           options={[
             {
               value: 'auto',

@@ -57,4 +57,21 @@ describe('TextInput', () => {
     expect(input.className).toContain('rounded');
     expect(input.className).not.toContain('rounded-md');
   });
+
+  it('supports the opt-in field density without changing text input semantics', () => {
+    const input = renderTextInput(
+      <TextInput
+        size="field"
+        type="password"
+        aria-label="Credential"
+        aria-invalid
+      />,
+    );
+    expect(input.type).toBe('password');
+    expect(input.classList.contains('text-[13px]')).toBe(true);
+    expect(input.classList.contains('leading-5')).toBe(true);
+    expect(input.classList.contains('min-h-8')).toBe(true);
+    expect(input.classList.contains('rounded-md')).toBe(true);
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+  });
 });

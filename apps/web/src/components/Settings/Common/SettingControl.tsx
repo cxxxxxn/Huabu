@@ -10,5 +10,7 @@ interface SettingControlProps {
 
 /** Standard width and shrink behavior for controls in Settings rows. */
 export function SettingControl({ children, className }: SettingControlProps) {
-  return <div className={cn('w-72 min-w-0', className)}>{children}</div>;
+  return (
+    <div className={cn('w-60 max-w-full min-w-0', className)}>{children}</div>
+  );
 }

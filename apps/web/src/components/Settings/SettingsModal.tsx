@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/Common/Button';
+import { SettingRow } from '@/components/Settings/Common/SettingRow';
 import { SettingSection } from '@/components/Settings/Common/SettingSection';
 import { useAcpProfilesStore } from '@/store/acpProfilesStore';
 import { useDeploymentReadinessStore } from '@/store/deploymentReadinessStore';
@@ -67,14 +68,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const { t } = useTranslation();
   const llmInit = useLLMStore((s) => s.init);
   const acpInit = useAcpProfilesStore((s) => s.init);
-  const defaultProfileId = useAcpProfilesStore(
-    (s) => s.agentDefaults?.profileId,
-  );
   const loadDeploymentReadiness = useDeploymentReadinessStore((s) => s.load);
   const requestedTab = useSettingsUiStore((s) => s.requestedTab);
   const clearRequestedTab = useSettingsUiStore((s) => s.clearRequestedTab);
   const [activeTab, setActiveTab] = useState<SettingsTab>(TABS[0].id);
-  const showBuiltIn = activeTab === 'builtIn' || defaultProfileId === 'huabu';
   const isAgentTab = activeTab === 'agent' || activeTab === 'builtIn';
   const [externalAgentsNavigation, setExternalAgentsNavigation] =
     useState<ExternalAgentsNavigation | null>(null);
@@ -89,10 +86,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     },
     [],
   );
-
-  useEffect(() => {
-    if (externalAgentsNavigation) contentHeadingRef.current?.focus();
-  }, [externalAgentsNavigation]);
 
   // Deep-link support: a caller (e.g. the chat "Add agent" row) can ask
   // to open Settings on a specific tab via `settingsUiStore.open(tab)`.
@@ -119,19 +112,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     if (!isOpen) return;
     const targetTab = requestedTab ?? activeTab;
     if (targetTab === 'agent') void acpInit();
-    if (
-      targetTab === 'builtIn' ||
-      (targetTab === 'agent' && defaultProfileId === 'huabu')
-    ) {
+    if (targetTab === 'builtIn') {
       void llmInit();
     }
-  }, [isOpen, requestedTab, activeTab, defaultProfileId, llmInit, acpInit]);
+  }, [isOpen, requestedTab, activeTab, llmInit, acpInit]);
 
   // Close on Escape.
   useEffect(() => {
     if (!isOpen) return;
     previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
-    const focusTimer = window.setTimeout(() => dialogRef.current?.focus(), 0);
+    const focusTimer = window.setTimeout(() => {
+      if (!dialogRef.current?.contains(document.activeElement)) {
+        contentHeadingRef.current?.focus();
+      }
+    }, 0);
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       const openDialogs = document.querySelectorAll(
@@ -147,6 +141,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       previouslyFocusedRef.current = null;
     };
   }, [isOpen, onClose]);
+
+  useEffect(() => {
+    if (isOpen) contentHeadingRef.current?.focus();
+  }, [isOpen, activeTab]);
+
+  useEffect(() => {
+    if (externalAgentsNavigation) contentHeadingRef.current?.focus();
+  }, [externalAgentsNavigation]);
 
   if (!isOpen) return null;
 
@@ -181,10 +183,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         className="animate-in fade-in zoom-in-95 border-edge-default bg-surface shadow-bottom relative flex h-[80vh] max-h-160 w-full max-w-3xl overflow-hidden rounded-xl border duration-200 focus:outline-none"
       >
         {/* Left tab rail */}
-        <nav className="border-edge-default bg-bg-default flex w-48 shrink-0 flex-col gap-0.5 border-r py-3 pr-3">
+        <nav
+          aria-labelledby={titleId}
+          className="border-edge-default bg-sidebar flex w-48 shrink-0 flex-col gap-0.5 border-r px-3 py-3"
+        >
           <h2
             id={titleId}
-            className="text-fg-default mb-2 pr-2 pl-3 text-sm font-semibold"
+            className="text-fg-default mb-2 flex h-7 shrink-0 items-center px-2 text-sm font-semibold"
           >
             {t('settings.title')}
           </h2>
@@ -192,19 +197,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             const active =
               id === activeTab || (id === 'agent' && activeTab === 'builtIn');
             return (
-              <button
+              <Button
                 key={id}
-                type="button"
+                variant="ghost"
+                tone="neutral"
+                size="md"
                 onClick={() => setActiveTab(id)}
                 aria-current={active ? 'page' : undefined}
-                className={`flex items-center gap-2 border-l-2 py-1.5 pr-2 pl-3 text-left text-xs transition-colors ${
+                className={`focus-visible:outline-info min-h-[30px] w-full justify-start gap-2 rounded-lg px-2 py-0 text-left text-sm focus-visible:outline-2 focus-visible:outline-offset-2 ${
                   active
-                    ? 'border-info text-fg-default font-medium'
-                    : 'text-fg-muted hover:text-fg-default border-transparent'
+                    ? 'bg-sidebar-selected text-fg-default enabled:hover:bg-sidebar-selected font-medium'
+                    : 'text-fg-muted enabled:hover:text-fg-default font-normal'
                 }`}
               >
                 <span className="truncate">{t(labelKey)}</span>
-              </button>
+              </Button>
             );
           })}
 
@@ -215,23 +222,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
            * editable preferences. `__APP_VERSION__` is inlined at build
            * time from `apps/desktop/package.json` (see vite.config.ts).
            */}
-          <span className="text-fg-subtle mt-auto px-3 pt-2 font-mono text-[11px] select-text">
+          <span className="text-fg-subtle mt-auto px-2 pt-4 font-mono text-[11px] select-text">
             v{__APP_VERSION__}
           </span>
         </nav>
 
         {/* Right content pane */}
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="border-edge-default flex shrink-0 items-center justify-between border-b px-5 py-3">
+          <header className="flex h-[52px] shrink-0 items-center justify-between px-5 py-3">
             <div className="flex min-w-0 items-center gap-1.5">
-              {activeTab === 'agent' && externalAgentsNavigation && (
+              {(activeTab === 'builtIn' ||
+                (activeTab === 'agent' && externalAgentsNavigation)) && (
                 <Button
                   variant="ghost"
                   tone="neutral"
                   size="sm"
                   iconOnly
                   title={t('settings.backToAgents')}
-                  onClick={externalAgentsNavigation.onBack}
+                  onClick={
+                    activeTab === 'builtIn'
+                      ? () => setActiveTab('agent')
+                      : externalAgentsNavigation?.onBack
+                  }
                 >
                   <ArrowLeft />
                 </Button>
@@ -244,17 +256,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 {contentTitle}
               </h3>
             </div>
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              tone="neutral"
+              size="md"
+              iconOnly
               onClick={onClose}
-              className="text-fg-muted hover:bg-hover hover:text-fg-default rounded-md p-1 transition-colors"
+              className="text-fg-subtle enabled:hover:text-fg-default focus-visible:outline-info h-7 w-7 shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2"
               aria-label={t('actions.close')}
             >
-              <X size={18} />
-            </button>
+              <X size={16} />
+            </Button>
           </header>
 
-          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 pt-0 pb-4">
             <DeploymentReadinessNotice />
             {activeTab === 'general' && (
               <SettingSection>
@@ -271,21 +286,44 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       onNavigationChange={handleExternalAgentsNavigationChange}
                     />
                   </div>
+                  {externalAgentsNavigation ? null : <AgentDefaultsSettings />}
                   {externalAgentsNavigation ? null : (
                     <>
-                      <AgentDefaultsSettings />
-                      {showBuiltIn ? <LLMSettings /> : null}
-                    </>
-                  )}
-                  {externalAgentsNavigation ? null : (
-                    <>
-                      <SettingSection title={t('settings.agentBehavior')}>
+                      <SettingSection
+                        title={t('settings.agentBehavior')}
+                        collapsible
+                        defaultCollapsed
+                        keepMounted
+                      >
                         <AgentBehaviorSettings />
                       </SettingSection>
                       <SettingSection
                         title={t('settings.externalAgentRuntime')}
+                        collapsible
+                        defaultCollapsed
+                        keepMounted
                       >
                         <ExternalAgentRuntimeSettings />
+                      </SettingSection>
+                      <SettingSection
+                        title={t('settings.builtInPi')}
+                        collapsible
+                        defaultCollapsed
+                        keepMounted
+                      >
+                        <SettingRow
+                          title={t('settings.builtInPiConfiguration')}
+                          description={t('settings.builtInPiChatSetup')}
+                        >
+                          <Button
+                            variant="outline"
+                            size="field"
+                            aria-label={t('settings.builtInPiConfigure')}
+                            onClick={() => setActiveTab('builtIn')}
+                          >
+                            {t('settings.configure')}
+                          </Button>
+                        </SettingRow>
                       </SettingSection>
                     </>
                   )}
@@ -297,7 +335,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   {t('settings.servicesDescription')}
                 </p>
                 <div
-                  className="space-y-4 [&_section]:mb-0"
+                  className="flex flex-col gap-3 [&_section]:mb-0"
                   data-testid="service-sections"
                 >
                   <ServicesSettings />

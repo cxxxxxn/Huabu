@@ -50,7 +50,7 @@ export const OAuthDeviceCodePrompt: React.FC<OAuthDeviceCodePromptProps> = ({
         <Button
           variant="ghost"
           iconOnly
-          size="sm"
+          size="field"
           tone={codeCopied ? 'success' : 'info'}
           title={codeCopied ? t('settings.copied') : t('settings.copyCode')}
           tooltipPlacement="bottom"
@@ -63,14 +63,14 @@ export const OAuthDeviceCodePrompt: React.FC<OAuthDeviceCodePromptProps> = ({
         <Button
           variant="outline"
           tone="info"
-          size="sm"
+          size="field"
           onClick={openVerificationPage}
           disabled={!verificationUri}
         >
           <ExternalLink />
           {t('settings.openGitHub')}
         </Button>
-        <Button variant="ghost" tone="neutral" size="sm" onClick={onCancel}>
+        <Button variant="ghost" tone="neutral" size="field" onClick={onCancel}>
           {t('actions.cancel')}
         </Button>
       </div>

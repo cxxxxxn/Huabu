@@ -188,6 +188,136 @@ afterEach(() => {
 });
 
 describe('ExternalAgentsSettings', () => {
+  it('starts both list sections expanded and keeps Add actions available when collapsed', async () => {
+    await renderSettings();
+    const device = container?.querySelector<HTMLButtonElement>(
+      '[data-editor-trigger="connect-device"]',
+    );
+    const agent = container?.querySelector<HTMLButtonElement>(
+      '[data-editor-trigger="create"]',
+    );
+    for (const [trigger, label] of [
+      [device, 'settings.connectedDevices'],
+      [agent, 'settings.agentProfiles'],
+    ] as const) {
+      const section = trigger?.closest('section');
+      const heading = section?.querySelector<HTMLButtonElement>(
+        'button[aria-expanded]',
+      );
+      const card = section?.querySelector<HTMLElement>('.divide-y');
+      expect(heading?.getAttribute('aria-expanded')).toBe('true');
+      await click(label);
+      expect(heading?.getAttribute('aria-expanded')).toBe('false');
+      expect(card?.hidden).toBe(true);
+      expect(trigger?.closest('[hidden]')).toBeNull();
+      expect(trigger?.disabled).toBe(false);
+      await click(label);
+      expect(card?.hidden).toBe(false);
+      expect(section?.querySelector('.divide-y')).toBe(card);
+    }
+    await click('settings.connectedDevices');
+    await click('settings.addDevice');
+    expect(container?.textContent).toContain('git clone');
+    expect(container?.textContent).not.toContain('settings.connectedDevices');
+  });
+
+  it.each([false, true])(
+    'puts both Add actions beside headings outside the list with empty lists: %s',
+    async (empty) => {
+      await renderSettings();
+      if (empty) {
+        await act(async () =>
+          useAcpProfilesStore.setState({ profiles: [], connectedDevices: [] }),
+        );
+      }
+      const device = container?.querySelector<HTMLButtonElement>(
+        '[data-editor-trigger="connect-device"]',
+      );
+      const agent = container?.querySelector<HTMLButtonElement>(
+        '[data-editor-trigger="create"]',
+      );
+      for (const button of [device, agent]) {
+        expect(button?.parentElement?.classList.contains('ml-auto')).toBe(true);
+        expect(
+          button?.parentElement?.parentElement?.querySelector(
+            '[aria-expanded]',
+          ),
+        ).not.toBeNull();
+        const card = button?.closest('section')?.querySelector('.divide-y');
+        expect(card?.contains(button ?? null)).toBe(false);
+        expect(button?.classList.contains('bg-transparent')).toBe(true);
+        expect(button?.classList.contains('text-fg-muted')).toBe(true);
+        expect(button?.classList.contains('text-xs')).toBe(true);
+      }
+      if (empty) {
+        expect(agent?.closest('section')?.textContent).toContain(
+          'settings.noAgents',
+        );
+        expect(agent?.closest('section')?.textContent).toContain(
+          'settings.noConnectedDevicesDescription',
+        );
+      }
+      expect(agent?.disabled).toBe(empty);
+      expect(device?.disabled).toBe(false);
+    },
+  );
+
+  it('uses one Add action per entity without repeating titles and explanations', async () => {
+    await renderSettings();
+    expect(container?.textContent?.match(/settings.addAgent/g)).toHaveLength(1);
+    expect(container?.textContent?.match(/settings.addDevice/g)).toHaveLength(
+      1,
+    );
+    expect(container?.textContent).not.toContain('settings.addAnotherAgent');
+    expect(container?.textContent).not.toContain('settings.connectAgentDevice');
+  });
+
+  it('opens device connection as a focused view and restores the Add device trigger on Back', async () => {
+    await renderSettings();
+    const trigger = container?.querySelector<HTMLButtonElement>(
+      '[aria-label="settings.addDevice"]',
+    );
+    const section = trigger?.closest('section');
+    expect(section?.querySelector('[aria-expanded]')?.textContent).toBe(
+      'settings.connectedDevices',
+    );
+    expect(section?.textContent).toContain('Local machine: linux x64');
+    expect(trigger?.hasAttribute('aria-expanded')).toBe(false);
+    expect(section?.textContent).not.toContain('git clone');
+
+    await click('settings.addDevice');
+    expect(container?.contains(trigger ?? null)).toBe(false);
+    expect(container?.textContent).toContain('git clone');
+    expect(container?.textContent).not.toContain('settings.connectedDevices');
+    expect(container?.textContent).not.toContain('settings.agentProfiles');
+    expect(container?.textContent).not.toContain(
+      'settings.externalAgentIdleTimeout',
+    );
+    expect(apiMocks.detection.mock.lastCall?.[0]).toBe(false);
+    const navigation = onNavigationChange.mock.lastCall?.[0];
+    expect(navigation?.title).toBe('settings.addDevice');
+    expect(navigation?.onBack).toBeTypeOf('function');
+
+    await act(async () => navigation.onBack());
+    const restoredTrigger = container?.querySelector<HTMLButtonElement>(
+      '[data-editor-trigger="connect-device"]',
+    );
+    expect(document.activeElement).toBe(restoredTrigger);
+    expect(container?.textContent).not.toContain('git clone');
+    expect(container?.textContent).toContain('settings.connectedDevices');
+    expect(onNavigationChange.mock.lastCall?.[0]).toBeNull();
+  });
+
+  it('offers connection instructions even when no device is connected', async () => {
+    await renderSettings();
+    await act(async () =>
+      useAcpProfilesStore.setState({ connectedDevices: [] }),
+    );
+    expect(container?.textContent).toContain('settings.noConnectedDevices');
+    await click('settings.addDevice');
+    expect(container?.textContent).toContain('git clone');
+  });
+
   it.each([false, true])(
     'only replaces the catalogue with a loading row before its first load (loaded: %s)',
     async (loaded) => {
@@ -199,6 +329,16 @@ describe('ExternalAgentsSettings', () => {
       expect(container?.textContent?.includes('settings.loadingAgents')).toBe(
         !loaded,
       );
+      expect(
+        container?.querySelector<HTMLButtonElement>(
+          '[data-editor-trigger="create"]',
+        )?.disabled,
+      ).toBe(!loaded);
+      expect(
+        container?.querySelector<HTMLButtonElement>(
+          '[data-editor-trigger="connect-device"]',
+        )?.disabled,
+      ).toBe(false);
       await act(async () =>
         useAcpProfilesStore.setState({ loading: false, loaded: true }),
       );

@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/Common/Button';
+import { Loading } from '@/components/Common/Loading';
 import { Select } from '@/components/Common/Select';
 import { TextInput } from '@/components/Common/TextInput';
 import { toast } from '@/components/Common/Toast';
@@ -48,6 +49,7 @@ const BaseUrlRow: React.FC<BaseUrlRowProps> = ({
     <SettingRow title={title} description={description}>
       <SettingControl>
         <TextInput
+          size="field"
           type="url"
           inputMode="url"
           autoCapitalize="none"
@@ -69,22 +71,9 @@ const BaseUrlRow: React.FC<BaseUrlRowProps> = ({
   );
 };
 
-/**
- * LLM provider/model configuration section.
- *
- * Two independent sub-sections:
- *  - **LLM Provider** (chat) — drives `llmComplete` and the agent
- *    runtime. Any provider pi-ai knows about (OpenAI, Anthropic,
- *    Azure, Copilot …).
- *  - **Image Provider** (generate_image tool) — only Azure today, but
- *    fully decoupled from the chat provider, so users can pair a
- *    Copilot chat model with an Azure image deployment.
- *
- * Every field auto-saves on a 600 ms debounce after the last keystroke
- * — no Save button. Selecting from a `<Select>` saves immediately.
- */
-export const LLMSettings: React.FC = () => {
+function BuiltinModelSettings({ section }: { section: 'chat' | 'utility' }) {
   const { t } = useTranslation();
+  const init = useLLMStore((s) => s.init);
   const llmConfig = useLLMStore((s) => s.config);
   const llmProviders = useLLMStore((s) => s.providers);
   const llmModels = useLLMStore((s) => s.models);
@@ -123,6 +112,10 @@ export const LLMSettings: React.FC = () => {
   const [utilityManualModel, setUtilityManualModel] = useState('');
   const [utilityBaseUrl, setUtilityBaseUrl] = useState('');
   const utilityFollowsChat = !utilityConfig?.provider;
+
+  useEffect(() => {
+    if (section === 'utility') void init();
+  }, [section, init]);
 
   const isAzure = llmConfig?.provider === 'azure-openai';
   const selectedProvider = llmProviders.find(
@@ -195,12 +188,12 @@ export const LLMSettings: React.FC = () => {
   // ── Utility handlers ──
   const handleUtilityFollowChange = async (follow: boolean) => {
     if (follow) {
-      // Empty provider → follow the chat model.
+      // Empty provider restores automatic utility model selection.
       await updateUtilityConfig({ provider: '', model: '' });
       return;
     }
-    // Seed with the current chat provider so the picker starts valid.
-    const provider = llmConfig?.provider ?? '';
+    // Prefer the chat provider when initializing a custom utility model.
+    const provider = llmConfig?.provider || llmProviders[0]?.id || '';
     if (provider) await loadUtilityModels(provider);
     await updateUtilityConfig({ provider, model: '' });
   };
@@ -250,353 +243,405 @@ export const LLMSettings: React.FC = () => {
     await loadUtilityModels(provider);
   };
 
+  if (section === 'utility' && !utilityConfig) {
+    return (
+      <SettingRow title={t('settings.agentDefaultsModel')}>
+        {llmError ? (
+          <div
+            className="text-danger flex items-center gap-2 text-xs"
+            role="alert"
+          >
+            {llmError}
+            <Button variant="ghost" size="field" onClick={() => void init()}>
+              {t('chat.retryAgentOptions')}
+            </Button>
+          </div>
+        ) : (
+          <Loading layout="inline" size="sm" />
+        )}
+      </SettingRow>
+    );
+  }
+
   return (
     <>
-      <SettingSection title={t('settings.chatModel')} collapsible>
-        <SettingRow title={t('settings.provider')}>
-          <SettingControl>
-            <Select
-              options={llmProviders.map((p) => ({
-                value: p.id,
-                label: p.name,
-              }))}
-              value={llmConfig?.provider ?? ''}
-              onChange={(v) => void handleProviderChange(v)}
-              disabled={llmSaving}
-              placeholder={t('settings.selectProvider')}
-              ariaLabel={t('settings.provider')}
-              className="w-full"
-            />
-          </SettingControl>
-        </SettingRow>
-
-        {canOverrideBaseUrl && (
-          <BaseUrlRow
-            key={llmConfig?.provider}
-            title={
-              isAzure ? (
-                t('settings.endpoint')
-              ) : (
-                <SettingLabel optional>{t('settings.baseUrl')}</SettingLabel>
-              )
-            }
-            description={isAzure ? undefined : t('settings.baseUrlDescription')}
-            placeholder={
-              selectedProvider?.baseUrl.default ??
-              'https://…cognitiveservices.azure.com/openai/v1'
-            }
-            value={chatBaseUrl}
-            disabled={llmSaving}
-            onChange={setChatBaseUrl}
-            onSave={(baseUrl) => saveChat({ baseUrl })}
-          />
-        )}
-
-        {/* Azure OpenAI — dedicated multi-field cluster */}
-        {isAzure && (
-          <>
-            <SettingRow title={t('settings.deployment')}>
-              <SettingControl>
-                <TextInput
-                  type="text"
-                  aria-label={t('settings.deployment')}
-                  placeholder="e.g. gpt-5-chat"
-                  value={azureDeployment}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setAzureDeployment(v);
-                    debouncedSaveChat({ model: v });
-                  }}
-                  className="w-full"
-                />
-              </SettingControl>
-            </SettingRow>
-
-            <SettingRow title={t('settings.apiVersion')}>
-              <SettingControl>
-                <TextInput
-                  type="text"
-                  aria-label={t('settings.apiVersion')}
-                  placeholder="e.g. 2025-04-01-preview"
-                  value={azureApiVersion}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setAzureApiVersion(v);
-                    debouncedSaveChat({ apiVersion: v });
-                  }}
-                  className="w-full"
-                />
-              </SettingControl>
-            </SettingRow>
-
-            <ApiKeyRow
-              title={t('settings.apiKey')}
-              description={
-                llmConfig?.authenticated
-                  ? t('settings.savedKeyKeepEmpty')
-                  : t('settings.azureKeyRequired')
-              }
-              saved={llmConfig?.authenticated ?? false}
-              placeholder="Azure key"
-              disabled={credentialWritesDisabled}
-              saving={llmSaving}
-              onSave={(key) => saveChat({ apiKey: key })}
-            />
-          </>
-        )}
-
-        {/* OAuth auth row */}
-        {llmConfig && isOAuth && !oauthPending && (
-          <SettingRow title={t('settings.authentication')}>
-            {llmConfig.authenticated ? (
-              <Button
-                variant="ghost"
-                tone="neutral"
-                size="sm"
-                onClick={() => void llmLogoutOAuth()}
-                disabled={credentialWritesDisabled}
-              >
-                <LogOut />
-                {t('settings.logout')}
-              </Button>
-            ) : (
-              <Button
-                variant="outline"
-                tone="info"
-                size="sm"
-                onClick={() => void startOAuth()}
-                disabled={oauthPending || credentialWritesDisabled}
-              >
-                <LogIn />
-                {t('settings.login')}
-              </Button>
-            )}
-          </SettingRow>
-        )}
-
-        {/* OAuth pending — full-width row */}
-        {llmConfig && isOAuth && oauthPending && oauthUserCode && (
-          <OAuthDeviceCodePrompt
-            userCode={oauthUserCode}
-            verificationUri={oauthVerificationUri}
-            onCancel={cancelOAuth}
-          />
-        )}
-
-        {/* Generic API-key providers use the shared intentional edit flow. */}
-        {llmConfig && !isOAuth && !isAzure && (
-          <ApiKeyRow
-            title={t('settings.apiKey')}
-            description={
-              llmConfig.authenticated
-                ? t('settings.savedKeyKeepEmpty')
-                : t('settings.providerKeyRequired')
-            }
-            saved={llmConfig.authenticated}
-            placeholder="sk-…"
-            disabled={credentialWritesDisabled}
-            saving={llmSaving}
-            onSave={handleSaveChatKey}
-          />
-        )}
-
-        {/* Model picker comes last: for account-based providers the list is
-            only accurate once the key / login above is configured. */}
-        {llmConfig?.provider && llmModels.length > 0 && !isAzure && (
-          <SettingRow
-            title={t(
-              llmModels.length > 1 ? 'settings.defaultModel' : 'settings.model',
-            )}
-            description={
-              llmModels.length > 1
-                ? t('settings.chatModelDefaultDesc')
-                : undefined
-            }
-          >
+      {section === 'chat' && (
+        <SettingSection title={t('settings.chatModel')} collapsible>
+          <SettingRow title={t('settings.provider')}>
             <SettingControl>
               <Select
-                options={llmModels.map((m) => ({
-                  value: m.id,
-                  label: m.name || m.id,
+                appearance="field"
+                options={llmProviders.map((p) => ({
+                  value: p.id,
+                  label: p.name,
                 }))}
-                value={llmConfig?.model ?? ''}
-                onChange={(v) => void handleModelChange(v)}
+                value={llmConfig?.provider ?? ''}
+                onChange={(v) => void handleProviderChange(v)}
                 disabled={llmSaving}
-                ariaLabel={t(
-                  llmModels.length > 1
-                    ? 'settings.defaultModel'
-                    : 'settings.model',
-                )}
+                placeholder={t('settings.selectProvider')}
+                ariaLabel={t('settings.provider')}
                 className="w-full"
               />
             </SettingControl>
           </SettingRow>
-        )}
 
-        {llmConfig?.provider && llmModels.length === 0 && !isAzure && (
-          <SettingRow title={t('settings.model')}>
-            <SettingControl>
-              <TextInput
-                type="text"
-                aria-label={t('settings.model')}
-                placeholder="e.g. gpt-4o"
-                value={manualModel}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setManualModel(v);
-                  debouncedSaveChat({ model: v.trim() });
-                }}
-                className="w-full"
-              />
-            </SettingControl>
-          </SettingRow>
-        )}
-      </SettingSection>
+          {canOverrideBaseUrl && (
+            <BaseUrlRow
+              key={llmConfig?.provider}
+              title={
+                isAzure ? (
+                  t('settings.endpoint')
+                ) : (
+                  <SettingLabel optional>{t('settings.baseUrl')}</SettingLabel>
+                )
+              }
+              description={
+                isAzure ? undefined : t('settings.baseUrlDescription')
+              }
+              placeholder={
+                selectedProvider?.baseUrl.default ??
+                'https://…cognitiveservices.azure.com/openai/v1'
+              }
+              value={chatBaseUrl}
+              disabled={llmSaving}
+              onChange={setChatBaseUrl}
+              onSave={(baseUrl) => saveChat({ baseUrl })}
+            />
+          )}
 
-      <SettingSection title={t('settings.utilityModel')} collapsible>
-        <SettingRow
-          title={t('settings.followChatModel')}
-          description={t('settings.utilityModelDesc')}
-        >
-          <Toggle
-            checked={utilityFollowsChat}
-            onChange={(follow) => void handleUtilityFollowChange(follow)}
-            disabled={utilitySaving}
-            label={t('settings.followChatModel')}
-          />
-        </SettingRow>
-
-        {!utilityFollowsChat && (
-          <>
-            <SettingRow title={t('settings.provider')}>
-              <SettingControl>
-                <Select
-                  options={llmProviders.map((p) => ({
-                    value: p.id,
-                    label: p.name,
-                  }))}
-                  value={utilityConfig?.provider ?? ''}
-                  onChange={(v) => void handleUtilityProviderChange(v)}
-                  disabled={utilitySaving}
-                  placeholder={t('settings.selectProvider')}
-                  ariaLabel={t('settings.provider')}
-                  className="w-full"
-                />
-              </SettingControl>
-            </SettingRow>
-
-            {canOverrideUtilityBaseUrl && (
-              <BaseUrlRow
-                key={utilityConfig?.provider}
-                title={
-                  utilityConfig?.provider === 'azure-openai' ? (
-                    t('settings.endpoint')
-                  ) : (
-                    <SettingLabel optional>
-                      {t('settings.baseUrl')}
-                    </SettingLabel>
-                  )
-                }
-                description={
-                  utilityConfig?.provider === 'azure-openai'
-                    ? undefined
-                    : t('settings.baseUrlDescription')
-                }
-                placeholder={
-                  utilitySelectedProvider?.baseUrl.default ??
-                  'https://…cognitiveservices.azure.com/openai/v1'
-                }
-                value={utilityBaseUrl}
-                disabled={utilitySaving}
-                onChange={setUtilityBaseUrl}
-                onSave={(baseUrl) => saveUtility({ baseUrl })}
-              />
-            )}
-
-            {/* OAuth providers (e.g. Copilot) authenticate via login, which
-                is shared with the chat tier — never an inline API key. */}
-            {utilityConfig && isUtilityOAuth ? (
-              utilityConfig.authenticated ? (
-                <SettingRow
-                  title={t('settings.authentication')}
-                  description={t('settings.utilityUsesLogin')}
-                >
-                  <Check size={14} className="text-success" />
-                </SettingRow>
-              ) : (
-                <SettingRow
-                  title={t('settings.authentication')}
-                  description={t('settings.utilityLoginRequired')}
-                >
-                  <Button
-                    variant="outline"
-                    tone="info"
-                    size="sm"
-                    onClick={() => void startOAuth()}
-                    disabled={oauthPending || credentialWritesDisabled}
-                  >
-                    <LogIn />
-                    {t('settings.login')}
-                  </Button>
-                </SettingRow>
-              )
-            ) : (
-              utilityConfig && (
-                <ApiKeyRow
-                  title={t('settings.apiKey')}
-                  description={
-                    utilityConfig.authenticated
-                      ? t('settings.savedKeyKeepEmpty')
-                      : t('settings.providerKeyRequired')
-                  }
-                  saved={utilityConfig.authenticated}
-                  placeholder="sk-…"
-                  disabled={credentialWritesDisabled}
-                  saving={utilitySaving}
-                  onSave={handleSaveUtilityKey}
-                />
-              )
-            )}
-
-            {/* Model picker last — account-based lists need the key/login
-                above configured first. */}
-            {utilityModels.length > 0 ? (
-              <SettingRow title={t('settings.model')}>
-                <SettingControl>
-                  <Select
-                    options={utilityModels.map((m) => ({
-                      value: m.id,
-                      label: m.name || m.id,
-                    }))}
-                    value={utilityConfig?.model ?? ''}
-                    onChange={(v) => void handleUtilityModelChange(v)}
-                    disabled={utilitySaving}
-                    ariaLabel={t('settings.model')}
-                    className="w-full"
-                  />
-                </SettingControl>
-              </SettingRow>
-            ) : (
-              <SettingRow title={t('settings.model')}>
+          {/* Azure OpenAI — dedicated multi-field cluster */}
+          {isAzure && (
+            <>
+              <SettingRow title={t('settings.deployment')}>
                 <SettingControl>
                   <TextInput
+                    size="field"
                     type="text"
-                    aria-label={t('settings.model')}
-                    placeholder="e.g. gpt-4o-mini"
-                    value={utilityManualModel}
+                    aria-label={t('settings.deployment')}
+                    placeholder="e.g. gpt-5-chat"
+                    value={azureDeployment}
                     onChange={(e) => {
                       const v = e.target.value;
-                      setUtilityManualModel(v);
-                      debouncedSaveUtility({ model: v.trim() });
+                      setAzureDeployment(v);
+                      debouncedSaveChat({ model: v });
                     }}
                     className="w-full"
                   />
                 </SettingControl>
               </SettingRow>
-            )}
-          </>
-        )}
-      </SettingSection>
+
+              <SettingRow title={t('settings.apiVersion')}>
+                <SettingControl>
+                  <TextInput
+                    size="field"
+                    type="text"
+                    aria-label={t('settings.apiVersion')}
+                    placeholder="e.g. 2025-04-01-preview"
+                    value={azureApiVersion}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setAzureApiVersion(v);
+                      debouncedSaveChat({ apiVersion: v });
+                    }}
+                    className="w-full"
+                  />
+                </SettingControl>
+              </SettingRow>
+
+              <ApiKeyRow
+                title={t('settings.apiKey')}
+                description={
+                  llmConfig?.authenticated
+                    ? t('settings.savedKeyKeepEmpty')
+                    : t('settings.azureKeyRequired')
+                }
+                saved={llmConfig?.authenticated ?? false}
+                placeholder="Azure key"
+                disabled={credentialWritesDisabled}
+                saving={llmSaving}
+                onSave={(key) => saveChat({ apiKey: key })}
+              />
+            </>
+          )}
+
+          {/* OAuth auth row */}
+          {llmConfig && isOAuth && !oauthPending && (
+            <SettingRow title={t('settings.authentication')}>
+              {llmConfig.authenticated ? (
+                <Button
+                  variant="ghost"
+                  tone="neutral"
+                  size="field"
+                  onClick={() => void llmLogoutOAuth()}
+                  disabled={credentialWritesDisabled}
+                >
+                  <LogOut />
+                  {t('settings.logout')}
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  tone="info"
+                  size="field"
+                  onClick={() => void startOAuth()}
+                  disabled={oauthPending || credentialWritesDisabled}
+                >
+                  <LogIn />
+                  {t('settings.login')}
+                </Button>
+              )}
+            </SettingRow>
+          )}
+
+          {/* OAuth pending — full-width row */}
+          {llmConfig && isOAuth && oauthPending && oauthUserCode && (
+            <OAuthDeviceCodePrompt
+              userCode={oauthUserCode}
+              verificationUri={oauthVerificationUri}
+              onCancel={cancelOAuth}
+            />
+          )}
+
+          {/* Generic API-key providers use the shared intentional edit flow. */}
+          {llmConfig && !isOAuth && !isAzure && (
+            <ApiKeyRow
+              title={t('settings.apiKey')}
+              description={
+                llmConfig.authenticated
+                  ? t('settings.savedKeyKeepEmpty')
+                  : t('settings.providerKeyRequired')
+              }
+              saved={llmConfig.authenticated}
+              placeholder="sk-…"
+              disabled={credentialWritesDisabled}
+              saving={llmSaving}
+              onSave={handleSaveChatKey}
+            />
+          )}
+
+          {/* Model picker comes last: for account-based providers the list is
+            only accurate once the key / login above is configured. */}
+          {llmConfig?.provider && llmModels.length > 0 && !isAzure && (
+            <SettingRow
+              title={t(
+                llmModels.length > 1
+                  ? 'settings.defaultModel'
+                  : 'settings.model',
+              )}
+              description={
+                llmModels.length > 1
+                  ? t('settings.chatModelDefaultDesc')
+                  : undefined
+              }
+            >
+              <SettingControl>
+                <Select
+                  appearance="field"
+                  options={llmModels.map((m) => ({
+                    value: m.id,
+                    label: m.name || m.id,
+                  }))}
+                  value={llmConfig?.model ?? ''}
+                  onChange={(v) => void handleModelChange(v)}
+                  disabled={llmSaving}
+                  ariaLabel={t(
+                    llmModels.length > 1
+                      ? 'settings.defaultModel'
+                      : 'settings.model',
+                  )}
+                  className="w-full"
+                />
+              </SettingControl>
+            </SettingRow>
+          )}
+
+          {llmConfig?.provider && llmModels.length === 0 && !isAzure && (
+            <SettingRow title={t('settings.model')}>
+              <SettingControl>
+                <TextInput
+                  size="field"
+                  type="text"
+                  aria-label={t('settings.model')}
+                  placeholder="e.g. gpt-4o"
+                  value={manualModel}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setManualModel(v);
+                    debouncedSaveChat({ model: v.trim() });
+                  }}
+                  className="w-full"
+                />
+              </SettingControl>
+            </SettingRow>
+          )}
+        </SettingSection>
+      )}
+
+      {section === 'utility' && (
+        <>
+          <SettingRow
+            title={t('settings.followChatModel')}
+            description={t('settings.utilityModelDesc')}
+          >
+            <Toggle
+              checked={utilityFollowsChat}
+              onChange={(follow) => void handleUtilityFollowChange(follow)}
+              disabled={utilitySaving || llmProviders.length === 0}
+              label={t('settings.followChatModel')}
+            />
+          </SettingRow>
+
+          {!utilityFollowsChat && (
+            <>
+              <SettingRow title={t('settings.provider')}>
+                <SettingControl>
+                  <Select
+                    appearance="field"
+                    options={llmProviders.map((p) => ({
+                      value: p.id,
+                      label: p.name,
+                    }))}
+                    value={utilityConfig?.provider ?? ''}
+                    onChange={(v) => void handleUtilityProviderChange(v)}
+                    disabled={utilitySaving}
+                    placeholder={t('settings.selectProvider')}
+                    ariaLabel={t('settings.provider')}
+                    className="w-full"
+                  />
+                </SettingControl>
+              </SettingRow>
+
+              {canOverrideUtilityBaseUrl && (
+                <BaseUrlRow
+                  key={utilityConfig?.provider}
+                  title={
+                    utilityConfig?.provider === 'azure-openai' ? (
+                      t('settings.endpoint')
+                    ) : (
+                      <SettingLabel optional>
+                        {t('settings.baseUrl')}
+                      </SettingLabel>
+                    )
+                  }
+                  description={
+                    utilityConfig?.provider === 'azure-openai'
+                      ? undefined
+                      : t('settings.baseUrlDescription')
+                  }
+                  placeholder={
+                    utilitySelectedProvider?.baseUrl.default ??
+                    'https://…cognitiveservices.azure.com/openai/v1'
+                  }
+                  value={utilityBaseUrl}
+                  disabled={utilitySaving}
+                  onChange={setUtilityBaseUrl}
+                  onSave={(baseUrl) => saveUtility({ baseUrl })}
+                />
+              )}
+
+              {/* OAuth providers (e.g. Copilot) authenticate via login, which
+                is shared with the chat tier — never an inline API key. */}
+              {utilityConfig && isUtilityOAuth ? (
+                utilityConfig.authenticated ? (
+                  <SettingRow
+                    title={t('settings.authentication')}
+                    description={t('settings.utilityUsesLogin')}
+                  >
+                    <Check size={14} className="text-success" />
+                  </SettingRow>
+                ) : (
+                  <SettingRow
+                    title={t('settings.authentication')}
+                    description={t('settings.utilityLoginRequired')}
+                  >
+                    <Button
+                      variant="outline"
+                      tone="info"
+                      size="field"
+                      onClick={() => void startOAuth(utilityConfig.provider)}
+                      disabled={oauthPending || credentialWritesDisabled}
+                    >
+                      <LogIn />
+                      {t('settings.login')}
+                    </Button>
+                  </SettingRow>
+                )
+              ) : (
+                utilityConfig && (
+                  <ApiKeyRow
+                    title={t('settings.apiKey')}
+                    description={
+                      utilityConfig.authenticated
+                        ? t('settings.savedKeyKeepEmpty')
+                        : t('settings.providerKeyRequired')
+                    }
+                    saved={utilityConfig.authenticated}
+                    placeholder="sk-…"
+                    disabled={credentialWritesDisabled}
+                    saving={utilitySaving}
+                    onSave={handleSaveUtilityKey}
+                  />
+                )
+              )}
+
+              {isUtilityOAuth && oauthPending && oauthUserCode && (
+                <OAuthDeviceCodePrompt
+                  userCode={oauthUserCode}
+                  verificationUri={oauthVerificationUri}
+                  onCancel={cancelOAuth}
+                />
+              )}
+
+              {/* Model picker last — account-based lists need the key/login
+                above configured first. */}
+              {utilityModels.length > 0 ? (
+                <SettingRow title={t('settings.model')}>
+                  <SettingControl>
+                    <Select
+                      appearance="field"
+                      options={utilityModels.map((m) => ({
+                        value: m.id,
+                        label: m.name || m.id,
+                      }))}
+                      value={utilityConfig?.model ?? ''}
+                      onChange={(v) => void handleUtilityModelChange(v)}
+                      disabled={utilitySaving}
+                      ariaLabel={t('settings.model')}
+                      className="w-full"
+                    />
+                  </SettingControl>
+                </SettingRow>
+              ) : (
+                <SettingRow title={t('settings.model')}>
+                  <SettingControl>
+                    <TextInput
+                      size="field"
+                      type="text"
+                      aria-label={t('settings.model')}
+                      placeholder="e.g. gpt-4o-mini"
+                      value={utilityManualModel}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setUtilityManualModel(v);
+                        debouncedSaveUtility({ model: v.trim() });
+                      }}
+                      className="w-full"
+                    />
+                  </SettingControl>
+                </SettingRow>
+              )}
+            </>
+          )}
+        </>
+      )}
     </>
   );
-};
+}
+
+export function LLMSettings() {
+  return <BuiltinModelSettings section="chat" />;
+}
+
+export function BuiltinUtilityModelSettings() {
+  return <BuiltinModelSettings section="utility" />;
+}

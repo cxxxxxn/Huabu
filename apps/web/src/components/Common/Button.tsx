@@ -23,7 +23,7 @@ export type ButtonProps = {
   variant?: ButtonVariant;
   shape?: ButtonShape;
   tone?: Tone;
-  size?: 'sm' | 'md' | 'lg';
+  size?: 'sm' | 'md' | 'lg' | 'field';
   iconOnly?: boolean;
   className?: string;
   tooltipWrapperClassName?: string;
@@ -94,18 +94,21 @@ const sizeClasses: Record<NonNullable<ButtonProps['size']>, string> = {
   sm: 'px-2.5 py-1 text-xs gap-1.5',
   md: 'px-3 py-2 text-sm gap-2 font-medium',
   lg: 'px-4 py-2.5 text-base gap-2 font-medium',
+  field: 'min-h-8 px-2.5 py-[5px] text-[13px] leading-5 gap-2',
 };
 
 const iconSizeClasses: Record<NonNullable<ButtonProps['size']>, string> = {
   sm: '[&_svg]:h-3.25 [&_svg]:w-3.25',
   md: '[&_svg]:h-4 [&_svg]:w-4',
   lg: '[&_svg]:h-5 [&_svg]:w-5',
+  field: '[&_svg]:h-3.5 [&_svg]:w-3.5',
 };
 
 const iconOnlySizeClasses: Record<NonNullable<ButtonProps['size']>, string> = {
   sm: 'min-h-6 min-w-6 p-1',
   md: 'p-1.5',
   lg: 'p-2',
+  field: 'size-8 p-2',
 };
 
 /**
@@ -121,6 +124,7 @@ const iconOnlyBadgeShiftClasses: Record<
   sm: 'pt-0.5 pl-0.5 pr-1.5 pb-1.5',
   md: 'pt-1 pl-1 pr-2 pb-2',
   lg: 'pt-1.5 pl-1.5 pr-2.5 pb-2.5',
+  field: 'pt-1.5 pl-1.5 pr-2.5 pb-2.5',
 };
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(

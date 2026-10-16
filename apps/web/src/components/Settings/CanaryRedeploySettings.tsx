@@ -164,7 +164,7 @@ export function CanaryRedeploySettings() {
           <Button
             variant="outline"
             tone="neutral"
-            size="sm"
+            size="field"
             onClick={() => void check(true)}
             disabled={busy}
           >
@@ -175,7 +175,7 @@ export function CanaryRedeploySettings() {
           <Button
             variant="outline"
             tone="warning"
-            size="sm"
+            size="field"
             onClick={() => setConfirming(true)}
             disabled={busy}
           >
@@ -191,6 +191,7 @@ export function CanaryRedeploySettings() {
       >
         <div className="flex items-center gap-2">
           <TextInput
+            size="field"
             id={branchInputId}
             mono
             className="w-40"
@@ -205,7 +206,7 @@ export function CanaryRedeploySettings() {
           <Button
             variant="outline"
             tone="neutral"
-            size="sm"
+            size="field"
             onClick={() => void saveBranch()}
             disabled={busy}
           >
@@ -232,7 +233,7 @@ export function CanaryRedeploySettings() {
             <Button
               variant="outline"
               tone="neutral"
-              size="sm"
+              size="field"
               onClick={() => setConfirming(false)}
               disabled={requesting}
             >
@@ -242,7 +243,7 @@ export function CanaryRedeploySettings() {
               ref={confirmRef}
               variant="solid"
               tone="warning"
-              size="sm"
+              size="field"
               onClick={() => void redeploy()}
               disabled={requesting}
             >

@@ -231,12 +231,17 @@ export function CommandProfileForm({
 
   return (
     <div className="divide-edge-default flex flex-col divide-y">
-      <SettingRow title={t('settings.profileMachine')}>
+      <SettingRow
+        title={t(
+          editing ? 'settings.profileMachineFixed' : 'settings.profileMachine',
+        )}
+      >
         <SettingControl>
           {editing ? (
             <ReadOnlyField value={editingDeviceLabel} />
           ) : (
             <Select
+              appearance="field"
               value={agentletId}
               onChange={onAgentletChange}
               options={connectedDevices.map((device) => ({
@@ -258,6 +263,7 @@ export function CommandProfileForm({
             <ReadOnlyField value={agentName} />
           ) : (
             <Select
+              appearance="field"
               value={cliId}
               onChange={(value) => {
                 setCliId(value);
@@ -280,6 +286,7 @@ export function CommandProfileForm({
         >
           <SettingControl>
             <TextInput
+              size="field"
               id={commandId}
               aria-label={t('settings.launchCommand')}
               value={command}
@@ -365,6 +372,7 @@ export function CommandProfileForm({
       >
         <SettingControl>
           <TextInput
+            size="field"
             id={displayNameId}
             aria-label={t('settings.displayName')}
             value={displayName}
