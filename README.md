@@ -17,6 +17,8 @@
 
 Huabu gives you an infinite work surface where you and your agents think together. Bring ideas, files, open questions, and agents into one living surface, where they stay visible and connected across sessions—and turn clearer thinking into work that ships.
 
+**Bring your own agents.** Huabu is a shared visual interface for the agents you already use. Connect a supported agent harness, keep its model access, authentication, tools, and permissions, and work with it in a Space. You do not need to configure Huabu's built-in model provider to get started.
+
 ## Core Features
 
 - **Bring scattered information together** — drag ideas, notes, documents, and outputs from different chat sessions and sources into one Space, so everything relevant stays visible and connected.
@@ -35,7 +37,11 @@ The current desktop packages target macOS on Apple silicon and Windows on x64. A
 
 ## Quick Start
 
-Follow the [Huabu User Handbook](https://microsoft.github.io/Huabu/docs/) for setup instructions, model configuration, core concepts, and guidance on creating and working in your first Space. The handbook is the canonical source for product usage instructions.
+1. Install and sign in to a supported ACP-compatible agent or adapter on the device where it will run.
+2. Open **Settings > Agent**. Huabu automatically creates Profiles for supported agents discovered on connected devices; use **Add device** or **Add agent** when needed.
+3. Create a Space, add your materials, and select an Agent Profile in Chat to start working.
+
+Built-In Pi is an optional alternative, not a setup requirement. Some capabilities depend on the connected agent and model; optional Huabu services such as OCR, image generation, and web search have separate configuration. See the [Huabu User Handbook](https://microsoft.github.io/Huabu/docs/) for connection instructions, capability limits, and guidance on your first Space. The handbook is the canonical source for product usage instructions.
 
 Huabu does not provide an LLM service as part of the application. Use of a model or external capability may require a separate account, credentials, subscription, or usage charges from its provider.
 
@@ -118,7 +124,7 @@ Skip a single run with `--no-verify`, or disable the hooks again with
 the authoritative gate is CI (`.github/workflows/ci.yml`), which runs lint,
 format, and typecheck on every pull request regardless of local setup.
 
-Configuring a model provider and connecting external coding agents work the same way as in a packaged build, so they are covered in the handbook: [Models and capabilities](https://microsoft.github.io/Huabu/docs/ai/models-and-capabilities) and [External agents](https://microsoft.github.io/Huabu/docs/ai/external-agents). A source build reads its encryption key from `HUABU_SECRET_KEY`, whereas packaged releases use operating-system-protected storage.
+Connecting your agents and configuring optional capabilities work the same way as in a packaged build, so they are covered in the handbook: [External agents](https://microsoft.github.io/Huabu/docs/ai/external-agents) and [Models and capabilities](https://microsoft.github.io/Huabu/docs/ai/models-and-capabilities). A source build reads its encryption key from `HUABU_SECRET_KEY`, whereas packaged releases use operating-system-protected storage.
 
 ## Data, Credentials, and Connected Services
 

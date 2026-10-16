@@ -38,9 +38,10 @@ export default function WorkWithAI() {
     >
       <H2>Choose how to work</H2>
       <P>
-        Huabu offers three ways to work with AI. Start with the outcome you
-        want, then choose the surface that keeps the conversation and any
-        changes in the right place.
+        Connect an agent you already use, then choose the surface that keeps the
+        conversation and any changes in the right place. You do not need to
+        configure Built-In Pi to discuss materials or let a connected agent work
+        on the Space.
       </P>
       <Table
         headers={['What you want to do', 'Use']}
@@ -66,11 +67,10 @@ export default function WorkWithAI() {
         ]}
       />
       <P>
-        See{' '}
-        <DocLink href="/docs/ai/agents-and-status#huabu-chat-and-huabu-agent">
-          Agents &amp; Status
-        </DocLink>{' '}
-        to recognize the distinct Huabu Chat and Huabu Agent characters.
+        Choose your Profile when starting a conversation. See{' '}
+        <DocLink href="/docs/ai/external-agents">External Agents</DocLink> for
+        connection instructions. Built-In Pi also remains available, with
+        separate Huabu Chat and Huabu Agent modes.
       </P>
 
       <H2>Give AI the right context</H2>
@@ -102,8 +102,8 @@ export default function WorkWithAI() {
       <H2>Let Agent work on the Space</H2>
       <ol className={orderedListClassName}>
         <li>
-          Open the Chat Panel and start a new conversation with{' '}
-          <strong>Agent</strong>.
+          Open the Chat Panel and start a new conversation with your connected
+          Agent Profile.
         </li>
         <li>
           Describe both the result and its shape—for example, “group these notes

@@ -45,7 +45,7 @@ const groupsRaw: RawGroup[] = [
         to: '/docs',
         label: 'Quick Start',
         description:
-          'Install Huabu, create your first Space, add material, and complete your first AI conversation.',
+          'Install Huabu, connect your existing agent, and start working together in a Space.',
         load: () => import('./sections/QuickStart'),
       },
     ],
@@ -90,12 +90,14 @@ const groupsRaw: RawGroup[] = [
         to: '/docs/ai/models-and-capabilities',
         label: 'Models & Capabilities',
         description:
-          'Configure the Chat and Utility Models and optional web, image, and video capabilities.',
+          'Use connected agents for conversations and Utility tasks, with optional Built-In Pi and service integrations.',
         load: () => import('./sections/ai/ModelsAndCapabilities'),
       },
       {
         to: '/docs/ai/external-agents',
         label: 'External Agents',
+        description:
+          'Connect your existing agent harnesses, discover Profiles, and work with them in a Space.',
         load: () => import('./sections/ai/ExternalAgents'),
       },
       {
