@@ -350,6 +350,23 @@ test('Agent sections keep their defaults and runtime fields preserve drafts acro
   await expect(input).toBeEnabled();
   expect(readsAfterFirstExpansion).toBeGreaterThan(0);
   expect(reads).toBe(readsAfterFirstExpansion);
+  const timeoutSelect = dialog.getByRole('button', {
+    name: en.settings.externalAgentIdleTimeout,
+    exact: true,
+  });
+  await input.fill('');
+  await timeoutSelect.click();
+  await expect(page.getByRole('option').first()).toBeVisible();
+  await timeoutSelect.press('Shift+Tab');
+  await expect(runtime).toBeFocused();
+  await runtime.press('Space');
+  await expect(runtime).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('option')).toHaveCount(0);
+  await expect(runtime).toBeFocused();
+  await runtime.press('Space');
+  await expect(timeoutSelect).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('option')).toHaveCount(0);
+  await expect(input).toHaveValue('');
   await expect(row.getByRole('button')).toHaveCount(0);
   await input.fill('12');
   expect(writes).toHaveLength(0);

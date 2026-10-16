@@ -2,9 +2,10 @@
 // Licensed under the MIT license.
 
 import { ChevronDown } from 'lucide-react';
-import React, { useId, useState } from 'react';
+import React, { useId, useRef, useState } from 'react';
 
 import { Button } from '@/components/Common/Button';
+import { dismissPopoversWithin } from '@/components/Common/Popover';
 
 import { SettingLabel } from './SettingLabel';
 
@@ -51,6 +52,7 @@ export const SettingSection: React.FC<SettingSectionProps> = ({
   onCollapsedChange,
 }) => {
   const contentId = useId();
+  const contentRef = useRef<HTMLDivElement>(null);
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const [hasExpanded, setHasExpanded] = useState(
     !collapsible || !defaultCollapsed,
@@ -77,6 +79,9 @@ export const SettingSection: React.FC<SettingSectionProps> = ({
                 type="button"
                 onClick={() => {
                   const next = !collapsed;
+                  if (next && contentRef.current) {
+                    dismissPopoversWithin(contentRef.current);
+                  }
                   setCollapsed(next);
                   if (!next) setHasExpanded(true);
                   onCollapsedChange?.(next);
@@ -104,6 +109,7 @@ export const SettingSection: React.FC<SettingSectionProps> = ({
       )}
       {(!isCollapsed || (keepMounted && hasExpanded)) && (
         <div
+          ref={contentRef}
           id={contentId}
           hidden={isCollapsed}
           className="bg-surface divide-edge-default border-edge-default divide-y overflow-hidden rounded-[10px] border"

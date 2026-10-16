@@ -6,6 +6,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Button } from '@/components/Common/Button';
+import { Popover } from '@/components/Common/Popover';
+import { Select } from '@/components/Common/Select';
 
 import { SettingSection } from './SettingSection';
 
@@ -50,6 +52,69 @@ afterEach(() => {
 });
 
 describe('SettingSection', () => {
+  it('dismisses its portaled Select without a pointer press, preserving drafts and unrelated popovers', async () => {
+    const onMount = vi.fn();
+    const onUnmount = vi.fn();
+    const onChange = vi.fn();
+    const unrelatedDismiss = vi.fn();
+    await act(async () =>
+      root.render(
+        <>
+          <SettingSection title="Draft section" collapsible keepMounted>
+            <DraftContent onMount={onMount} onUnmount={onUnmount} />
+            <Select
+              ariaLabel="Draft choice"
+              value="first"
+              options={[{ value: 'first', label: 'First choice' }]}
+              onChange={onChange}
+            />
+          </SettingSection>
+          <Popover onDismiss={unrelatedDismiss}>
+            <span data-testid="unrelated-panel">Unrelated panel</span>
+          </Popover>
+        </>,
+      ),
+    );
+    const heading = container.querySelector<HTMLButtonElement>(
+      'button[aria-controls]',
+    );
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Draft choice"]',
+    );
+    const edit = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent === 'Edit draft',
+    );
+    if (!heading || !trigger || !edit) throw new Error('Missing controls');
+    await act(async () => {
+      edit.click();
+      trigger.click();
+    });
+    expect(document.querySelector('[role="option"]')).not.toBeNull();
+    expect(container.querySelector('[role="option"]')).toBeNull();
+    await act(async () => {
+      heading.focus();
+      heading.click();
+    });
+    expect(heading.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(heading);
+    expect(document.querySelector('[role="option"]')).toBeNull();
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(unrelatedDismiss).not.toHaveBeenCalled();
+    expect(
+      document.querySelector('[data-testid="unrelated-panel"]'),
+    ).not.toBeNull();
+    expect(onMount).toHaveBeenCalledOnce();
+    expect(onUnmount).not.toHaveBeenCalled();
+    expect(onChange).not.toHaveBeenCalled();
+    await act(async () => heading.click());
+    expect(document.querySelector('[role="option"]')).toBeNull();
+    expect(container.querySelector('[data-testid="draft"]')?.textContent).toBe(
+      'draft',
+    );
+    await act(async () => trigger.click());
+    expect(document.querySelector('[role="option"]')).not.toBeNull();
+  });
+
   it('lazily mounts preserved content and retains drafts through collapse and expansion', () => {
     const onMount = vi.fn();
     const onUnmount = vi.fn();
