@@ -18,7 +18,7 @@ import { NODE_ICON } from '../config/nodeIcons';
 const toc: TocEntry[] = [
   { id: '1-download-and-install-huabu', label: 'Download and install Huabu' },
   { id: '2-choose-a-home-folder', label: 'Choose a Home Folder' },
-  { id: '3-configure-models-and-keys', label: 'Configure models and keys' },
+  { id: '3-connect-your-agent', label: 'Connect your agent' },
   { id: '4-create-a-space', label: 'Create a Space' },
   { id: '5-add-content-to-your-space', label: 'Add content to your Space' },
   { id: '6-think-and-work-with-ai', label: 'Think and work with AI' },
@@ -28,7 +28,7 @@ export default function QuickStart() {
   return (
     <PageLayout
       title="Quick Start"
-      description="Install Huabu, create your first Space, add one piece of material, and have your first conversation with AI."
+      description="Install Huabu, connect an agent you already use, and start working together in your first Space."
       toc={toc}
     >
       <H2>1. Download and install Huabu</H2>
@@ -48,38 +48,40 @@ export default function QuickStart() {
         this folder so you can choose where your work lives.
       </P>
 
-      <H2>3. Configure models and keys</H2>
+      <H2>3. Connect your agent</H2>
       <P>
-        Open <strong>Settings</strong> (
+        Huabu is a visual workspace for the agents you already use. Install a
+        supported ACP-compatible agent or adapter and complete its sign-in on
+        the device where it will run. Open <strong>Settings</strong> (
         <SettingsIcon
           aria-label="Settings"
           className="inline-block size-[1em] align-[-0.15em]"
         />
         ) from the app header (or press <Shortcut combo="mod+," />
-        ), then select <strong>Huabu Agent</strong>. The{' '}
-        <strong>Chat Model</strong> is the only model you must set up to get
-        started. Most providers ask for a <strong>Default model</strong>; Azure
-        OpenAI asks for a single <strong>Deployment</strong>. When your provider
-        offers multiple models, you can switch models for one conversation from
-        the Chat Panel without changing the Settings default.
+        ), then select <strong>Agent</strong>. Check{' '}
+        <strong>Connected devices</strong> and <strong>External agents</strong>:
+        supported agents discovered on a connected device receive
+        ready-to-select Profiles automatically.
       </P>
       <P>
-        The same page also holds optional settings — a{' '}
-        <strong>Utility Model</strong> for lightweight background tasks,{' '}
-        <strong>Image Generation</strong>, and capabilities such as{' '}
-        <strong>Web Search</strong> — that you can configure later.
+        Use <strong>Add device</strong> to follow the connection instructions
+        for another device, or <strong>Add agent</strong> to create a Profile
+        with your own working directory or ACP command. See{' '}
+        <DocLink href="/docs/ai/external-agents">External Agents</DocLink> for
+        supported agents and setup details. The agent keeps its own model
+        access, tools, permissions, and provider account.
       </P>
       <Callout tone="info">
-        API keys and sign-in credentials saved in the Huabu desktop app are
-        encrypted at rest using your operating system&apos;s protected storage.
-        Huabu never stores them as plain text.
+        You do not need to configure a built-in model provider to get started.
+        Built-In Pi remains an optional alternative. Review{' '}
+        <strong>Settings &gt; Agent &gt; Utility tasks</strong> for background
+        work, and configure optional integrations separately under{' '}
+        <strong>Settings &gt; Services</strong>. See{' '}
+        <DocLink href="/docs/ai/models-and-capabilities">
+          Models &amp; Capabilities
+        </DocLink>{' '}
+        for capability requirements and limits.
       </Callout>
-      <DocImage
-        src="/docs/quick-start/configure-llm.png"
-        alt="Huabu Agent settings with the Chat Model provider, endpoint, and API key fields"
-        caption="Configure a provider, credentials, and its Chat Model or Deployment in Huabu Agent settings."
-        className="mx-auto max-w-2xl"
-      />
 
       <H2>4. Create a Space</H2>
       <P>
@@ -158,27 +160,25 @@ export default function QuickStart() {
           aria-label="Open chat panel"
           className="inline-block size-[1em] align-[-0.15em]"
         />
-        ), start a new conversation, and choose who you are talking to:
+        ), start a new conversation, and select your connected Agent Profile.
+        You can:
       </P>
       <ul className="text-fg-muted list-disc space-y-1.5 pl-5 text-[15px] leading-relaxed">
         <li>
-          <strong>Huabu Chat</strong> — a plain conversation. Select the nodes
-          you want as context, ask questions, and drag useful parts of a reply
-          back into your Space to keep organizing your thinking.
+          <strong>Discuss your materials</strong> — select the nodes you want as
+          context, ask questions, and drag useful parts of a reply back into
+          your Space to keep organizing your thinking.
         </li>
         <li>
-          <strong>Huabu Agent</strong> — a conversation in which the agent can
-          also act on your Space. It works with your materials and structure and
-          records its changes so you can keep or revert them.
+          <strong>Work on the Space</strong> — ask the agent to create, edit,
+          arrange, or connect materials, then review its changes and keep or
+          revert them.
         </li>
       </ul>
       <P>
-        You can add more agents too. Pair an{' '}
-        <DocLink href="/docs/ai/external-agents">External Agent</DocLink> in{' '}
-        <strong>Settings → External Agents</strong>; afterwards it appears in
-        the Chat Panel as an option when you start a new conversation, bringing
-        its own specialized context or tools, such as understanding a repository
-        or producing a presentation.
+        Start a new conversation to work with another Profile. Each agent brings
+        the tools and capabilities of its own harness; supported model, mode,
+        and permission controls appear when the agent exposes them.
       </P>
       <P>
         Prefer to ask right beside your material? Add an{' '}

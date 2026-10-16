@@ -55,9 +55,11 @@ export default function MemoryAndSkills() {
         you want Agent to preserve a successful repeatable workflow.
       </Callout>
       <Callout tone="info">
-        Memory curation and Skill creation or updates use the Utility Model.
-        Running a Skill to complete a task uses the Chat Model. If Utility is
-        not configured, Huabu uses Chat for authoring too.
+        Automatic Huabu Memory curation currently runs only when Built-In Pi is
+        selected for Utility tasks. Huabu&apos;s built-in Skill authoring flow
+        also remains separate from external agents. A connected agent can
+        provide its own memory, Skills, and commands through its harness; do not
+        assume these are shared with Huabu&apos;s built-in catalogue.
       </Callout>
 
       <H2>Two Memory tiers</H2>

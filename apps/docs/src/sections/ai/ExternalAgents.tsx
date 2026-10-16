@@ -20,7 +20,7 @@ const toc: TocEntry[] = [
   { id: 'access-to-your-space', label: 'Access to your Space' },
   { id: 'before-you-start', label: 'Before you start' },
   { id: 'create-a-profile', label: 'Create a Profile' },
-  { id: 'understand-presets', label: 'Understand Presets' },
+  { id: 'utility-tasks', label: 'Utility tasks' },
   { id: 'use-an-external-agent', label: 'Use an external agent' },
   { id: 'manage-and-troubleshoot', label: 'Manage & troubleshoot' },
 ];
@@ -29,19 +29,21 @@ export default function ExternalAgents() {
   return (
     <PageLayout
       title="External Agents"
-      description="Connect different AI agents, configure them as Profiles in Huabu."
+      description="Bring your existing agent harnesses into a shared visual workspace, without configuring a built-in model provider."
       toc={toc}
     >
       <H2>What is an external agent?</H2>
       <P>
-        External agents are AI agents outside Huabu&apos;s built-in agent
-        system. Huabu currently starts local{' '}
+        Huabu is a visual interface for the agents you already use. An agent
+        harness is the environment that runs your agent and provides its model
+        access, tools, and permissions. Connect{' '}
         <DocLink href="https://agentclientprotocol.com/get-started/agents">
           ACP-compatible agents
-        </DocLink>
-        , connects to them over ACP, and associates each with a working
-        directory and chat thread. Model access, authentication, tools,
-        permissions, and usage charges remain with the agent or its provider.
+        </DocLink>{' '}
+        on a connected device and choose them through saved Profiles. Huabu
+        supplies the Space context, conversation interface, and change review.
+        Authentication and usage charges remain with the agent or its provider.
+        Built-In Pi is optional, not a prerequisite.
       </P>
 
       <H2>Access to your Space</H2>
@@ -64,8 +66,15 @@ export default function ExternalAgents() {
       </Callout>
 
       <H2>Before you start</H2>
-      <P>Prepare the agent on the same computer that runs Huabu:</P>
-      <ol className="list-decimal space-y-2 pl-5 text-[15px] leading-relaxed text-gray-700">
+      <P>
+        Prepare the agent on the device where it will run. For the usual local
+        desktop setup, this is your own computer. For another device, open{' '}
+        <strong>
+          Settings &gt; Agent &gt; Connected devices &gt; Add device
+        </strong>{' '}
+        and follow the Agentlet connection instructions.
+      </P>
+      <ol className="text-fg-muted list-decimal space-y-2 pl-5 text-[15px] leading-relaxed">
         <li>
           <strong>Install an ACP-compatible agent.</strong> Huabu automatically
           detects these ten ACP-capable agent commands or adapters after
@@ -117,52 +126,55 @@ export default function ExternalAgents() {
           background agent process.
         </li>
         <li>
-          <strong>Ensure Huabu can find the agent.</strong> The agent command
-          must be on the operating system&apos;s <Code>PATH</Code> environment
-          variable when Huabu starts. Restart Huabu after installing the agent
-          or changing <Code>PATH</Code>. If the command is still unavailable,
-          use <strong>Custom command</strong> with its absolute executable path.
+          <strong>Ensure the connected device can find the agent.</strong> The
+          agent command must be on the <Code>PATH</Code> inherited by its
+          Agentlet process. Restart the local desktop app or reconnect the
+          device after installing the agent or changing <Code>PATH</Code>.
+          Claude and Codex require their ACP adapters, not only the native CLI.
+          If the command is still unavailable, use{' '}
+          <strong>Custom command</strong> with its absolute executable path.
         </li>
       </ol>
 
       <H2>Create a Profile</H2>
       <P>
-        A <strong>Profile</strong> is Huabu&apos;s saved connection to one
-        external agent in one working directory. Open Settings (
+        A <strong>Profile</strong> is Huabu&apos;s saved connection to one agent
+        harness on a connected device, with a launch configuration and working
+        directory. Supported agents discovered when a device connects receive
+        Profiles automatically; you do not need to create one manually to start
+        using them. Discovery does not install agents or sign in for you.
+      </P>
+      <P>
+        To create another Profile, open Settings (
         <SettingsIcon
           aria-label="Settings"
           className="inline-block size-[1em] align-[-0.15em]"
         />
-        ) &gt; <strong>External Agents</strong>, select{' '}
+        ) &gt; <strong>Agent &gt; External agents</strong>, select{' '}
         <strong>Add agent</strong>, and complete these fields:
       </P>
       <Table
         headers={['Field', 'What to choose']}
         rows={[
           [
-            <strong>Preset</strong>,
-            <>
-              Choose a Preset to give the agent a ready-made role and workflow,
-              including any required tools, configuration, and setup. Leave it
-              set to <strong>None</strong> to use the agent as installed. See{' '}
-              <DocLink href="#understand-presets">Understand Presets</DocLink>.
-            </>,
+            <strong>Device</strong>,
+            'Choose the connected device where the agent will run. Agent commands and working-directory paths belong to that device.',
           ],
           [
             <strong>Agent</strong>,
-            'Installed agents appear first. Agents that are not installed appear in a disabled Not installed section, followed by Custom command. Selecting a Preset filters the list to agents supported by that Preset.',
+            'Choose a supported installed harness, or Custom command for another ACP-compatible launch command. Missing agents or adapters must be installed on the selected device first.',
           ],
           [
             <strong>Auto-approve all tool calls</strong>,
-            'Optional. With no Preset, this appears when Huabu knows the selected agent’s auto-approval option. Enable it only when you trust the agent and the working directory.',
+            'Available only for harnesses that support it. Newly discovered automatic Profiles enable it when supported; review this setting because it bypasses tool confirmations.',
           ],
           [
             <strong>Working directory</strong>,
-            'The local project folder used as the agent process working directory. Each Profile can point to a different folder.',
+            'An absolute folder path on the selected device. Automatic Profiles receive a default workspace; manually created Profiles need a working directory you choose.',
           ],
           [
             <strong>Display name</strong>,
-            'Optional. Huabu derives a name from the agent or Preset and the working-directory folder when you leave it empty.',
+            'A label that identifies this Profile in Settings and Agent selectors.',
           ],
           [
             <strong>Icon</strong>,
@@ -178,104 +190,37 @@ export default function ExternalAgents() {
         to preview the available shapes and colors.
       </P>
       <P>
-        With no Preset, select <strong>Create profile</strong>. The Profile is
-        ready to use immediately. Choose <strong>Custom command</strong> at the
-        end of the Agent menu when you need an absolute path, extra flags, or an
-        ACP agent Huabu does not detect. Enter the complete command Huabu should
-        launch.
+        Save the Profile, then select it when starting a conversation. Use{' '}
+        <strong>Custom command</strong> when you need an absolute executable
+        path, extra flags, or an ACP agent Huabu does not detect. Enter the
+        complete command documented by that agent.
       </P>
 
-      <H2>Understand Presets</H2>
+      <H2>Utility tasks</H2>
       <P>
-        A <strong>Preset</strong> is a ready-made workflow for a specific task.
-        It gives an external agent a specialized role, instructions, and tools,
-        and may configure the working directory for that workflow. A Preset is
-        not a model and does not install the external agent itself.
-      </P>
-      <P>
-        The first release includes the following Presets. Their additional
-        requirements apply alongside the installed and authenticated external
-        agent described above.
-      </P>
-      <Table
-        headers={['Preset', 'What it does', 'Additional requirements']}
-        rows={[
-          [
-            <strong>paper-reviewer</strong>,
-            'Provides a paper-review role and workflow for discussing academic papers and drafting review responses.',
-            'None. It does not install npm tools or skills.',
-          ],
-          [
-            <strong>html-slides-maker</strong>,
-            'Creates static HTML presentations and optional technical diagrams.',
-            <>
-              Node.js with <Code>npx</Code> available on the <Code>PATH</Code>,
-              plus network access to GitHub during setup so Huabu can install
-              the required skills.
-            </>,
-          ],
-          [
-            <strong>hackmd-publisher</strong>,
-            'Turns selected Space material into a HackMD document and writes the published URL back to Huabu.',
-            <>
-              A HackMD API token, Node.js with <Code>npm</Code> and{' '}
-              <Code>npx</Code> available on the <Code>PATH</Code>, access to a
-              working npm registry, and network access to GitHub during setup.
-            </>,
-          ],
-        ]}
-      />
-      <Callout tone="tip">
-        On macOS, Windows, and Linux, <Code>npm</Code> and <Code>npx</Code> are
-        normally installed with Node.js. Verify that <Code>node --version</Code>
-        , <Code>npm --version</Code>, and <Code>npx --version</Code> work in a
-        normal terminal, then restart Huabu after installing Node.js or changing
-        the <Code>PATH</Code>. A company npm mirror is supported as long as it
-        can provide the packages required by the Preset.
-      </Callout>
-      <Table
-        headers={['Without a Preset', 'With a Preset']}
-        rows={[
-          [
-            'Huabu launches the selected agent with its standard ACP command.',
-            "Huabu launches the selected agent with the Preset's managed instructions and tools.",
-          ],
-          [
-            'You can select any installed recognized agent or enter a Custom command.',
-            'You can select only an installed agent supported by that Preset. Custom command is unavailable.',
-          ],
-          [
-            'The Profile is ready as soon as it is created.',
-            'Huabu prepares the working directory before the Profile becomes available.',
-          ],
-          [
-            'No Preset-specific configuration is required.',
-            'The Preset may request tokens or other configuration. Secret values are stored securely and are never displayed again.',
-          ],
-        ]}
-      />
-      <P>
-        After selecting a Preset, complete any fields shown directly below it,
-        choose an available Agent and a working directory, then select{' '}
-        <strong>Create and set up</strong>. Setup continues from the External
-        Agents list. When setup finishes successfully, the setup status and
-        action disappear and the Profile becomes available in Chat. If setup
-        fails, the Profile remains in the list so you can fix its configuration
-        and retry.
+        A connected external Profile can also handle Huabu-owned background
+        tasks such as titles, summaries, keywords, and image labels. Review the
+        selection under <strong>Settings &gt; Agent &gt; Utility tasks</strong>.
+        If no Utility Agent configuration exists, Huabu selects an available
+        external Profile automatically. Existing selections are preserved.
       </P>
       <Callout tone="info">
-        Preset configuration belongs to the Preset and is shared by Profiles
-        created from the same Preset. The working directory and display name
-        still belong to each individual Profile.
+        Utility tasks do not silently fall back to Built-In Pi. The selected
+        device and agent must remain available. Image tasks require image
+        support, and automatic Huabu Memory curation still requires a Built-In
+        Pi Utility Agent. See{' '}
+        <DocLink href="/docs/ai/models-and-capabilities">
+          Models &amp; Capabilities
+        </DocLink>{' '}
+        for optional services and other limits.
       </Callout>
 
       <H2>Use an external agent</H2>
       <P>
-        Once a Profile is available, you can choose it from the agent menus in
-        Chat. A Profile that uses a Preset appears after setup finishes
-        successfully.
+        Once its device is connected, choose the Profile from the agent menus in
+        Chat. You do not need to configure a separate Huabu Chat Model.
       </P>
-      <ul className="list-disc space-y-1.5 pl-5 text-[15px] leading-relaxed text-gray-700">
+      <ul className="text-fg-muted list-disc space-y-1.5 pl-5 text-[15px] leading-relaxed">
         <li>
           To start a new conversation, open the dropdown beside the{' '}
           <strong>New chat</strong> button and select a Profile under{' '}
@@ -290,10 +235,10 @@ export default function ExternalAgents() {
       </ul>
       <P>
         The <strong>Add agent</strong> entry in either menu opens Settings
-        directly on the External Agents page. Send a message to begin the
-        conversation. Huabu opens the selected Agent when needed and continues
-        using it for that conversation. Type <Kbd>/</Kbd> in the message box to
-        see any commands offered by that Agent.
+        directly on the Agent page. Send a message to begin the conversation.
+        Huabu opens the selected Agent when needed and continues using it for
+        that conversation. Type <Kbd>/</Kbd> in the message box to see any
+        commands offered by that Agent.
       </P>
       <Callout tone="info">
         A conversation keeps using the Profile it started with. Start a new
@@ -302,39 +247,42 @@ export default function ExternalAgents() {
 
       <H2>Manage &amp; troubleshoot</H2>
       <P>
-        In <strong>Settings &gt; External Agents</strong>, use{' '}
+        In <strong>Settings &gt; Agent &gt; External agents</strong>, use{' '}
         <Pencil
           aria-label="Edit"
           className="inline-block size-[1em] align-[-0.15em]"
         />{' '}
-        to rename a Profile or update shared Preset configuration, and{' '}
+        to edit a Profile, and{' '}
         <Trash2
           aria-label="Delete"
           className="inline-block size-[1em] align-[-0.15em]"
         />{' '}
-        to remove it from future agent selectors. The launch command, selected
-        agent, Preset, and working directory are fixed after creation; create a
-        new Profile to change them. Existing chat threads keep the connection
-        settings captured when they were created.
+        to remove it from future agent selectors. You can update its name, icon,
+        working directory, and supported launch options. A Custom command
+        Profile also allows command edits. The device and harness identity are
+        fixed; create another Profile to change them. Edits apply to
+        conversations that have not started, not already-running sessions.
+        Deleting a Profile does not delete its working directory, and later
+        discovery can recreate an automatic default.
       </P>
       <Table
         headers={['Symptom', 'What to check']}
         rows={[
           [
             'An Agent is marked not installed',
-            'Install the indicated CLI or adapter, run it once in a terminal, and reopen the Add agent editor. Confirm that Huabu inherits the PATH containing the executable.',
+            'Install the indicated CLI or ACP adapter on the selected device, complete sign-in, and reconnect it. Confirm that Agentlet inherits the PATH containing the executable.',
           ],
           [
             'The Agent menu has no suitable installed agent',
-            'For a Profile without a Preset, use Custom command with the full ACP launch command. A Preset requires one of its supported agents and cannot use a custom command.',
+            'Check Connected devices, then install a supported harness or use Custom command with the full ACP launch command on that device.',
           ],
           [
-            'A Preset Profile is not available in Chat',
-            'Return to External Agents and check its status. Complete the required Preset configuration, then use Set up or Retry. When setup succeeds, the status badge disappears and the Profile becomes available in Chat.',
+            'An existing Profile is not available in Chat',
+            'Confirm that its device is connected. Offline Profiles remain editable in Settings but cannot be selected for new work.',
           ],
           [
-            'Worker offline appears',
-            'Select Restart worker. If the error names a missing executable or path, correct the installation or Profile command first.',
+            'Background tasks fail after changing devices',
+            'Check the selected Profile under Utility tasks. Huabu preserves that selection when a device disconnects or a Profile is deleted; choose another available Profile explicitly.',
           ],
           [
             'The agent starts but does not reply',
