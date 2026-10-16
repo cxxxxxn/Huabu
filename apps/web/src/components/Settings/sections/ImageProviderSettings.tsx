@@ -105,7 +105,7 @@ export const ImageProviderSettings: React.FC = () => {
 
   const saveImage = useCallback(
     (patch: LLMImageConfigUpdate) => {
-      void llmUpdateImageConfig({ provider: 'azure-openai', ...patch });
+      return llmUpdateImageConfig({ provider: 'azure-openai', ...patch });
     },
     [llmUpdateImageConfig],
   );
@@ -268,6 +268,7 @@ export const ImageProviderSettings: React.FC = () => {
             placeholder="Azure key"
             disabled={credentialWritesDisabled}
             saving={llmImageSaving}
+            error={imageError}
             onSave={(key) => saveImage({ apiKey: key })}
             onRemove={() => saveImage({ apiKey: null })}
           />

@@ -43,8 +43,9 @@ export const IntegrationsSettings: React.FC = () => {
         placeholder="tvly-…"
         saving={saving}
         disabled={credentialWritesDisabled}
-        onSave={(key) => void updateConfig({ tavilyApiKey: key })}
-        onRemove={() => void updateConfig({ tavilyApiKey: null })}
+        error={error}
+        onSave={(key) => updateConfig({ tavilyApiKey: key })}
+        onRemove={() => updateConfig({ tavilyApiKey: null })}
       />
       <ApiKeyRow
         title={t('settings.youtubeTranscripts')}
@@ -53,8 +54,9 @@ export const IntegrationsSettings: React.FC = () => {
         placeholder="rapidapi-…"
         saving={saving}
         disabled={credentialWritesDisabled}
-        onSave={(key) => void updateConfig({ rapidApiKey: key })}
-        onRemove={() => void updateConfig({ rapidApiKey: null })}
+        error={error}
+        onSave={(key) => updateConfig({ rapidApiKey: key })}
+        onRemove={() => updateConfig({ rapidApiKey: null })}
       />
     </SettingSection>
   );

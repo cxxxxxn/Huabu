@@ -70,8 +70,8 @@ const providers: LLMProviderInfo[] = [
 ];
 const mocks = {
   init: vi.fn(async () => {}),
-  updateChat: vi.fn(async () => {}),
-  updateUtility: vi.fn(async (_update: LLMUtilityConfigUpdate) => {}),
+  updateChat: vi.fn(async () => true),
+  updateUtility: vi.fn(async (_update: LLMUtilityConfigUpdate) => true),
   loadUtilityModels: vi.fn(async (_provider: string) => {}),
   startOAuth: vi.fn(async (_provider?: string) => {}),
 };

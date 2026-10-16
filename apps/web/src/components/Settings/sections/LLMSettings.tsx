@@ -231,16 +231,18 @@ function BuiltinModelSettings({ section }: { section: 'chat' | 'utility' }) {
   // persists — the model picker renders after the key row.
   const handleSaveChatKey = async (key: string) => {
     const provider = llmConfig?.provider ?? '';
-    if (!provider) return;
-    await llmUpdateConfig({ provider, apiKey: key });
-    await llmLoadModels(provider);
+    if (!provider) throw new Error(t('settings.selectProvider'));
+    const saved = await llmUpdateConfig({ provider, apiKey: key });
+    if (saved && !isAzure) await llmLoadModels(provider);
+    return saved;
   };
 
   const handleSaveUtilityKey = async (key: string) => {
     const provider = utilityConfig?.provider ?? '';
-    if (!provider) return;
-    await updateUtilityConfig({ provider, apiKey: key });
-    await loadUtilityModels(provider);
+    if (!provider) throw new Error(t('settings.selectProvider'));
+    const saved = await updateUtilityConfig({ provider, apiKey: key });
+    if (saved) await loadUtilityModels(provider);
+    return saved;
   };
 
   if (section === 'utility' && !utilityConfig) {
@@ -359,7 +361,8 @@ function BuiltinModelSettings({ section }: { section: 'chat' | 'utility' }) {
                 placeholder="Azure key"
                 disabled={credentialWritesDisabled}
                 saving={llmSaving}
-                onSave={(key) => saveChat({ apiKey: key })}
+                error={llmError}
+                onSave={handleSaveChatKey}
               />
             </>
           )}
@@ -415,6 +418,7 @@ function BuiltinModelSettings({ section }: { section: 'chat' | 'utility' }) {
               placeholder="sk-…"
               disabled={credentialWritesDisabled}
               saving={llmSaving}
+              error={llmError}
               onSave={handleSaveChatKey}
             />
           )}
@@ -579,6 +583,7 @@ function BuiltinModelSettings({ section }: { section: 'chat' | 'utility' }) {
                     placeholder="sk-…"
                     disabled={credentialWritesDisabled}
                     saving={utilitySaving}
+                    error={llmError}
                     onSave={handleSaveUtilityKey}
                   />
                 )

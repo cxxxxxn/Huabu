@@ -27,6 +27,8 @@ For standalone deployments, the encrypted primary backend wins over the environm
 
 The renderer never receives plaintext credentials. Existing HTTP read models continue to return only authentication/status booleans.
 
+Settings credential editors remain open and disable duplicate submissions while a mutation is pending. LLM (chat, utility, and image) and legacy integration stores return an explicit boolean acknowledgement while retaining their existing error state; credential callbacks forward that result to the shared `ApiKeyRow`. Failed saves or removals retain the draft or removal confirmation and display an inline error for retry. Only an acknowledged mutation clears the draft and closes the editor; explicitly cancelling also clears it. Model catalogues refresh only after a successful key save, and a subsequent catalogue-read failure does not turn an acknowledged credential write into a failed save.
+
 Remote Server Basic Auth is separate from Huabu's `SecretStore`. Electron accepts credentials only through a sandboxed prompt for the exact configured Server origin, submits them directly to Chromium's authentication callback, and does not write them to `safeStorage`, server data, process arguments, or renderer state.
 
 Settings API updates for optional service credentials use an explicit three-state patch contract: omitting a key preserves the persisted value, a non-empty string sets or replaces it, and `null` removes the value stored by Huabu. Removing a persisted key preserves non-secret provider configuration and does not alter deployment-owned environment variables; an environment fallback may therefore keep the service available at runtime.

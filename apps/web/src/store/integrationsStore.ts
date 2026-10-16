@@ -25,8 +25,8 @@ interface IntegrationsState {
 
   /** Load the current masked config from the server. */
   init: () => Promise<void>;
-  /** Set API keys or remove them explicitly with null. */
-  updateConfig: (update: IntegrationsConfigUpdate) => Promise<void>;
+  /** Set or remove API keys; return whether the server acknowledged the update. */
+  updateConfig: (update: IntegrationsConfigUpdate) => Promise<boolean>;
 }
 
 export const useIntegrationsStore = create<IntegrationsState>()((set, get) => ({
@@ -57,6 +57,7 @@ export const useIntegrationsStore = create<IntegrationsState>()((set, get) => ({
     try {
       const config = await putIntegrationsConfig(update);
       set({ config, saving: false });
+      return true;
     } catch (err) {
       set({
         error:
@@ -65,6 +66,7 @@ export const useIntegrationsStore = create<IntegrationsState>()((set, get) => ({
             : 'Failed to update integrations config',
         saving: false,
       });
+      return false;
     }
   },
 }));
