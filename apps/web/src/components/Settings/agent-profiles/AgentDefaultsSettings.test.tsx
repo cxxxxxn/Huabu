@@ -34,6 +34,11 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/api/acp', () => ({
   loadAcpProfileCapabilities: mocks.loadCapabilities,
 }));
+vi.mock('../sections/LLMSettings', () => ({
+  BuiltinUtilityModelSettings: () => (
+    <div data-testid="built-in-utility-model" />
+  ),
+}));
 vi.mock('@/store/acpProfilesStore', () => ({
   useAcpProfilesStore: (
     selector: (
@@ -56,17 +61,20 @@ vi.mock('@/components/Common/Select', () => ({
     onChange,
     ariaLabel,
     disabled,
+    className,
   }: {
     options: { value: string; label: string; disabled?: boolean }[];
     value: string;
     onChange: (value: string) => void;
     ariaLabel: string;
     disabled: boolean;
+    className?: string;
   }) => (
     <select
       aria-label={ariaLabel}
       value={value}
       disabled={disabled}
+      className={className}
       onChange={(event) => onChange(event.target.value)}
     >
       {options.map((option) => (
@@ -153,6 +161,61 @@ async function select(value: string, model = false) {
 }
 
 describe('Utility Agent model catalogue', () => {
+  it('keeps one Agent purpose description without a permanent model description', async () => {
+    await render();
+    const profileRow = container
+      .querySelector('select[aria-label="settings.agentDefaultsProfile"]')
+      ?.closest('.setting-row');
+    expect(profileRow?.textContent).toContain(
+      'settings.agentDefaultsSectionDescription',
+    );
+    const modelRow = modelSelect()?.closest('.setting-row');
+    expect(modelRow?.querySelector('.text-fg-subtle')).toBeNull();
+    expect(container.textContent).not.toContain(
+      'settings.agentDefaultsModelDescription',
+    );
+    expect(modelSelect()?.value).toBe('fast');
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('bounds long Agent names with the shared 240px control width without changing selection', async () => {
+    const alias = 'GitHub Copilot (ChristydeMacBook-Air.local: darwin arm64)';
+    mocks.state.profiles[0].alias = alias;
+    await render();
+    const control = container.querySelector<HTMLSelectElement>(
+      'select[aria-label="settings.agentDefaultsProfile"]',
+    );
+    expect(control?.parentElement?.classList.contains('w-60')).toBe(true);
+    expect(control?.parentElement?.classList.contains('max-w-full')).toBe(true);
+    expect(control?.parentElement?.classList.contains('min-w-0')).toBe(true);
+    expect(control?.classList.contains('w-full')).toBe(true);
+    expect(control?.selectedOptions[0]?.textContent).toBe(alias);
+    expect(control?.value).toBe('external');
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('starts expanded and retains failed drafts and retry feedback through collapse', async () => {
+    mocks.update.mockRejectedValueOnce(new Error('disk is read-only'));
+    await render();
+    const heading = container.querySelector<HTMLButtonElement>(
+      'button[aria-expanded]',
+    );
+    if (!heading) throw new Error('Missing Utility tasks heading');
+    expect(heading.getAttribute('aria-expanded')).toBe('true');
+    await select('other', true);
+    const control = modelSelect();
+    expect(control?.value).toBe('other');
+    await act(async () => heading.click());
+    expect(heading.getAttribute('aria-expanded')).toBe('false');
+    expect(control?.closest<HTMLElement>('[hidden]')?.hidden).toBe(true);
+    await act(async () => heading.click());
+    expect(modelSelect()).toBe(control);
+    expect(modelSelect()?.value).toBe('other');
+    expect(container.textContent).toContain('disk is read-only');
+    expect(mocks.get).toHaveBeenCalledOnce();
+    expect(mocks.loadCapabilities).toHaveBeenCalledOnce();
+  });
+
   it('loads a Profile catalogue automatically and shows a selector, not an input', async () => {
     await render();
     expect(mocks.loadCapabilities).toHaveBeenCalledExactlyOnceWith('external');
@@ -286,9 +349,10 @@ describe('Utility Agent model catalogue', () => {
       command: 'copilot --acp',
     };
     await render();
-    const row = modelSelect()?.parentElement?.parentElement?.parentElement;
-    const profileRow =
-      container.querySelector('select')?.parentElement?.parentElement;
+    const row = modelSelect()?.closest('.setting-row');
+    const profileRow = container
+      .querySelector('select')
+      ?.closest('.setting-row');
     expect(row?.className).toBe(profileRow?.className);
     expect(row?.classList.contains('items-center')).toBe(true);
     expect(row?.classList.contains('flex-col')).toBe(false);
@@ -355,7 +419,7 @@ describe('Utility Agent model catalogue', () => {
     expect(modelSelect()?.textContent).not.toContain('Wrong');
   });
 
-  it('leaves Built-In Pi on its existing LLM settings path', async () => {
+  it('shows Built-In utility models only when Pi is selected for utility tasks', async () => {
     mocks.get.mockResolvedValue({
       ...initial,
       defaults: { profileId: 'huabu', functionalModel: '' },
@@ -363,6 +427,14 @@ describe('Utility Agent model catalogue', () => {
     await render();
     expect(modelSelect()).toBeNull();
     expect(mocks.loadCapabilities).not.toHaveBeenCalled();
+    expect(
+      container.querySelector('[data-testid="built-in-utility-model"]'),
+    ).not.toBeNull();
+    await select('external');
+    expect(
+      container.querySelector('[data-testid="built-in-utility-model"]'),
+    ).toBeNull();
+    expect(modelSelect()).not.toBeNull();
   });
 
   it('preserves missing Profile selections and does not probe them', async () => {

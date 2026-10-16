@@ -30,7 +30,7 @@ export function ProfileEditActions({
       <Button
         variant="outline"
         tone="neutral"
-        size="sm"
+        size="field"
         onClick={onCancel}
         disabled={saving}
       >
@@ -39,7 +39,7 @@ export function ProfileEditActions({
       <Button
         variant="solid"
         tone="info"
-        size="sm"
+        size="field"
         onClick={onSave}
         disabled={saving || saveDisabled}
       >

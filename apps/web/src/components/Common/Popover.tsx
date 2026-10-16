@@ -42,8 +42,24 @@ const EscapeLayerContext = createContext<EscapeLayer | null>(null);
 const escapeLayers = new Set<EscapeLayer>();
 const popoverRoots = new Map<
   EscapeLayer,
-  { panel: HTMLDivElement; reference: Element | null | undefined }
+  {
+    panel: HTMLDivElement;
+    reference: Element | null | undefined;
+    dismiss: () => void;
+  }
 >();
+
+/** Close panels owned by content that is about to be hidden, without unmounting its forms. */
+export function dismissPopoversWithin(element: Element): void {
+  for (const root of popoverRoots.values()) {
+    if (
+      element.contains(root.panel) ||
+      (root.reference && element.contains(root.reference))
+    ) {
+      root.dismiss();
+    }
+  }
+}
 
 function isInsidePopoverTree(layer: EscapeLayer, target: Node): boolean {
   for (const [candidate, root] of popoverRoots) {
@@ -73,7 +89,10 @@ function topEscapeLayer(): EscapeLayer | undefined {
   );
 }
 
-export type PopoverDismissReason = 'outside-press' | 'escape';
+export type PopoverDismissReason =
+  | 'outside-press'
+  | 'escape'
+  | 'ancestor-hidden';
 
 /**
  * Tracks the latest mouse position so Popover can default to it
@@ -118,7 +137,7 @@ export type PopoverProps = {
 
   /**
    * Called when the floating panel should close.
-   * Triggers on outside pointer-down and (optionally) on Escape key.
+   * Triggers on outside pointer-down, ancestor hiding, and (optionally) on Escape key.
    */
   onDismiss?: (reason: PopoverDismissReason) => void;
 
@@ -228,7 +247,11 @@ export const Popover: FC<PopoverProps> = ({
   const canDismissOnEscape = Boolean(onDismiss) && dismissOnEscape;
   useLayoutEffect(() => {
     if (!contentElement) return;
-    popoverRoots.set(escapeLayer, { panel: contentElement, reference });
+    popoverRoots.set(escapeLayer, {
+      panel: contentElement,
+      reference,
+      dismiss: () => onDismissRef.current?.('ancestor-hidden'),
+    });
     return () => {
       popoverRoots.delete(escapeLayer);
     };

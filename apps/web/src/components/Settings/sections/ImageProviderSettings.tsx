@@ -105,7 +105,7 @@ export const ImageProviderSettings: React.FC = () => {
 
   const saveImage = useCallback(
     (patch: LLMImageConfigUpdate) => {
-      void llmUpdateImageConfig({ provider: 'azure-openai', ...patch });
+      return llmUpdateImageConfig({ provider: 'azure-openai', ...patch });
     },
     [llmUpdateImageConfig],
   );
@@ -124,7 +124,7 @@ export const ImageProviderSettings: React.FC = () => {
           type="button"
           variant="ghost"
           tone="neutral"
-          size="sm"
+          size="field"
           iconOnly
           aria-label={t('settings.imageGeneration')}
           aria-expanded={!collapsed}
@@ -148,6 +148,7 @@ export const ImageProviderSettings: React.FC = () => {
           <SettingRow title={t('settings.provider')}>
             <SettingControl>
               <Select
+                appearance="field"
                 options={imageProviderOptions}
                 value={llmImageConfig?.provider || 'azure-openai'}
                 onChange={(v) => saveImage({ provider: v })}
@@ -161,6 +162,7 @@ export const ImageProviderSettings: React.FC = () => {
           <SettingRow title={t('settings.endpoint')}>
             <SettingControl>
               <TextInput
+                size="field"
                 type="text"
                 aria-label={t('settings.endpoint')}
                 placeholder="https://…cognitiveservices.azure.com"
@@ -178,6 +180,7 @@ export const ImageProviderSettings: React.FC = () => {
           <SettingRow title={t('settings.model')}>
             <SettingControl>
               <Select
+                appearance="field"
                 options={IMAGE_MODEL_FAMILY_OPTIONS}
                 value={imgModelFamily}
                 ariaLabel={t('settings.model')}
@@ -199,6 +202,7 @@ export const ImageProviderSettings: React.FC = () => {
           >
             <SettingControl>
               <TextInput
+                size="field"
                 type="text"
                 aria-label={t('settings.deployment')}
                 placeholder={imgModelFamily}
@@ -216,6 +220,7 @@ export const ImageProviderSettings: React.FC = () => {
           <SettingRow title={t('settings.apiVersion')}>
             <SettingControl>
               <TextInput
+                size="field"
                 type="text"
                 aria-label={t('settings.apiVersion')}
                 placeholder={t('settings.imageApiVersionPlaceholder')}
@@ -233,6 +238,7 @@ export const ImageProviderSettings: React.FC = () => {
           <SettingRow title={t('settings.imageQuality')}>
             <SettingControl>
               <Select
+                appearance="field"
                 options={getImageCapabilities(imgModelFamily).qualities.map(
                   (q) => ({
                     value: q,
@@ -262,6 +268,7 @@ export const ImageProviderSettings: React.FC = () => {
             placeholder="Azure key"
             disabled={credentialWritesDisabled}
             saving={llmImageSaving}
+            error={imageError}
             onSave={(key) => saveImage({ apiKey: key })}
             onRemove={() => saveImage({ apiKey: null })}
           />

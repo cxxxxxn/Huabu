@@ -10,6 +10,9 @@ import { Select } from './Select';
 import type { PopoverProps } from './Popover';
 
 const mocks = vi.hoisted(() => ({ popover: vi.fn() }));
+(
+  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 vi.mock('./Popover', () => ({
   Popover: (props: PopoverProps) => {
     mocks.popover(props);
@@ -50,6 +53,48 @@ async function renderSelect(props: Partial<Parameters<typeof Select>[0]> = {}) {
 }
 
 describe('Select', () => {
+  it('associates the trigger with field feedback', async () => {
+    const trigger = await renderSelect({
+      'aria-describedby': 'field-feedback',
+    });
+    expect(trigger.getAttribute('aria-describedby')).toBe('field-feedback');
+  });
+
+  it('retains the rotating down chevron by default', async () => {
+    const trigger = await renderSelect();
+    expect(trigger.querySelector('.lucide-chevron-down')).not.toBeNull();
+    await act(async () => trigger.click());
+    expect(
+      trigger
+        .querySelector('.lucide-chevron-down')
+        ?.classList.contains('rotate-180'),
+    ).toBe(true);
+  });
+
+  it('supports a stable double-chevron indicator without changing selection', async () => {
+    const onChange = vi.fn();
+    const trigger = await renderSelect({
+      appearance: 'field',
+      onChange,
+    });
+    expect(trigger.querySelector('.lucide-chevrons-up-down')).not.toBeNull();
+    expect(trigger.classList.contains('rounded-md')).toBe(true);
+    expect(trigger.classList.contains('text-[13px]')).toBe(true);
+    expect(trigger.classList.contains('justify-between')).toBe(true);
+    expect(trigger.querySelector('.lucide-chevron-down')).toBeNull();
+    await act(async () => trigger.click());
+    expect(
+      trigger
+        .querySelector('.lucide-chevrons-up-down')
+        ?.classList.contains('rotate-180'),
+    ).toBe(false);
+    const option =
+      container?.querySelector<HTMLButtonElement>('[role="option"]');
+    if (!option) throw new Error('Missing Select option');
+    await act(async () => option.click());
+    expect(onChange).toHaveBeenCalledExactlyOnceWith('external');
+    expect(document.activeElement).toBe(trigger);
+  });
   it.each([
     ['bottom-left', 'bottom-start'],
     ['bottom-right', 'bottom-end'],

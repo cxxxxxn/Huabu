@@ -70,6 +70,18 @@ beforeEach(() => {
 });
 
 describe('browser-local recent conversation Agent', () => {
+  it('keeps picker identity explicit and clears it for older server responses', async () => {
+    listProfiles.mockResolvedValueOnce({
+      ...snapshot,
+      folderPickerAgentletId: 'machine',
+    });
+    await useAcpProfilesStore.getState().refresh();
+    expect(useAcpProfilesStore.getState().folderPickerAgentletId).toBe(
+      'machine',
+    );
+    await useAcpProfilesStore.getState().refresh();
+    expect(useAcpProfilesStore.getState().folderPickerAgentletId).toBeNull();
+  });
   it('deduplicates Profile refresh and resolves the first selectable Profile', async () => {
     const [first, second] = await Promise.all([
       loadDefaultAgentBinding(),

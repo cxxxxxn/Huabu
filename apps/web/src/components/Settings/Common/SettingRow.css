@@ -1,0 +1,21 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
+@container (max-width: 420px) {
+  .setting-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .setting-row-control {
+    width: 100%;
+  }
+
+  .setting-row-control > div {
+    width: 100%;
+    max-width: 100%;
+  }
+}

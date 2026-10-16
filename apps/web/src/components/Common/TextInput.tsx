@@ -17,8 +17,8 @@ export type TextInputType =
   | 'url';
 
 export type TextInputProps = Omit<InputProps, 'size' | 'type'> & {
-  /** Visual density of the text field. Defaults to `sm`. */
-  size?: 'sm' | 'md';
+  /** Visual density; `field` uses the standard 32px form-control metrics. Defaults to `sm`. */
+  size?: 'sm' | 'md' | 'field';
   /** Restricts this styled primitive to text-like native input types. */
   type?: TextInputType;
   /** Uses the monospace font for commands, paths, and configuration values. */
@@ -28,6 +28,7 @@ export type TextInputProps = Omit<InputProps, 'size' | 'type'> & {
 const SIZE_CLASSES = {
   sm: 'px-2 py-1.5 text-xs',
   md: 'px-2.5 py-1.5 text-sm',
+  field: 'min-h-8 px-2.5 py-[5px] text-[13px] leading-5',
 } as const;
 
 export function textInputClassName({
@@ -36,7 +37,7 @@ export function textInputClassName({
   size = 'sm',
 }: Pick<TextInputProps, 'className' | 'mono' | 'size'>): string {
   return cn(
-    'border-edge-default bg-surface text-fg-default placeholder:text-fg-subtle focus:ring-info-light rounded-md border focus:ring-1 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50',
+    'border-edge-default bg-surface text-fg-default placeholder:text-fg-subtle focus:ring-info-light rounded-md border focus:ring-1 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-danger',
     SIZE_CLASSES[size],
     mono && 'font-mono',
     className,

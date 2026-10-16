@@ -4,6 +4,7 @@
 import React from 'react';
 
 import { cn } from '@/components/Common/cn';
+import './SettingRow.css';
 
 interface SettingRowProps {
   /** Primary label for the setting. Omit when the section heading already names it. */
@@ -45,9 +46,11 @@ export const SettingRow: React.FC<SettingRowProps> = ({
   return (
     <div
       className={cn(
-        'flex gap-3 px-3',
-        stacked ? 'flex-col items-stretch' : 'items-center justify-between',
-        density === 'compact' ? 'py-1.5' : 'py-2.5',
+        'setting-row flex gap-6 px-3.5',
+        stacked
+          ? 'flex-col items-stretch gap-3'
+          : 'items-center justify-between',
+        density === 'compact' ? 'py-2' : 'py-3',
         className,
       )}
     >
@@ -58,21 +61,31 @@ export const SettingRow: React.FC<SettingRowProps> = ({
             (labelFor ? (
               <label
                 htmlFor={labelFor}
-                className="text-fg-default block cursor-pointer text-xs font-medium"
+                className="text-fg-default block cursor-pointer text-[13px] leading-[1.5] font-medium"
               >
                 {title}
               </label>
             ) : (
-              <p className="text-fg-default text-xs font-medium">{title}</p>
+              <p className="text-fg-default text-[13px] leading-[1.5] font-medium">
+                {title}
+              </p>
             ))}
           {description && (
-            <p className="text-fg-subtle mt-0.5 text-[11px] leading-snug">
+            <p className="text-fg-subtle mt-0.5 text-xs leading-[1.5]">
               {description}
             </p>
           )}
         </div>
       </div>
-      <div className={stacked ? 'w-full min-w-0' : 'shrink-0'}>{children}</div>
+      <div
+        className={
+          stacked
+            ? 'setting-row-control w-full min-w-0'
+            : 'setting-row-control max-w-full min-w-0 shrink-0'
+        }
+      >
+        {children}
+      </div>
     </div>
   );
 };

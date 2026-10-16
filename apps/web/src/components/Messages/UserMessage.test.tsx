@@ -71,6 +71,11 @@ describe('UserMessage', () => {
           (item) => item.textContent,
         ),
       ).toEqual(['First passage', 'Second passage']);
+      for (const quote of container.querySelectorAll('blockquote')) {
+        expect(quote.classList.contains('border-l-2')).toBe(true);
+        expect(quote.classList.contains('border-edge-default')).toBe(true);
+      }
+      expect(container.querySelector('svg.lucide-quote')).toBeNull();
       expect(container.textContent).toContain('Explain this.');
       expect(container.textContent).toContain('Compare it.');
       if (content) expect(container.textContent).toContain(content);

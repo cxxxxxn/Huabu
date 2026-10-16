@@ -591,6 +591,8 @@ export const acpProfilesListResponseSchema = z.object({
   profiles: z.array(agentProfileSchema),
   selectableProfileIds: z.array(z.string().min(1)),
   connectedDevices: z.array(connectedAgentletDeviceSchema),
+  /** Connected persisted device identity on the Server's filesystem; absent on older servers. */
+  folderPickerAgentletId: z.string().min(1).nullable().optional(),
   agentlet: acpAgentletStatusSchema,
   agentDefaults: agentDefaultsSchema.optional(),
 });

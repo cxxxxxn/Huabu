@@ -156,7 +156,7 @@ export function InkOcrSettings() {
                 type="button"
                 variant="outline"
                 tone="neutral"
-                size="sm"
+                size="field"
                 onClick={() => setLoadAttempt((attempt) => attempt + 1)}
               >
                 {t('settings.inkOcr.retry')}
@@ -177,7 +177,7 @@ export function InkOcrSettings() {
                 type="button"
                 variant="outline"
                 tone="neutral"
-                size="sm"
+                size="field"
                 onClick={() => setExpanded(true)}
               >
                 {config.keySource !== 'none'
@@ -195,6 +195,7 @@ export function InkOcrSettings() {
             >
               <SettingControl>
                 <TextInput
+                  size="field"
                   id={endpointId}
                   type="url"
                   value={endpoint}
@@ -222,6 +223,7 @@ export function InkOcrSettings() {
               <SettingControl>
                 <div className="flex min-w-0 items-center gap-1.5">
                   <TextInput
+                    size="field"
                     id={apiKeyId}
                     type="password"
                     value={apiKey}
@@ -243,7 +245,7 @@ export function InkOcrSettings() {
                       type="button"
                       variant="ghost"
                       tone="neutral"
-                      size="sm"
+                      size="field"
                       aria-label={t('settings.inkOcr.removeStoredKey')}
                       title={t('settings.inkOcr.removeStoredKey')}
                       disabled={saving || !configWritesEnabled}
@@ -269,7 +271,7 @@ export function InkOcrSettings() {
                     type="button"
                     variant="outline"
                     tone="neutral"
-                    size="sm"
+                    size="field"
                     onClick={() => void loadReadiness()}
                   >
                     {t('settings.inkOcr.retryReadiness')}
@@ -285,7 +287,7 @@ export function InkOcrSettings() {
                     type="button"
                     variant="outline"
                     tone="neutral"
-                    size="sm"
+                    size="field"
                     onClick={cancel}
                     disabled={saving}
                   >
@@ -294,7 +296,7 @@ export function InkOcrSettings() {
                   <Button
                     type="submit"
                     tone="neutral"
-                    size="sm"
+                    size="field"
                     disabled={!canSave}
                   >
                     {saving ? t('settings.saving') : t('actions.save')}

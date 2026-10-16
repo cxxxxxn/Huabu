@@ -84,14 +84,14 @@ interface LLMState {
   loadModels: (provider: string) => Promise<void>;
   /** Load models for the utility provider. */
   loadUtilityModels: (provider: string) => Promise<void>;
-  /** Update provider/model (and optionally API key). */
-  updateConfig: (update: LLMConfigUpdate) => Promise<void>;
-  /** Update image-generation provider config. */
-  updateImageConfig: (update: LLMImageConfigUpdate) => Promise<void>;
-  /** Update utility-tier model config. */
-  updateUtilityConfig: (update: LLMUtilityConfigUpdate) => Promise<void>;
-  /** Start an OAuth device code login flow. */
-  startOAuth: () => Promise<void>;
+  /** Update provider/model (and optionally API key); return whether the server acknowledged it. */
+  updateConfig: (update: LLMConfigUpdate) => Promise<boolean>;
+  /** Update image-generation config; return whether the server acknowledged it. */
+  updateImageConfig: (update: LLMImageConfigUpdate) => Promise<boolean>;
+  /** Update utility-tier config; return whether the server acknowledged it. */
+  updateUtilityConfig: (update: LLMUtilityConfigUpdate) => Promise<boolean>;
+  /** Start OAuth for an explicit provider, or the current chat provider. */
+  startOAuth: (provider?: string) => Promise<void>;
   /** Cancel an in-progress OAuth flow. */
   cancelOAuth: () => void;
   /** Logout from OAuth provider. */
@@ -188,12 +188,14 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
     try {
       const config = await putLLMConfig(update);
       set({ config, saving: false });
+      return true;
     } catch (err) {
       set({
         error:
           err instanceof Error ? err.message : 'Failed to update LLM config',
         saving: false,
       });
+      return false;
     }
   },
 
@@ -202,6 +204,7 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
     try {
       const imageConfig = await putLLMImageConfig(update);
       set({ imageConfig, imageSaving: false });
+      return true;
     } catch (err) {
       const message =
         err instanceof Error ? err.message : 'Failed to update image config';
@@ -210,6 +213,7 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
         imageError: message,
         imageSaving: false,
       });
+      return false;
     }
   },
 
@@ -218,6 +222,7 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
     try {
       const utilityConfig = await putLLMUtilityConfig(update);
       set({ utilityConfig, utilitySaving: false });
+      return true;
     } catch (err) {
       set({
         error:
@@ -226,13 +231,13 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
             : 'Failed to update utility config',
         utilitySaving: false,
       });
+      return false;
     }
   },
 
-  startOAuth: async () => {
-    // Log into whichever provider is currently active/selected (e.g.
-    // github-copilot, openai-codex); the server defaults to Copilot if unset.
-    const provider = get().config?.provider || undefined;
+  startOAuth: async (selectedProvider) => {
+    // Utility settings may authenticate a different provider from chat.
+    const provider = selectedProvider || get().config?.provider || undefined;
     set({
       oauthPending: true,
       error: null,
@@ -272,9 +277,14 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
             // Refresh config to reflect authenticated state, then reload the
             // model list: OAuth providers (e.g. Copilot) expose an account-
             // specific entitlement that is only fetchable after login.
-            const config = await getLLMConfig();
-            set({ config });
+            const [config, utilityConfig] = await Promise.all([
+              getLLMConfig(),
+              getLLMUtilityConfig(),
+            ]);
+            set({ config, utilityConfig });
             if (config.provider) await get().loadModels(config.provider);
+            if (utilityConfig.provider)
+              await get().loadUtilityModels(utilityConfig.provider);
             return;
           }
           if (result.status === 'expired' || result.status === 'error') {

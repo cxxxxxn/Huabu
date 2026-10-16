@@ -25,11 +25,13 @@ import { AgentProfileEditor } from './AgentProfileEditor';
 import { PersistedAgentIconPicker } from './PersistedAgentIconPicker';
 import { ProfileFormFooterTarget } from './ProfileFormFooter';
 import { useDetectedClis } from './useDetectedClis';
+import { AgentConnectionSettings } from '../sections/ExternalAgentRuntimeSettings';
 
 import type { AgentIconValue } from '@/components/Common/AgentIcon';
 import type { AgentProfileView } from '@huabu/shared';
 
 type EditorState =
+  | { kind: 'connect-device' }
   | { kind: 'create'; agentletId: string }
   | { kind: 'edit-command'; profile: AgentProfileView };
 
@@ -147,9 +149,11 @@ export function ExternalAgentsSettings({
   }, [switchView]);
 
   const editorTitle = editor
-    ? editor.kind === 'create'
-      ? t('settings.newAgentProfile')
-      : t('settings.editAgentProfile', { name: editor.profile.alias })
+    ? editor.kind === 'connect-device'
+      ? t('settings.addDevice')
+      : editor.kind === 'create'
+        ? t('settings.newAgentProfile')
+        : t('settings.editAgentProfile', { name: editor.profile.alias })
     : null;
 
   useEffect(() => {
@@ -202,7 +206,8 @@ export function ExternalAgentsSettings({
       selectableProfileIds.includes(profile.id),
   );
   const { detectedClis, loaded: detectionLoaded } = useDetectedClis(
-    editor !== null || catalogueProfile !== undefined,
+    editor?.kind !== 'connect-device' &&
+      (editor !== null || catalogueProfile !== undefined),
     editor?.kind === 'edit-command'
       ? { profileId: editor.profile.id }
       : editor?.kind === 'create'
@@ -299,45 +304,70 @@ export function ExternalAgentsSettings({
       <div className="-mx-px overflow-x-clip px-px">
         {editor ? (
           <div key="editor" ref={activeViewRef}>
-            <ProfileFormFooterTarget target={footerTarget}>
+            {editor.kind === 'connect-device' ? (
               <SettingSection>
-                <AgentProfileEditor
-                  {...(editor.kind === 'create'
-                    ? { mode: 'create' as const }
-                    : {
-                        mode: 'edit-command' as const,
-                        profile: editor.profile,
-                      })}
-                  detectedClis={detectedClis}
-                  detectionLoaded={detectionLoaded}
-                  connectedDevices={connectedDevices}
-                  agentletId={
-                    editor.kind === 'create'
-                      ? editor.agentletId
-                      : editor.profile.agentletId
-                  }
-                  onAgentletChange={(agentletId) =>
-                    setEditor((current) =>
-                      current?.kind === 'create'
-                        ? { ...current, agentletId }
-                        : current,
-                    )
-                  }
-                  onClose={closeEditor}
-                  onSaved={refresh}
-                />
+                <AgentConnectionSettings />
               </SettingSection>
-            </ProfileFormFooterTarget>
-            <div ref={setFooterTarget} className="mt-3" />
+            ) : (
+              <>
+                <ProfileFormFooterTarget target={footerTarget}>
+                  <SettingSection>
+                    <AgentProfileEditor
+                      {...(editor.kind === 'create'
+                        ? { mode: 'create' as const }
+                        : {
+                            mode: 'edit-command' as const,
+                            profile: editor.profile,
+                          })}
+                      detectedClis={detectedClis}
+                      detectionLoaded={detectionLoaded}
+                      connectedDevices={connectedDevices}
+                      agentletId={
+                        editor.kind === 'create'
+                          ? editor.agentletId
+                          : editor.profile.agentletId
+                      }
+                      onAgentletChange={(agentletId) =>
+                        setEditor((current) =>
+                          current?.kind === 'create'
+                            ? { ...current, agentletId }
+                            : current,
+                        )
+                      }
+                      onClose={closeEditor}
+                      onSaved={refresh}
+                    />
+                  </SettingSection>
+                </ProfileFormFooterTarget>
+                <div ref={setFooterTarget} className="mt-3" />
+              </>
+            )}
           </div>
         ) : (
           <div key="list" ref={activeViewRef}>
-            <SettingSection title={t('settings.connectedDevices')}>
-              {connectedDevices.length === 0 ? (
-                <SettingRow
-                  title={t('settings.noConnectedDevices')}
-                  description={t('settings.noConnectedDevicesDescription')}
+            <SettingSection
+              title={t('settings.connectedDevices')}
+              collapsible
+              keepMounted
+              action={
+                <Button
+                  variant="ghost"
+                  tone="neutral"
+                  size="sm"
+                  aria-label={t('settings.addDevice')}
+                  ref={restoreTriggerFocus('connect-device')}
+                  data-editor-trigger="connect-device"
+                  onClick={() =>
+                    openEditor({ kind: 'connect-device' }, 'connect-device')
+                  }
                 >
+                  <Plus size={12} />
+                  {t('settings.addDevice')}
+                </Button>
+              }
+            >
+              {connectedDevices.length === 0 ? (
+                <SettingRow title={t('settings.noConnectedDevices')}>
                   <span />
                 </SettingRow>
               ) : (
@@ -361,7 +391,31 @@ export function ExternalAgentsSettings({
                 ))
               )}
             </SettingSection>
-            <SettingSection title={t('settings.agentProfiles')}>
+            <SettingSection
+              title={t('settings.agentProfiles')}
+              collapsible
+              keepMounted
+              action={
+                <Button
+                  variant="ghost"
+                  tone="neutral"
+                  size="sm"
+                  ref={restoreTriggerFocus('create')}
+                  data-editor-trigger="create"
+                  onClick={() => {
+                    const agentletId = connectedDevices[0]?.agentletId;
+                    if (agentletId)
+                      openEditor({ kind: 'create', agentletId }, 'create');
+                  }}
+                  disabled={
+                    connectedDevices.length === 0 || (loading && !loaded)
+                  }
+                >
+                  <Plus size={12} />
+                  <span>{t('settings.addAgent')}</span>
+                </Button>
+              }
+            >
               {loading && !loaded ? (
                 <SettingRow title={t('settings.loadingAgents')}>
                   <Loading layout="inline" size="sm" />
@@ -385,7 +439,7 @@ export function ExternalAgentsSettings({
                         <Button
                           variant="ghost"
                           tone="neutral"
-                          size="sm"
+                          size="field"
                           iconOnly
                           title={t('settings.editProfile')}
                           ref={restoreTriggerFocus(`command:${profile.id}`)}
@@ -402,7 +456,7 @@ export function ExternalAgentsSettings({
                         <Button
                           variant="ghost"
                           tone="danger"
-                          size="sm"
+                          size="field"
                           iconOnly
                           title={t('settings.deleteProfile')}
                           onClick={() => setPendingDelete(profile)}
@@ -412,35 +466,18 @@ export function ExternalAgentsSettings({
                       </div>
                     </SettingRow>
                   ))}
-                  <SettingRow
-                    title={
-                      profiles.length === 0
-                        ? t('settings.noAgents')
-                        : t('settings.addAnotherAgent')
-                    }
-                    description={
-                      profiles.length === 0
-                        ? t('settings.noAgentsDescription')
-                        : t('settings.addAnotherAgentDescription')
-                    }
-                  >
-                    <Button
-                      variant="outline"
-                      tone="info"
-                      size="sm"
-                      ref={restoreTriggerFocus('create')}
-                      data-editor-trigger="create"
-                      onClick={() => {
-                        const agentletId = connectedDevices[0]?.agentletId;
-                        if (agentletId)
-                          openEditor({ kind: 'create', agentletId }, 'create');
-                      }}
-                      disabled={connectedDevices.length === 0}
-                    >
-                      <Plus size={12} />
-                      <span>{t('settings.addAgent')}</span>
-                    </Button>
-                  </SettingRow>
+                  {(profiles.length === 0 || connectedDevices.length === 0) && (
+                    <div className="text-fg-muted flex flex-col gap-1 px-3 py-2.5 text-xs">
+                      {profiles.length === 0 && (
+                        <span>{t('settings.noAgents')}</span>
+                      )}
+                      {connectedDevices.length === 0 && (
+                        <span>
+                          {t('settings.noConnectedDevicesDescription')}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </>
               )}
             </SettingSection>
@@ -462,7 +499,7 @@ export function ExternalAgentsSettings({
           <Button
             variant="outline"
             tone="neutral"
-            size="sm"
+            size="field"
             onClick={() => setPendingDelete(null)}
             disabled={isDeleting}
           >
@@ -472,7 +509,7 @@ export function ExternalAgentsSettings({
             ref={confirmDeleteRef}
             variant="solid"
             tone="danger"
-            size="sm"
+            size="field"
             onClick={() => void confirmDelete()}
             disabled={isDeleting}
           >

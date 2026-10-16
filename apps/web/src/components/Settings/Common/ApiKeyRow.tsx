@@ -2,7 +2,7 @@
 // Licensed under the MIT license.
 
 import { Check, Key } from 'lucide-react';
-import React, { useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/Common/Button';
@@ -27,9 +27,11 @@ interface ApiKeyRowProps {
   /** Disable credential mutations when the active store is read-only. */
   disabled?: boolean;
   /** Persist a new key when the editor is submitted. */
-  onSave: (key: string) => void;
+  onSave: (key: string) => void | boolean | Promise<void | boolean>;
   /** Remove the key stored by Huabu. Omit for credentials that cannot be removed. */
-  onRemove?: () => void;
+  onRemove?: () => void | boolean | Promise<void | boolean>;
+  /** Parent-owned persistence or validation feedback. Returning false keeps the editor open. */
+  error?: string | null;
   /** Reduces vertical padding when rendered as a subordinate setting. */
   density?: 'default' | 'compact';
 }
@@ -51,25 +53,57 @@ export const ApiKeyRow: React.FC<ApiKeyRowProps> = ({
   disabled = false,
   onSave,
   onRemove,
+  error,
   density = 'default',
 }) => {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState('');
+  const [confirmingRemoval, setConfirmingRemoval] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const inFlight = useRef(false);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const feedbackId = useId();
+  const busy = saving || pending;
+  const feedback = localError ?? error;
+
+  useEffect(() => {
+    if (confirmingRemoval) cancelRef.current?.focus();
+  }, [confirmingRemoval]);
 
   const closeEditor = () => {
+    if (busy || inFlight.current) return;
     setValue('');
     setEditing(false);
+    setConfirmingRemoval(false);
+    setLocalError(null);
   };
 
-  const commitValue = () => {
+  const commitValue = async (remove = false) => {
+    if (busy || disabled || inFlight.current) return;
     const key = value.trim();
-    if (key) {
-      onSave(key);
-    } else if (saved && onRemove) {
-      onRemove();
+    if (remove ? !saved || !onRemove : !key) return;
+    inFlight.current = true;
+    setPending(true);
+    setLocalError(null);
+    try {
+      const result = remove ? await onRemove?.() : await onSave(key);
+      if (result !== false) {
+        setValue('');
+        setEditing(false);
+        setConfirmingRemoval(false);
+      }
+    } catch (cause) {
+      setLocalError(
+        cause instanceof Error
+          ? cause.message
+          : t('settings.credentialSaveFailed'),
+      );
+    } finally {
+      inFlight.current = false;
+      setPending(false);
     }
-    closeEditor();
   };
 
   return (
@@ -77,46 +111,87 @@ export const ApiKeyRow: React.FC<ApiKeyRowProps> = ({
       <SettingRow title={title} description={description} density={density}>
         {editing ? (
           <SettingControl>
-            <TextInput
-              type="password"
-              aria-label={
-                ariaLabel ?? (typeof title === 'string' ? title : undefined)
-              }
-              placeholder={placeholder}
-              value={value}
-              onChange={(event) => setValue(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  commitValue();
-                } else if (event.key === 'Escape') {
-                  event.preventDefault();
-                  closeEditor();
+            {confirmingRemoval ? (
+              <p className="text-fg-muted text-xs">
+                {t('settings.confirmRemoveKey')}
+              </p>
+            ) : (
+              <TextInput
+                size="field"
+                type="password"
+                aria-label={
+                  ariaLabel ?? (typeof title === 'string' ? title : undefined)
                 }
-              }}
-              className="w-full"
-              autoComplete="off"
-              autoFocus
-            />
-            <div className="mt-2 flex items-center justify-end gap-1.5">
+                placeholder={placeholder}
+                value={value}
+                onChange={(event) => {
+                  setValue(event.target.value);
+                  setLocalError(null);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    void commitValue();
+                  } else if (event.key === 'Escape') {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    closeEditor();
+                  }
+                }}
+                className="w-full"
+                autoComplete="off"
+                autoFocus
+                disabled={busy || disabled}
+                aria-describedby={feedback ? feedbackId : undefined}
+              />
+            )}
+            {feedback ? (
+              <p
+                id={feedbackId}
+                role="alert"
+                className="text-danger mt-2 text-xs [overflow-wrap:anywhere]"
+              >
+                {feedback}
+              </p>
+            ) : null}
+            <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+              {saved && onRemove && !confirmingRemoval ? (
+                <Button
+                  variant="ghost"
+                  tone="danger"
+                  size="field"
+                  disabled={busy || disabled}
+                  onClick={() => setConfirmingRemoval(true)}
+                >
+                  {t('settings.removeKey')}
+                </Button>
+              ) : null}
               <Button
+                ref={cancelRef}
                 variant="outline"
                 tone="neutral"
-                size="sm"
-                onClick={closeEditor}
-                disabled={saving}
+                size="field"
+                onClick={() => {
+                  if (confirmingRemoval) setConfirmingRemoval(false);
+                  else closeEditor();
+                }}
+                disabled={busy}
               >
                 {t('actions.cancel')}
               </Button>
               <Button
-                tone="neutral"
-                size="sm"
-                onClick={commitValue}
+                tone={confirmingRemoval ? 'danger' : 'neutral'}
+                size="field"
+                onClick={() => void commitValue(confirmingRemoval)}
                 disabled={
-                  saving || disabled || (!value.trim() && !(saved && onRemove))
+                  busy || disabled || (!confirmingRemoval && !value.trim())
                 }
               >
-                {saving ? t('settings.saving') : t('actions.save')}
+                {busy
+                  ? t('settings.saving')
+                  : confirmingRemoval
+                    ? t('actions.delete')
+                    : t('actions.save')}
               </Button>
             </div>
           </SettingControl>
@@ -138,9 +213,12 @@ export const ApiKeyRow: React.FC<ApiKeyRowProps> = ({
             <Button
               variant="outline"
               tone="neutral"
-              size="sm"
-              onClick={() => setEditing(true)}
-              disabled={saving || disabled}
+              size="field"
+              onClick={() => {
+                setLocalError(null);
+                setEditing(true);
+              }}
+              disabled={busy || disabled}
             >
               {saved ? t('settings.updateKey') : t('settings.setApiKey')}
             </Button>

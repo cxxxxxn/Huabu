@@ -57,7 +57,7 @@ describe('ImageProviderSettings', () => {
     expect(toggle?.closest('section')?.textContent).toContain(
       'settings.imageGeneration',
     );
-    expect(toggle?.closest('section')?.querySelector('.ring-1')).not.toBeNull();
+    expect(toggle?.closest('section')?.querySelector('.border')).not.toBeNull();
     expect(
       container.querySelector('[aria-label="settings.endpoint"]'),
     ).toBeNull();

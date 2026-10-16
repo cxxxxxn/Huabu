@@ -18,6 +18,7 @@ import {
   randomAgentIcon,
   withAgentIcon,
 } from '@/utils/agentIcon';
+import { resolveConnectedDevice } from '@/utils/agentletDevice';
 
 import { AgentIconField } from './AgentIconField';
 import { ProfileEditActions } from './ProfileEditActions';
@@ -64,18 +65,6 @@ function displayNameFor(agent: string, cwd: string) {
     .split('/')
     .at(-1);
   return folder ? `${agent} (${folder})` : agent;
-}
-
-function resolveConnectedDevice(
-  target: string,
-  devices: ConnectedAgentletDevice[],
-): ConnectedAgentletDevice | undefined {
-  const exact = devices.find((device) => device.agentletId === target);
-  if (exact) return exact;
-  const hostnameMatches = devices.filter(
-    (device) => device.hostname === target,
-  );
-  return hostnameMatches.length === 1 ? hostnameMatches[0] : undefined;
 }
 
 /** One capability-driven form for both structured and raw-command Profiles. */
@@ -242,12 +231,17 @@ export function CommandProfileForm({
 
   return (
     <div className="divide-edge-default flex flex-col divide-y">
-      <SettingRow title={t('settings.profileMachine')}>
+      <SettingRow
+        title={t(
+          editing ? 'settings.profileMachineFixed' : 'settings.profileMachine',
+        )}
+      >
         <SettingControl>
           {editing ? (
             <ReadOnlyField value={editingDeviceLabel} />
           ) : (
             <Select
+              appearance="field"
               value={agentletId}
               onChange={onAgentletChange}
               options={connectedDevices.map((device) => ({
@@ -269,6 +263,7 @@ export function CommandProfileForm({
             <ReadOnlyField value={agentName} />
           ) : (
             <Select
+              appearance="field"
               value={cliId}
               onChange={(value) => {
                 setCliId(value);
@@ -291,6 +286,7 @@ export function CommandProfileForm({
         >
           <SettingControl>
             <TextInput
+              size="field"
               id={commandId}
               aria-label={t('settings.launchCommand')}
               value={command}
@@ -360,7 +356,7 @@ export function CommandProfileForm({
             ariaLabel={t('settings.workingDirectory')}
             placeholder="/Users/me/project-x"
             disabled={custom ? saving : knownControlsDisabled}
-            pickerEnabled={!editing}
+            targetAgentletId={editing?.agentletId ?? agentletId}
             size="sm"
             mono
             pickTitle={t('settings.pickFolder')}
@@ -376,6 +372,7 @@ export function CommandProfileForm({
       >
         <SettingControl>
           <TextInput
+            size="field"
             id={displayNameId}
             aria-label={t('settings.displayName')}
             value={displayName}

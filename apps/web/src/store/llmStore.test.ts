@@ -10,6 +10,8 @@ import {
   getLLMConfig,
   getLLMProviders,
   getLLMModels,
+  getLLMUtilityConfig,
+  pollOAuthLogin,
 } from '../api/llm';
 
 vi.mock('../api/llm', () => ({
@@ -57,6 +59,7 @@ describe('independent image configuration', () => {
 
 describe('LLM store OAuth login', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.useFakeTimers();
     useLLMStore.setState({
       config: null,
@@ -89,5 +92,43 @@ describe('LLM store OAuth login', () => {
       oauthVerificationUri: 'https://github.com/login/device',
     });
     expect(open).not.toHaveBeenCalled();
+  });
+
+  it('logs into the selected utility provider and refreshes both model tiers after completion', async () => {
+    useLLMStore.setState({
+      config: { provider: 'openai', model: 'chat-model', authenticated: true },
+      utilityConfig: {
+        provider: 'github-copilot',
+        model: 'utility-model',
+        authenticated: false,
+      },
+    });
+    vi.mocked(startOAuthLogin).mockResolvedValue({
+      userCode: 'ABCD-1234',
+      verificationUri: 'https://github.com/login/device',
+      interval: 5,
+    });
+    vi.mocked(pollOAuthLogin).mockResolvedValue({ status: 'complete' });
+    vi.mocked(getLLMConfig).mockResolvedValue({
+      provider: 'openai',
+      model: 'chat-model',
+      authenticated: true,
+    });
+    vi.mocked(getLLMUtilityConfig).mockResolvedValue({
+      provider: 'github-copilot',
+      model: 'utility-model',
+      authenticated: true,
+    });
+    vi.mocked(getLLMModels).mockResolvedValue([]);
+
+    await useLLMStore.getState().startOAuth('github-copilot');
+    expect(startOAuthLogin).toHaveBeenCalledWith('github-copilot');
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(pollOAuthLogin).toHaveBeenCalledWith('github-copilot');
+    expect(getLLMModels).toHaveBeenCalledWith('openai');
+    expect(getLLMModels).toHaveBeenCalledWith('github-copilot');
+    expect(useLLMStore.getState().utilityConfig?.authenticated).toBe(true);
+    expect(useLLMStore.getState().config?.model).toBe('chat-model');
+    expect(useLLMStore.getState().oauthPending).toBe(false);
   });
 });
