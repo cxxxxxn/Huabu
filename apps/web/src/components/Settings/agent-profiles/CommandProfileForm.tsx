@@ -356,7 +356,7 @@ export function CommandProfileForm({
             ariaLabel={t('settings.workingDirectory')}
             placeholder="/Users/me/project-x"
             disabled={custom ? saving : knownControlsDisabled}
-            pickerEnabled={!editing}
+            targetAgentletId={editing?.agentletId ?? agentletId}
             size="sm"
             mono
             pickTitle={t('settings.pickFolder')}

@@ -14,8 +14,21 @@ import {
 } from 'vitest';
 
 import { i18n } from '@/i18n';
+import { useAcpProfilesStore } from '@/store/acpProfilesStore';
+import { useWorkspaceStore } from '@/store/workspaceStore';
 
 import { WorkingDirectoryOverride } from './WorkingDirectoryOverride';
+
+import type * as WorkspaceApi from '@/api/workspace';
+
+const picker = vi.hoisted(() => ({ pick: vi.fn() }));
+vi.mock('@/components/Common/Loading', () => ({
+  Loading: () => <span>Loading</span>,
+}));
+vi.mock('@/api/workspace', async (importOriginal) => ({
+  ...(await importOriginal<typeof WorkspaceApi>()),
+  pickFolder: picker.pick,
+}));
 
 let container: HTMLDivElement;
 let root: Root;
@@ -68,6 +81,11 @@ beforeEach(async () => {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
+  picker.pick.mockReset();
+  useAcpProfilesStore.setState({
+    connectedDevices: [],
+    folderPickerAgentletId: null,
+  });
 });
 
 afterEach(async () => {
@@ -81,6 +99,88 @@ describe('WorkingDirectoryOverride', () => {
     editable: true,
     saving: false,
   };
+
+  it('offers picking only while editing on the confirmed device and saves only on Done', async () => {
+    useWorkspaceStore.setState({
+      capabilities: { nativePicker: true, canChangeWorkspace: true },
+    });
+    useAcpProfilesStore.setState({
+      folderPickerAgentletId: 'local',
+      connectedDevices: [
+        {
+          agentletId: 'local',
+          displayName: 'Local',
+          version: '1',
+          connectedAt: '',
+          profileCount: 0,
+        },
+      ],
+    });
+    picker.pick.mockResolvedValue({ ok: true, path: '/selected' });
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    await render({ ...defaultProps, agentletId: 'local', onSave });
+    await openPopover();
+    const field = nodeOverrideInput();
+    expect(
+      document.body.querySelector('[aria-label="Pick a folder"]'),
+    ).toBeNull();
+    await clickAction('Change');
+    await clickAction('Pick a folder');
+    expect(nodeOverrideInput()).toBe(field);
+    expect(field.value).toBe('/selected');
+    expect(onSave).not.toHaveBeenCalled();
+    await clickAction('Done');
+    expect(onSave).toHaveBeenCalledWith('/selected');
+  });
+
+  it('releases the pending picker after a device disconnect and keeps the draft', async () => {
+    useWorkspaceStore.setState({
+      capabilities: { nativePicker: true, canChangeWorkspace: true },
+    });
+    useAcpProfilesStore.setState({
+      folderPickerAgentletId: 'local',
+      connectedDevices: [
+        {
+          agentletId: 'local',
+          displayName: 'Local',
+          version: '1',
+          connectedAt: '',
+          profileCount: 0,
+        },
+      ],
+    });
+    let resolve!: (result: { ok: true; path: string }) => void;
+    picker.pick.mockReturnValue(
+      new Promise((done) => {
+        resolve = done;
+      }),
+    );
+    const onSave = vi.fn();
+    await render({ ...defaultProps, agentletId: 'local', onSave });
+    await openPopover();
+    await clickAction('Change');
+    await changePath('/unsaved');
+    await clickAction('Pick a folder');
+    expect(
+      [...document.body.querySelectorAll('button')].find(
+        (button) => button.getAttribute('aria-label') === 'Done',
+      )?.disabled,
+    ).toBe(true);
+    await act(async () =>
+      useAcpProfilesStore.setState({ connectedDevices: [] }),
+    );
+    await act(async () => resolve({ ok: true, path: '/stale' }));
+    expect(nodeOverrideInput().value).toBe('/unsaved');
+    expect(
+      document.body.querySelector('[role="alert"]')?.textContent,
+    ).toContain('target device changed');
+    expect(
+      [...document.body.querySelectorAll('button')].find(
+        (button) => button.getAttribute('aria-label') === 'Done',
+      )?.disabled,
+    ).toBe(false);
+    expect(onSave).not.toHaveBeenCalled();
+  });
 
   it('keeps the folder tooltip to its label without duplicating path or device information', async () => {
     await render({

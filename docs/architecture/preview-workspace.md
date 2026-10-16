@@ -22,6 +22,8 @@ The working-directory popover shows the complete effective path as its primary c
 
 The working-directory popover uses consistent 12px typography for its title, path, actions and device metadata. The title is a normal-weight muted label; the full path retains the default foreground color in both read-only and editing modes.
 
+During editing, the popover offers the shared Common `FolderPickerButton` only when the selected Agentlet is confirmed to own the native picker's filesystem; the identity contract is documented in [Agent Profiles](./agent-profiles.md). Selecting a folder updates the draft only, and Done still commits it. The picker slot reserves width and height in read-only mode to prevent edit-mode reflow. Picking blocks dismissal and save actions; cancellation preserves the draft, and failures appear inline. Settings `PathInput` reuses this same button and target validation while retaining its single-line form layout.
+
 Warm-up and runtime controls are queued FIFO per Canvas/thread address, including their cache refreshes. A failed operation reports its error without discarding later choices, and different conversations proceed independently. Queued work keeps launch edits and sends gated until it drains, while controls remain available during streaming. Selector optimism starts with its queued RPC; failure rollback occurs before its cache refresh so it cannot overwrite a later choice.
 
 The composer stays editable while initial history loads or fails, but button, keyboard and panel submission paths remain gated until history is ready. Initial-load failures expose an explicit retry without pretending the history is loaded or discarding a draft. Saving Chat as a Question retains its thread identity and working directory.

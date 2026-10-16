@@ -39,18 +39,18 @@ vi.mock('@/components/Common/PathInput', () => ({
     value,
     onChange,
     disabled,
-    pickerEnabled,
+    targetAgentletId,
   }: {
     value: string;
     onChange: (value: string) => void;
     disabled?: boolean;
-    pickerEnabled?: boolean;
+    targetAgentletId?: string;
   }) => (
     <input
       aria-label="path"
       value={value}
       disabled={disabled}
-      data-picker-enabled={String(pickerEnabled)}
+      data-picker-target={targetAgentletId}
       onChange={(event) => onChange(event.target.value)}
     />
   ),
@@ -247,8 +247,8 @@ describe('AgentProfileEditor', () => {
     expect(
       container
         ?.querySelector('[aria-label="path"]')
-        ?.getAttribute('data-picker-enabled'),
-    ).toBe('false');
+        ?.getAttribute('data-picker-target'),
+    ).toBe('machine-a');
     input('settings.displayName', 'Renamed');
     await act(async () => saveButton()?.click());
     expect(api.update).toHaveBeenCalledWith('profile-1', {

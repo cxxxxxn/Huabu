@@ -94,6 +94,7 @@ interface AcpProfilesState {
   selectableProfileIds: string[];
   /** Active Agentlet control connections, sorted by the server. */
   connectedDevices: ConnectedAgentletDevice[];
+  folderPickerAgentletId: string | null;
   /** Latest agentlet snapshot. `null` until the first fetch resolves. */
   agentlet: AcpAgentletStatus | null;
   /** Absent on older servers; never infer a default from list ordering. */
@@ -128,6 +129,7 @@ export const useAcpProfilesStore = create<AcpProfilesState>()((set, get) => ({
   profiles: [],
   selectableProfileIds: [],
   connectedDevices: [],
+  folderPickerAgentletId: null,
   agentlet: null,
   agentDefaults: null,
   defaultsError: null,
@@ -238,6 +240,7 @@ export const useAcpProfilesStore = create<AcpProfilesState>()((set, get) => ({
           profiles: res.profiles,
           selectableProfileIds: res.selectableProfileIds,
           connectedDevices: res.connectedDevices,
+          folderPickerAgentletId: res.folderPickerAgentletId ?? null,
           agentlet: res.agentlet,
           ...(revision === defaultsRevision
             ? { agentDefaults: res.agentDefaults ?? null, defaultsError: null }

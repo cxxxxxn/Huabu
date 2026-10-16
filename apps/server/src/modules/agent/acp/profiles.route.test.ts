@@ -24,6 +24,11 @@ const mocks = vi.hoisted(() => ({
   readCapabilities: vi.fn(),
   discoverCapabilities: vi.fn(),
   connectedIds: new Set(['machine-a', 'remote-machine']),
+  pickerDeviceId: vi.fn(),
+}));
+
+vi.mock('./picker-device.js', () => ({
+  readPickerDeviceId: mocks.pickerDeviceId,
 }));
 
 vi.mock('../agent-defaults.js', () => ({
@@ -94,6 +99,40 @@ afterEach(async () => {
 });
 
 describe('ordinary Profile catalog routes', () => {
+  it.each([
+    ['machine-a', 'machine-a'],
+    ['remote-machine-host', null],
+    ['disconnected', null],
+    [null, null],
+  ])(
+    'only exposes a connected exact local picker identity: %s',
+    async (localId, expected) => {
+      mocks.registry.listProfiles.mockReturnValue([]);
+      mocks.pickerDeviceId.mockResolvedValue(localId);
+      const server = await setup();
+      const response = await server.inject({
+        method: 'GET',
+        url: '/api/acp/profiles',
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().folderPickerAgentletId).toBe(expected);
+    },
+  );
+
+  it('disables folder picking when local identity cannot be read without hiding Profiles', async () => {
+    mocks.registry.listProfiles.mockReturnValue([commandProfile]);
+    mocks.pickerDeviceId.mockRejectedValue(new Error('Invalid identity'));
+    const server = await setup();
+    const response = await server.inject({
+      method: 'GET',
+      url: '/api/acp/profiles',
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      profiles: [commandProfile],
+      folderPickerAgentletId: null,
+    });
+  });
   it.each([
     ['GET', '/capabilities', 'readCapabilities'],
     ['POST', '/capabilities/discover', 'discoverCapabilities'],

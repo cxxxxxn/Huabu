@@ -42,6 +42,7 @@ import {
   hasDiscoverySource,
   mergeProfileCustomData,
 } from './harness-profile-discovery.js';
+import { readPickerDeviceId } from './picker-device.js';
 import {
   discoverProfileCapabilities,
   ProfileCapabilitiesError,
@@ -195,6 +196,17 @@ const acpProfilesRoutes: FastifyPluginAsync = async (app) => {
       }
       const profiles = registry.listProfiles();
       const connected = getConnectedAgentlets();
+      let folderPickerAgentletId: string | null = null;
+      try {
+        const localId = await readPickerDeviceId();
+        if (connected.some((device) => device.agentletId === localId))
+          folderPickerAgentletId = localId;
+      } catch (error) {
+        request.log.warn(
+          { err: error },
+          'Local folder picker device identity is unavailable',
+        );
+      }
       const profileCounts = new Map<string, number>();
       for (const profile of profiles) {
         const agentletId = resolveConnectedAgentletId(profile.agentletId);
@@ -232,6 +244,7 @@ const acpProfilesRoutes: FastifyPluginAsync = async (app) => {
           .filter((profile) => resolveConnectedAgentletId(profile.agentletId))
           .map((profile) => profile.id),
         connectedDevices,
+        folderPickerAgentletId,
         agentlet: getDaemonSupervisor().getStatus(),
         agentDefaults: getAgentDefaults(),
       };

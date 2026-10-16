@@ -1,17 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { Folder } from 'lucide-react';
-import { useCallback, useState } from 'react';
-
-import { pickFolder } from '@/api/workspace';
-import { useFolderPickerSupported } from '@/store/workspaceStore';
-
-import { Button } from './Button';
 import { cn } from './cn';
-import { Loading } from './Loading';
+import { FolderPickerButton } from './FolderPickerButton';
 import { TextInput } from './TextInput';
-import { toast } from './Toast';
 
 import type { KeyboardEventHandler } from 'react';
 
@@ -37,13 +29,15 @@ export interface PathInputProps {
   placeholder?: string;
   disabled?: boolean;
   /** Controls button size, icon size and default input padding. */
-  size?: 'sm' | 'md';
+  size?: 'sm' | 'md' | 'field';
   /** Use a monospace font for the input (paths read better). */
   mono?: boolean;
   /** Tooltip on the folder-picker button. */
   pickTitle?: string;
   /** Whether this field may use the local native picker. Defaults to true. */
   pickerEnabled?: boolean;
+  /** Agentlet that owns the path; omitted only for Server workspace paths. */
+  targetAgentletId?: string;
   /** Extra classes merged onto the input. Later classes win (tailwind-merge). */
   inputClassName?: string;
   /** Extra classes merged onto the flex row wrapper. */
@@ -54,11 +48,8 @@ export interface PathInputProps {
 /**
  * A path text field with an optional native folder-picker button.
  *
- * The folder button only renders when the server reports a GUI is
- * available (`capabilities.nativePicker`); on headless/remote servers it
- * degrades to a plain input that still accepts a typed absolute path.
- * The `pickFolder` call, its loading state and error reporting are
- * handled internally so call sites stay declarative.
+ * The shared folder button requires a supported picker and, for Agentlet
+ * paths, a matching filesystem identity. Otherwise typing remains available.
  */
 export function PathInput({
   id,
@@ -71,44 +62,13 @@ export function PathInput({
   disabled,
   size = 'md',
   mono = false,
-  pickTitle = 'Browse for a folder',
+  pickTitle,
   pickerEnabled = true,
+  targetAgentletId,
   inputClassName,
   className,
   onKeyDown,
 }: PathInputProps) {
-  const folderPickerSupported = useFolderPickerSupported();
-  const [picking, setPicking] = useState(false);
-
-  const reportError = useCallback(
-    (message: string) => {
-      if (onError) onError(message);
-      else toast(message, { tone: 'danger' });
-    },
-    [onError],
-  );
-
-  const handlePick = useCallback(async () => {
-    setPicking(true);
-    try {
-      const result = await pickFolder();
-      if (result.ok) {
-        onChange(result.path);
-        onPicked?.(result.path);
-      } else if (result.reason === 'no-picker') {
-        reportError('No folder picker available on this server');
-      }
-    } catch (err) {
-      reportError(
-        err instanceof Error ? err.message : 'Failed to open folder picker',
-      );
-    } finally {
-      setPicking(false);
-    }
-  }, [onChange, onPicked, reportError]);
-
-  const iconSize = size === 'sm' ? 14 : 16;
-
   return (
     <div className={cn('flex items-stretch gap-1.5', className)}>
       <TextInput
@@ -129,24 +89,19 @@ export function PathInput({
           inputClassName,
         )}
       />
-      {pickerEnabled && folderPickerSupported && (
-        <Button
-          variant="outline"
-          tone="neutral"
-          size={size}
-          iconOnly
-          title={pickTitle}
-          onClick={() => void handlePick()}
-          disabled={disabled || picking}
-          className="aspect-square"
-        >
-          {picking ? (
-            <Loading layout="inline" size="sm" className="text-fg-subtle" />
-          ) : (
-            <Folder size={iconSize} className="text-fg-subtle" />
-          )}
-        </Button>
-      )}
+      <FolderPickerButton
+        targetAgentletId={targetAgentletId}
+        enabled={pickerEnabled}
+        disabled={disabled}
+        size={size}
+        title={pickTitle}
+        onError={onError}
+        className="aspect-square"
+        onPicked={(path) => {
+          onChange(path);
+          onPicked?.(path);
+        }}
+      />
     </div>
   );
 }

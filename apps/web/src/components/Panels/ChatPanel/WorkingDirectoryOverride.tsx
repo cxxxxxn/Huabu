@@ -7,12 +7,15 @@ import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/Common/Button';
 import { cn } from '@/components/Common/cn';
+import { FolderPickerButton } from '@/components/Common/FolderPickerButton';
 import { Popover } from '@/components/Common/Popover';
 import { TextArea } from '@/components/Common/TextArea';
 import { Tooltip } from '@/components/Common/Tooltip';
+import { useAgentletFolderPicker } from '@/hooks/useAgentletFolderPicker';
 import { useAutoSizeTextArea } from '@/hooks/useAutoSizeTextArea';
 
 interface WorkingDirectoryOverrideProps {
+  agentletId?: string;
   deviceName?: string;
   profileWorkingDirPath: string;
   workingDirPath?: string;
@@ -24,6 +27,7 @@ interface WorkingDirectoryOverrideProps {
 }
 
 export function WorkingDirectoryOverride({
+  agentletId,
   deviceName,
   profileWorkingDirPath,
   workingDirPath,
@@ -43,6 +47,7 @@ export function WorkingDirectoryOverride({
   const [isOpen, setIsOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [pending, setPending] = useState(false);
+  const [picking, setPicking] = useState(false);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
 
@@ -54,7 +59,9 @@ export function WorkingDirectoryOverride({
       ? (workingDirPath ?? profileWorkingDirPath)
       : (effectiveWorkingDirPath ?? '');
   const displayedPath = effectivePath || t('chat.workingDirectoryUnspecified');
-  const busy = saving || pending;
+  const busy = saving || pending || picking;
+  const pickerSupported = useAgentletFolderPicker(agentletId ?? '');
+  const showPickerSlot = (pickerSupported && editable) || picking;
   const fieldValue = isEditing ? draft : displayedPath;
   const lockDescription = t(
     effectiveWorkingDirPath === undefined
@@ -264,35 +271,58 @@ export function WorkingDirectoryOverride({
               )}
             </div>
             <div className="mt-2">
-              <TextArea
-                ref={inputRef}
-                rows={1}
-                value={fieldValue}
-                onChange={(event) => {
-                  setDraft(event.target.value);
-                  setError(null);
-                }}
-                onKeyDown={(event) => {
-                  if (event.nativeEvent.isComposing || event.keyCode === 229)
-                    return;
-                  if (event.key === 'Enter' && isEditing) {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    void commit(draft.trim() || null);
-                  }
-                }}
-                placeholder={profileWorkingDirPath}
-                aria-label={t('chat.workingDirectory')}
-                aria-invalid={error ? true : undefined}
-                aria-describedby={error ? errorId : undefined}
-                mono
-                readOnly={!isEditing || busy}
+              <div
                 className={cn(
-                  'text-fg-default block min-h-[1lh] w-full resize-none overflow-hidden rounded-sm border-0 bg-transparent p-0 leading-5.25 wrap-anywhere focus:ring-0',
-                  isEditing &&
-                    'ring-edge-default focus:ring-info-light ring-1 focus:ring-1',
+                  'flex items-start gap-1.5',
+                  showPickerSlot && 'min-h-6',
                 )}
-              />
+              >
+                <TextArea
+                  ref={inputRef}
+                  rows={1}
+                  value={fieldValue}
+                  onChange={(event) => {
+                    setDraft(event.target.value);
+                    setError(null);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.nativeEvent.isComposing || event.keyCode === 229)
+                      return;
+                    if (event.key === 'Enter' && isEditing) {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void commit(draft.trim() || null);
+                    }
+                  }}
+                  placeholder={profileWorkingDirPath}
+                  aria-label={t('chat.workingDirectory')}
+                  aria-invalid={error ? true : undefined}
+                  aria-describedby={error ? errorId : undefined}
+                  mono
+                  readOnly={!isEditing || busy}
+                  className={cn(
+                    'text-fg-default block min-h-[1lh] w-full min-w-0 flex-1 resize-none overflow-hidden rounded-sm border-0 bg-transparent p-0 leading-5.25 wrap-anywhere focus:ring-0',
+                    isEditing &&
+                      'ring-edge-default focus:ring-info-light ring-1 focus:ring-1',
+                  )}
+                />
+                {showPickerSlot ? (
+                  <div className="flex w-6 shrink-0">
+                    <FolderPickerButton
+                      targetAgentletId={agentletId ?? ''}
+                      enabled={isEditing && editable}
+                      disabled={busy}
+                      onPickingChange={setPicking}
+                      onError={setError}
+                      onPicked={(path) => {
+                        setDraft(path);
+                        setError(null);
+                        inputRef.current?.focus({ preventScroll: true });
+                      }}
+                    />
+                  </div>
+                ) : null}
+              </div>
               {error ? (
                 <div
                   id={errorId}

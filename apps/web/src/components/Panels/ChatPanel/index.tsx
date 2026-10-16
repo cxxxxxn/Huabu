@@ -1134,6 +1134,7 @@ export const ChatPanel = ({
                   />
                   {showWorkingDirectoryOverride ? (
                     <WorkingDirectoryOverride
+                      agentletId={selectedExternalProfile?.agentletId}
                       deviceName={selectedExternalDevice?.displayName}
                       profileWorkingDirPath={
                         selectedExternalProfile?.workingDirPath ?? ''
