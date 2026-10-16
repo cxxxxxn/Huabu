@@ -196,8 +196,14 @@ describe('AI response comments', () => {
     expect(figure?.classList.contains('bg-hover/60')).toBe(true);
     expect(figure?.classList.contains('py-1.5')).toBe(true);
     expect(figure?.classList.contains('rounded-md')).toBe(true);
+    expect(figure?.querySelector('svg')).toBeNull();
     expect(
-      figure?.querySelector('figcaption svg')?.classList.contains('opacity-60'),
+      figure?.querySelector('blockquote')?.classList.contains('border-l-2'),
+    ).toBe(true);
+    expect(
+      figure
+        ?.querySelector('blockquote')
+        ?.classList.contains('border-edge-default'),
     ).toBe(true);
     expect(
       figure?.querySelector('blockquote')?.classList.contains('text-fg-muted'),
@@ -374,23 +380,16 @@ describe('AI response comments', () => {
       render();
       act(() => preview.onTextSelection?.(selection));
       click(i18n.t('messages.fragmentComment'));
-      expect(
-        document.querySelector('figcaption svg.lucide-quote'),
-      ).not.toBeNull();
-      expect(
-        document.querySelector('figcaption svg')?.getAttribute('aria-hidden'),
-      ).toBe('true');
-      expect(document.querySelector('figcaption .sr-only')?.textContent).toBe(
+      expect(document.querySelector('figure svg')).toBeNull();
+      expect(document.querySelector('figcaption.sr-only')?.textContent).toBe(
         label,
       );
       const quote = document.querySelector('figure blockquote');
       expect(quote?.textContent).toBe(selection.text);
       expect(quote?.classList.contains('text-xs')).toBe(true);
       expect(quote?.classList.contains('wrap-anywhere')).toBe(true);
-      expect(quote?.classList.contains('border-l-2')).toBe(false);
-      expect(document.querySelector('figure')?.classList.contains('flex')).toBe(
-        true,
-      );
+      expect(quote?.classList.contains('border-l-2')).toBe(true);
+      expect(quote?.classList.contains('pl-2')).toBe(true);
       expect(document.querySelector('textarea')?.placeholder).toBe(placeholder);
     },
   );

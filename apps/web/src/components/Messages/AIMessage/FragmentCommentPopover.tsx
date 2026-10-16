@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { ArrowUp, Copy, MessageSquare, Quote } from 'lucide-react';
+import { ArrowUp, Copy, MessageSquare } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -59,14 +59,11 @@ export function FragmentCommentPopover({
             if (comment.trim()) onAdd(comment);
           }}
         >
-          <figure className="bg-hover/60 flex min-w-0 items-start gap-2 rounded-md px-2 py-1.5">
-            <figcaption className="text-fg-subtle mt-0.5 shrink-0">
-              <Quote aria-hidden="true" className="h-3 w-3 opacity-60" />
-              <span className="sr-only">
-                {t('messages.fragmentQuotedPassage')}
-              </span>
+          <figure className="bg-hover/60 min-w-0 rounded-md px-2 py-1.5">
+            <figcaption className="sr-only">
+              {t('messages.fragmentQuotedPassage')}
             </figcaption>
-            <blockquote className="text-fg-muted max-h-24 min-w-0 flex-1 overflow-auto overscroll-contain text-xs wrap-anywhere whitespace-pre-wrap">
+            <blockquote className="border-edge-default text-fg-muted max-h-24 min-w-0 overflow-auto overscroll-contain border-l-2 pl-2 text-xs wrap-anywhere whitespace-pre-wrap">
               {selection.text.trim()}
             </blockquote>
           </figure>

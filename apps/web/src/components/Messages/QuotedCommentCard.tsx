@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { Quote } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/Common/Button';
@@ -26,8 +25,7 @@ export function QuotedCommentCard({
       className="group/quoted-comment bg-hover/50 relative flex w-full max-w-full min-w-0 flex-col gap-1 rounded-lg p-2"
     >
       <div className="flex min-w-0 items-center gap-1.5">
-        <Quote aria-hidden="true" className="text-fg-subtle h-3 w-3 shrink-0" />
-        <blockquote className="min-w-0 flex-1">
+        <blockquote className="border-edge-default min-w-0 flex-1 border-l-2 pl-2">
           <Tooltip
             content={comment.quote}
             interactive
