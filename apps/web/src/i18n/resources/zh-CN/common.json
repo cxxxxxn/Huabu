@@ -508,6 +508,8 @@
     "agentletSourceSetup": "下载与服务器版本一致的 Huabu 源码，并安装依赖：",
     "agentletRunConnection": "运行连接命令",
     "agentletRunConnectionDescription": "在该设备上打开终端，进入 Huabu 源码目录。根据所用终端选择类型，复制对应的连接命令并在终端中运行。",
+    "agentletLocalAccessSetup": "当前服务器仅监听本机。如需远程访问，请停止服务器，运行 pnpm run setup 后重新启动。",
+    "agentletDesktopLocalAccess": "桌面内置服务器仅限本机访问。如需远程访问，请配置并启动独立服务器，再让桌面连接该服务器。",
     "agentletCheckConnection": "返回 Huabu 确认连接",
     "agentletCheckConnectionDescription": "保持该终端运行，返回 Huabu 的 Agent 设置。连接成功后，设备会显示在“已连接设备”中，检测到的可用 Agent 会自动添加到列表。",
     "agentletOtherConnectionOptions": "其他连接方式",
