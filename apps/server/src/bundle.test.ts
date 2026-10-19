@@ -3,7 +3,14 @@
 
 import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -12,6 +19,7 @@ import { pathToFileURL } from 'node:url';
 import archiver from 'archiver';
 import { build } from 'tsup';
 import { describe, expect, it } from 'vitest';
+import { parse } from 'yaml';
 
 import {
   buildHuabuBootstrapEnv,
@@ -19,12 +27,91 @@ import {
 } from '../../../packages/client-runtime/src/bootstrap.js';
 import clientRuntimeConfig from '../../../packages/client-runtime/tsup.config.js';
 import bundleConfig from '../tsup.config.js';
+import { getBundledServicePackages } from './modules/services/package-loader.js';
 
 const configured =
   typeof bundleConfig === 'function' ? await bundleConfig({}) : bundleConfig;
 const configurations = Array.isArray(configured) ? configured : [configured];
 
 describe('server bundle runtime', () => {
+  it('ships and loads every Service package in the desktop resource layout', async () => {
+    const desktopConfig = parse(
+      readFileSync(path.resolve('../desktop/electron-builder.yml'), 'utf8'),
+    );
+    const serviceResource = desktopConfig.extraResources.find(
+      (resource: { from: string }) =>
+        resource.from === '../server/dist-bundle/services',
+    );
+    expect(serviceResource).toEqual({
+      from: '../server/dist-bundle/services',
+      to: 'server/services',
+      filter: ['**/*', '!**/*.test.*'],
+    });
+
+    const directory = mkdtempSync(path.join(tmpdir(), 'huabu-services-'));
+    try {
+      const resources = path.join(directory, 'resources');
+      const sourceRoot = path.resolve('src/services');
+      const packagedRoot = path.join(resources, serviceResource.to);
+      const exclusions: string[] = serviceResource.filter
+        .filter((pattern: string) => pattern.startsWith('!'))
+        .map((pattern: string) => pattern.slice(1));
+      cpSync(sourceRoot, packagedRoot, {
+        recursive: true,
+        filter: (source) =>
+          !exclusions.some((pattern) =>
+            path.matchesGlob(path.relative(sourceRoot, source), pattern),
+          ),
+      });
+      const isTestFile = (file: string) =>
+        path.matchesGlob(file, '**/*.test.*');
+      expect(
+        readdirSync(sourceRoot, {
+          recursive: true,
+          encoding: 'utf8',
+        }).some(isTestFile),
+      ).toBe(true);
+      expect(
+        readdirSync(packagedRoot, {
+          recursive: true,
+          encoding: 'utf8',
+        }).some(isTestFile),
+      ).toBe(false);
+      const entry = path.join(resources, 'server/server.mjs');
+      await build({
+        ...configurations[0],
+        config: false,
+        entry: {
+          server: path.resolve('src/modules/services/package-loader.ts'),
+        },
+        outDir: path.dirname(entry),
+        outExtension: () => ({ js: '.mjs' }),
+        onSuccess: undefined,
+        silent: true,
+      });
+      const summarize =
+        '(m) => [...m.getBundledServicePackages()].map(([id, p]) => [id, p.contentHash])';
+      const output = execFileSync(
+        process.execPath,
+        [
+          '--input-type=module',
+          '-e',
+          `const m = await import(process.argv[1]); console.log(JSON.stringify((${summarize})(m)));`,
+          pathToFileURL(entry).href,
+        ],
+        { cwd: directory, encoding: 'utf8' },
+      );
+      expect(JSON.parse(output)).toEqual(
+        [...getBundledServicePackages()].map(([id, service]) => [
+          id,
+          service.contentHash,
+        ]),
+      );
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('loads real Agentlet and client-runtime artifacts outside the workspace without node_modules', async () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'huabu-real-runtime-'));
     try {

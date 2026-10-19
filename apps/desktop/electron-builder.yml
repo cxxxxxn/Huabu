@@ -76,6 +76,12 @@ extraResources:
       # picks up sibling `.ts` source files too; exclude them so we don't
       # bloat the installer with dead source.
       - '**/*.md'
+  # Service manifests and their declared files are read during server startup.
+  - from: ../server/dist-bundle/services
+    to: server/services
+    filter:
+      - '**/*'
+      - '!**/*.test.*'
   - from: ../server/dist-bundle/agentlet
     to: server/agentlet
     filter:
