@@ -87,6 +87,7 @@ export const CanvasSearchResults = (): React.JSX.Element => {
   // re-query the chat DOM for the highlight + scroll roots.
 
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const resultsRef = useRef<HTMLDivElement>(null);
   const [activeIdx, setActiveIdx] = useState(0);
   const [canvasRoot, setCanvasRoot] = useState<HTMLElement | null>(null);
   const [chatThreadEl, setChatThreadEl] = useState<HTMLElement | null>(null);
@@ -430,6 +431,16 @@ export const CanvasSearchResults = (): React.JSX.Element => {
       index: activeIdx,
       behavior: 'auto',
       align: 'center',
+      done: () => {
+        const root = resultsRef.current;
+        if (root?.contains(document.activeElement)) {
+          root
+            .querySelector<HTMLElement>(
+              `[data-search-row-index="${activeIdx}"]`,
+            )
+            ?.focus({ preventScroll: true });
+        }
+      },
     });
   }, [activeIdx, visibleRows.length]);
 
@@ -438,6 +449,7 @@ export const CanvasSearchResults = (): React.JSX.Element => {
 
   return (
     <div
+      ref={resultsRef}
       className="flex h-full min-h-0 flex-col font-normal"
       data-canvas-search-results=""
     >
@@ -475,10 +487,12 @@ export const CanvasSearchResults = (): React.JSX.Element => {
           itemContent={(index, v) =>
             v.kind === 'header' ? (
               <NodeHeaderItem
+                index={index}
                 group={v.group}
                 hasPreviousGroup={index > 0}
                 collapsed={collapsedNodeIds.has(v.group.nodeId)}
                 active={index === activeIdx}
+                onFocus={() => setActiveIdx(index)}
                 onClick={() => {
                   setActiveIdx(index);
                   toggleNodeCollapse(v.group.nodeId);
@@ -486,8 +500,10 @@ export const CanvasSearchResults = (): React.JSX.Element => {
               />
             ) : (
               <NodeMatchItem
+                index={index}
                 row={v.row}
                 active={index === activeIdx}
+                onFocus={() => setActiveIdx(index)}
                 onClick={() => {
                   setActiveIdx(index);
                   jumpToResult(v.row);
@@ -532,19 +548,23 @@ type VisibleRow =
   | { kind: 'match'; group: NodeGroup; row: SearchResultRow };
 
 interface NodeHeaderItemProps {
+  index: number;
   group: NodeGroup;
   hasPreviousGroup: boolean;
   collapsed: boolean;
   active: boolean;
   onClick: () => void;
+  onFocus: () => void;
 }
 
 const NodeHeaderItem = ({
+  index,
   group,
   hasPreviousGroup,
   collapsed,
   active,
   onClick,
+  onFocus,
 }: NodeHeaderItemProps): React.JSX.Element => {
   const displayLabel = group.label || group.nodeId;
   return (
@@ -556,6 +576,8 @@ const NodeHeaderItem = ({
         variant="ghost"
         size="sm"
         onClick={onClick}
+        onFocus={onFocus}
+        data-search-row-index={index}
         aria-expanded={!collapsed}
         className={cn(
           'flex h-7 w-full items-center justify-start gap-2 px-2 py-0 text-left text-xs font-normal',
@@ -607,15 +629,19 @@ const NodeHeaderItem = ({
 };
 
 interface NodeMatchItemProps {
+  index: number;
   row: SearchResultRow;
   active: boolean;
   onClick: () => void;
+  onFocus: () => void;
 }
 
 const NodeMatchItem = ({
+  index,
   row,
   active,
   onClick,
+  onFocus,
 }: NodeMatchItemProps): React.JSX.Element => (
   <div className="px-2">
     <Button
@@ -629,6 +655,8 @@ const NodeMatchItem = ({
         layerRowBackground({ selected: active }),
       )}
       onClick={onClick}
+      onFocus={onFocus}
+      data-search-row-index={index}
     >
       <div className="flex items-center gap-2 text-xs">
         <span className="text-fg-subtle shrink-0 uppercase">

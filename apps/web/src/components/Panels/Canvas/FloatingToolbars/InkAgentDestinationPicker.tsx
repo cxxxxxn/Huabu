@@ -164,6 +164,7 @@ export function InkAgentDestinationPicker({
       {/* Coordinate positioning clamps vertically even when neither side fits. */}
       <DropdownMenu
         align="bottom-right"
+        contentRole="presentation"
         // Clear the trigger's 7px toolbar inset, then leave an 8px surface gap.
         offset={{ x: 0, y: 15 }}
         open={open}

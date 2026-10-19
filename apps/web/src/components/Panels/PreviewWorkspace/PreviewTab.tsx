@@ -240,6 +240,7 @@ export function PreviewTab({
       >
         <DropdownMenu
           floating
+          contentRole="presentation"
           placement="bottom-start"
           open={menuOpen}
           onOpenChange={setMenuOpen}

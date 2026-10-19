@@ -72,6 +72,7 @@ export function CanvasZoomMenu() {
     >
       <DropdownMenu
         floating
+        contentRole="presentation"
         placement="top-start"
         align="top-left"
         open={open}

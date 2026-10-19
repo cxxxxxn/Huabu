@@ -18,6 +18,7 @@ import {
   useLayoutEffect,
   useMemo,
   type CSSProperties,
+  type HTMLAttributes,
   type MutableRefObject,
   type Ref,
   useRef,
@@ -126,7 +127,10 @@ function assignRef<T>(ref: Ref<T> | undefined, value: T | null) {
   (ref as MutableRefObject<T | null>).current = value;
 }
 
-export type PopoverProps = {
+export type PopoverProps = Pick<
+  HTMLAttributes<HTMLDivElement>,
+  'id' | 'role' | 'aria-labelledby' | 'onKeyDown'
+> & {
   reference?: Element | null;
   placement?: Placement;
   /**
@@ -214,6 +218,10 @@ export type PopoverProps = {
  * - Provides a styled card container (border + shadow + bg) by default.
  */
 export const Popover: FC<PopoverProps> = ({
+  id,
+  role,
+  'aria-labelledby': labelledBy,
+  onKeyDown,
   reference,
   placement = 'bottom',
   position: positionProp,
@@ -461,7 +469,13 @@ export const Popover: FC<PopoverProps> = ({
 
   const panel = (
     <PopoverContainerContext.Provider value={contextValue}>
+      {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions -- Callers supply the role and its keyboard contract together. */}
       <div
+        id={id}
+        role={role}
+        aria-labelledby={labelledBy}
+        tabIndex={role === 'menu' || role === 'dialog' ? -1 : undefined}
+        onKeyDown={onKeyDown}
         ref={(node) => {
           containerRef.current = node;
           floating.refs.setFloating(node);

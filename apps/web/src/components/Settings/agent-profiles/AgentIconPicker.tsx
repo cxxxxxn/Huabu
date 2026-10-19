@@ -44,6 +44,7 @@ export function AgentIconPicker({
   return (
     <DropdownMenu
       align="bottom-left"
+      contentRole="dialog"
       className="w-auto p-2"
       trigger={
         <Button

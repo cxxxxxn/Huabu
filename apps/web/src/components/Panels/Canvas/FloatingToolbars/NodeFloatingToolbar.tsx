@@ -454,6 +454,7 @@ export const NodeFloatingToolbar = memo(
         <DropdownMenu
           floating
           placement="bottom"
+          contentRole="dialog"
           className={`${FLOATING_TOOLBAR_POPOVER_CLASS} node-toolbar-size-panel ${type === 'spacePreview' ? '' : 'flex-row items-center gap-2'}`}
           trigger={
             <Button
@@ -590,7 +591,6 @@ export const NodeFloatingToolbar = memo(
         >
           <div
             role="presentation"
-            onKeyDown={handleCanvasNavigationKey}
             onClick={(event) => {
               event.stopPropagation();
               const item = (event.target as Element).closest(

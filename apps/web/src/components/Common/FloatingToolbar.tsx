@@ -984,6 +984,7 @@ function ToolbarAlignPicker({
         floating
         placement="bottom"
         open={isOpen}
+        contentRole="dialog"
         onOpenChange={setIsOpen}
         className={cn(FLOATING_TOOLBAR_POPOVER_CLASS, panelClassName)}
         trigger={

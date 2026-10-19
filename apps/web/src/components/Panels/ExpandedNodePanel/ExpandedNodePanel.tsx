@@ -156,6 +156,7 @@ const ConnectedNodeMenu = ({
   return (
     <DropdownMenu
       open={open}
+      contentRole="presentation"
       onOpenChange={onOpenChange}
       align="bottom-left"
       className="min-w-56"

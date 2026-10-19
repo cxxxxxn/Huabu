@@ -462,6 +462,7 @@ function Specimen({ type: initialType }: { type: CanvasNodeType }) {
                   <DropdownMenu
                     floating
                     placement="bottom"
+                    contentRole="dialog"
                     className="nt-layout-panel"
                     trigger={
                       <Button

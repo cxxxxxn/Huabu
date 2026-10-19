@@ -3,7 +3,7 @@
 > Structure, dependency rules, and conventions for the frontend. The point of
 > this doc is the **layering rules** below — not an exhaustive file listing
 > (those rot fast; `ls` the dir for the current files).
-> Last updated: 2026-10-09
+> Last updated: 2026-10-19
 
 ---
 
@@ -66,6 +66,10 @@ What stays in `apps/web/src/handler/canvasCommand/`:
 ---
 
 ## 4. Conventions
+
+Common DropdownMenu action lists expose a labelled `menu` linked to their trigger. Opening focuses the first enabled item; ArrowDown/ArrowUp on the trigger open at the first/last enabled item, and ArrowDown/ArrowUp/Home/End inside the menu move focus while skipping disabled items. Tab dismisses without blocking native traversal, Escape returns focus to the trigger, and ArrowRight/ArrowLeft enter/leave submenus. Hover-opened submenus do not steal focus. Menu items retain native button/link activation. Form and layout panels declare `contentRole="dialog"` so text editing and ordinary tab order remain native; consumers that already own their menu/dialog semantics and keyboard navigation declare `contentRole="presentation"` to avoid nested menus or duplicate handlers. Popover forwards the root DOM semantics and keyboard handler without adding layout wrappers.
+
+Canvas search synchronizes its active row when a result receives DOM focus. Arrow navigation from a result moves focus to the newly active row after Virtuoso reveals it, so Enter activates the same row that has focus. Navigation from the search input retains input focus and uses the active row for confirmation; browsing continues to reveal Canvas nodes without opening Preview tabs until explicit activation.
 
 Common Select menus use Popover's element-anchored Floating UI positioning instead of snapshot coordinates. The panel remains hidden until positioning completes, follows its trigger during scrolling and layout changes, and flips to the opposite side when space is insufficient rather than clamping over the trigger. Opening refresh callbacks run in the event handler, not a React state updater, so Strict Mode does not duplicate discovery requests. Agent Settings retain the loaded Profile catalogue during refresh; only the initial load replaces it with a loading row, preventing selector-trigger layout shifts when opening the Utility Agent menu.
 
