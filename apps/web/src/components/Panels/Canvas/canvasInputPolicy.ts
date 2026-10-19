@@ -25,7 +25,9 @@ const REACT_FLOW_INTERACTIVE =
 export function isPanelTarget(target: Element | null): boolean {
   return (
     Boolean(
-      target?.closest(`${REACT_FLOW_PANEL}, [data-multi-resize-control]`),
+      target?.closest(
+        `${REACT_FLOW_PANEL}, [data-multi-resize-control], [data-ink-sigil-label], [data-ink-sigil-hit-target]`,
+      ),
     ) || isVideoControlTarget(target)
   );
 }

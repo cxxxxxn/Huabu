@@ -37,7 +37,7 @@ export function NoteContentViewport({
           data-note-scroll-enabled={scrollingEnabled}
           data-note-native-scrollbar={nativeScrollbarVisible}
           data-note-touch-reading={touchReading}
-          className="huabu-note-scroll-viewport h-full"
+          className={`huabu-note-scroll-viewport h-full${nativeScrollbarVisible ? 'huabu-scrollbar' : ''}`}
           style={{
             overflowY: scrollingEnabled ? 'auto' : 'hidden',
             overflowX: 'hidden',

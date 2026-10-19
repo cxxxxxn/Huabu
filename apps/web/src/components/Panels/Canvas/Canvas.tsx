@@ -130,6 +130,7 @@ import { looksLikeUrl } from '../../../utils/io/media.ts';
 import { FrameNode } from '../../Nodes/frame/FrameNode.tsx';
 import { createQuestionNodeAndCompose } from '../../Nodes/question/questionCompose.ts';
 import { QuestionNode } from '../../Nodes/question/QuestionNode.tsx';
+import { InkSigilLayer } from '../../Nodes/sketch/InkSigilLayer';
 import { isPointInFlowPolygon } from '../../Nodes/sketch/sketchHitTest.ts';
 import { SketchNode } from '../../Nodes/sketch/SketchNode.tsx';
 import {
@@ -1497,6 +1498,7 @@ const CanvasContent: React.FC<CanvasProps> = ({
           {!isBoxSelecting && !hasStrokeSelection && <MultiSelectToolbar />}
           {!isBoxSelecting && <StrokeSelectionRegion />}
           {!isBoxSelecting && <StrokeSelectionToolbar />}
+          <InkSigilLayer tool={tool} />
           {!isBoxSelecting && <EdgeStyleToolbar />}
           <MoveSelectionPopover />
           <ConnectedNodePicker

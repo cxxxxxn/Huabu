@@ -42,6 +42,42 @@ function makeEnvelope(text: string): ChatEnvelope {
   } as unknown as ChatEnvelope;
 }
 
+it('round-trips frozen Sigil references and deduplicates their visible resource chips', () => {
+  const envelope = makeEnvelope('');
+  envelope.user.inputKind = 'ink-intent';
+  const reference = {
+    id: 'sigil',
+    fingerprint: '0123456789abcdef',
+    targetNodeId: 'pdf',
+    targetType: 'pdf' as const,
+    label: 'Frozen paper',
+    sourceBounds: { x: 10, y: 20, width: 40, height: 40 },
+    sources: [1, 2, 3, 4].map((i) => ({ nodeId: 'ink', strokeId: `s${i}` })),
+  };
+  envelope.focus.resources = {
+    bindings: [reference, { ...reference, id: 'second' }],
+    refs: [{ id: 'pdf', type: 'pdf', filename: 'nodes/pdf.md' }],
+    imageAttachments: [],
+  };
+  const messages: ChatHistoryItem[] = [];
+  buildHistoryFromTurns(
+    [{ request: createChatSubmission(envelope), transcript: [] }],
+    messages,
+  );
+  expect(messages[0]).toMatchObject({
+    role: 'user',
+    inkResources: envelope.focus.resources.bindings,
+    attachments: [
+      {
+        type: 'pdf',
+        source: 'selection',
+        originNodeId: 'pdf',
+        label: 'Frozen paper',
+      },
+    ],
+  });
+});
+
 function makeTurn(
   text: string | null,
   transcript: FoldedMessage[],

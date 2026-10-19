@@ -8,6 +8,7 @@ import type {
   QuotedComment,
   VisibleCanvasGrounding,
 } from '../api/agent.js';
+import type { InkResourceReference } from '../api/ink-sigil.js';
 
 export {
   chatEnvelopeSchema,
@@ -74,6 +75,7 @@ export type ChatHistoryItem =
       inkInterpretation?: InkInterpretation;
       /** Hidden retry metadata; never rendered as a Chat attachment. */
       groundingVisual?: VisibleCanvasGrounding;
+      inkResources?: InkResourceReference[];
       /** Image attachments recovered from multimodal messages. */
       attachments?: ChatAttachment[];
       /** IDs of canvas nodes that were selected when this message was sent. */

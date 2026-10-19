@@ -81,6 +81,20 @@ describe('agent API host acceptance', () => {
       selectedNodeIds: ['note-1'],
       strokeSubsets: [{ nodeId: 'sketch-1', strokeIds: ['stroke-1'] }],
     };
+    const inkResources = [
+      {
+        id: 'sigil',
+        fingerprint: '0123456789abcdef',
+        targetNodeId: 'paper',
+        targetType: 'pdf' as const,
+        label: 'Paper',
+        sourceBounds: { x: 0, y: 0, width: 40, height: 40 },
+        sources: [1, 2, 3, 4].map((i) => ({
+          nodeId: 'sketch-1',
+          strokeId: `stroke-${i}`,
+        })),
+      },
+    ];
 
     await agentApi.streamMessage('', 'thread-a', 'operate', callbacks(), {
       inputKind: 'ink-intent',
@@ -92,10 +106,12 @@ describe('agent API host acceptance', () => {
         ],
       },
       groundingVisual,
+      inkResources,
     });
 
     const body = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string);
     expect(body.groundingVisual).toEqual(groundingVisual);
+    expect(body.inkResources).toEqual(inkResources);
   });
 
   it('returns durable acceptance from stop', async () => {

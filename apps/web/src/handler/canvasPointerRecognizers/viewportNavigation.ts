@@ -25,6 +25,7 @@ import {
   zoomAroundPoint,
 } from '@/hooks/useCanvasGestures';
 import useCanvasStore from '@/store/canvasStore';
+import { resolvePendingInkSigilTap } from '@/store/inkSigilStore';
 
 import type { CanvasPointerRouterContext } from '@/handler/canvasPointerRouterContext';
 import type {
@@ -259,6 +260,7 @@ export function createViewportNavigationRecognizer(): PointerRecognizer<
       // node and steals the DOM target — the pen keeps drawing while the
       // finger picks nodes.
       if (phase === 'pending') {
+        if (resolvePendingInkSigilTap(panStart.x, panStart.y)) return;
         const sketchNodeIds = new Set(
           useCanvasStore
             .getState()

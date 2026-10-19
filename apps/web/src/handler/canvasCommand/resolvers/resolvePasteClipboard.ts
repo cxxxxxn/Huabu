@@ -115,6 +115,7 @@ export default function resolvePasteClipboard(
         (stroke: Record<string, unknown>) => ({
           ...stroke,
           id: createId('stroke'),
+          resourceBinding: undefined,
         }),
       );
     }

@@ -15,6 +15,7 @@
  */
 
 // ── Executor + runtime types ──────────────────────────────────────────────
+export * from './utils/inkSigil.js';
 export {
   computeAdjacentNodePlacement,
   type NodePlacementBounds,

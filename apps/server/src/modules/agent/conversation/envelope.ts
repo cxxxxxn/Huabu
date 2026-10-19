@@ -40,6 +40,7 @@ import type {
   AgentInputKind,
   ChatAttachment,
   ChatEnvelope,
+  InkResourceReference,
   QuotedComment,
   ResolvedSkill,
   VisibleCanvasGrounding,
@@ -75,6 +76,7 @@ export interface ChatEnvelopeParams {
   /** User-uploaded (off-canvas) attachments from the request body. */
   attachments?: ChatAttachment[];
   groundingVisual?: VisibleCanvasGrounding;
+  inkResources?: InkResourceReference[];
   /** Wire selection (top-level + frame children) for this turn. */
   selectedNodes?: WireSelectionNode[];
   /** Anchor node for neighbourhood preamble (e.g. question nodes). */
@@ -411,6 +413,7 @@ export async function buildChatEnvelope(
     inputKind,
     attachments,
     groundingVisual,
+    inkResources,
     selectedNodes,
     anchorNodeId,
     invokedSkills,
@@ -420,6 +423,9 @@ export async function buildChatEnvelope(
   } = params;
 
   const requireInkVisuals = inputKind === 'ink-intent';
+  const resources = inkResources?.length
+    ? await prepareInkResources(inkResources, canvasId, selectedNodes ?? [])
+    : undefined;
   const strokeSubsets = collectSketchStrokeSubsets(selectedNodes ?? []);
   if (requireInkVisuals && (!canvasId || strokeSubsets.length === 0)) {
     throw new InkVisualPreparationError(
@@ -512,6 +518,7 @@ export async function buildChatEnvelope(
       resolved: resolveInvokedSkills(invokedSkills, logger),
     },
     focus: {
+      ...(resources ? { resources } : {}),
       ...(groundingVisual ? { groundingVisual } : {}),
       selection: {
         refs: selectionRefs,
@@ -524,4 +531,56 @@ export async function buildChatEnvelope(
       ...(anchor ? { anchor } : {}),
     },
   };
+}
+
+async function prepareInkResources(
+  bindings: InkResourceReference[],
+  canvasId: string | null,
+  selectedNodes: WireSelectionNode[],
+): Promise<NonNullable<ChatEnvelope['focus']['resources']>> {
+  if (!canvasId) throw new Error('Resource Sigils require a Space');
+  const targetIds = [
+    ...new Set(bindings.map((binding) => binding.targetNodeId)),
+  ];
+  const records = await space(canvasId).nodes.readMany(targetIds);
+  const selectedIds = new Set(collectSelectionNodeIds(selectedNodes));
+  const refs: AgentNodePreview[] = [];
+  const imageAttachments: ChatAttachment[] = [];
+  for (const targetId of targetIds) {
+    const snapshot = records.get(targetId);
+    const references = bindings.filter(
+      (binding) => binding.targetNodeId === targetId,
+    );
+    if (
+      !snapshot ||
+      references.some((binding) => binding.targetType !== snapshot.record.type)
+    ) {
+      throw new Error(
+        `Referenced resource ${targetId} is missing or changed type. Repair the # reference and submit again.`,
+      );
+    }
+    if (selectedIds.has(targetId)) continue;
+    refs.push(
+      describeNode(
+        { id: targetId, type: references[0].targetType },
+        'preview',
+        snapshot.record,
+      ),
+    );
+    if (snapshot.record.type === 'image') {
+      if (typeof snapshot.record.src !== 'string' || !snapshot.record.src) {
+        throw new Error(
+          `Referenced image ${targetId} has no readable image source`,
+        );
+      }
+      imageAttachments.push({
+        type: 'image',
+        source: 'selection',
+        originNodeId: targetId,
+        url: snapshot.record.src,
+        label: references[0].label,
+      });
+    }
+  }
+  return { bindings: structuredClone(bindings), refs, imageAttachments };
 }

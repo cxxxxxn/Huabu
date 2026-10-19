@@ -245,6 +245,7 @@ export const agentApi = {
       canvasId?: string;
       attachments?: ChatAttachment[];
       groundingVisual?: VisibleCanvasGrounding;
+      inkResources?: AgentRequest['inkResources'];
       /**
        * Anchor a node-neighbourhood preamble to this node id. When
        * set, the server resolves the surrounding-canvas context from
@@ -293,6 +294,7 @@ export const agentApi = {
         ? options.attachments
         : undefined,
       groundingVisual: options?.groundingVisual,
+      inkResources: options?.inkResources,
       quotedComments: options?.quotedComments?.length
         ? options.quotedComments
         : undefined,

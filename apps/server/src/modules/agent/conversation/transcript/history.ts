@@ -16,6 +16,7 @@
  */
 
 import { commandFromRawInput, variantForInternalTool } from '@huabu/shared';
+import { inkResourceAttachments } from '@huabu/shared/canvas-engine';
 import {
   readInkInterpretation,
   settleInkInterpretation,
@@ -300,6 +301,10 @@ export function buildHistoryFromTurns(
     // 1. User item, straight from the structured envelope.
     if (envelope) {
       const allAttachments = [
+        ...inkResourceAttachments(
+          envelope.focus.resources?.bindings ?? [],
+          envelope.focus.selection.refs.map((ref) => ref.id),
+        ),
         ...envelope.user.attachments,
         ...envelope.focus.selection.imageAttachments,
         ...envelope.focus.selection.snapshotAttachments,
@@ -332,6 +337,9 @@ export function buildHistoryFromTurns(
           }),
           ...(envelope.focus.groundingVisual && {
             groundingVisual: envelope.focus.groundingVisual,
+          }),
+          ...(envelope.focus.resources && {
+            inkResources: envelope.focus.resources.bindings,
           }),
           ...(attachments.length > 0 && {
             attachments: attachments as ChatAttachment[],

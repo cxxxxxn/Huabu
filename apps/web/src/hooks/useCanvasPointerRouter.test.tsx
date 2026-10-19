@@ -5,6 +5,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import * as inkSigil from '@/store/inkSigilStore';
 import { useToolStore } from '@/store/toolStore';
 
 import { useCanvasPointerRouter } from './useCanvasPointerRouter';
@@ -60,6 +61,7 @@ function Harness({ inputMode }: { inputMode: EffectiveInputMode }) {
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   onDown.mockClear();
+  inkSigil.resetInkSigilSession();
   useToolStore.setState({ inputModePreference: 'auto', penObserved: false });
   useInputModeStore.setState({ mode: 'touch' });
   container = document.createElement('div');
@@ -77,9 +79,101 @@ afterEach(() => {
   useToolStore.setState(initialTools);
   useInputModeStore.setState(initialInput);
   vi.unstubAllGlobals();
+  inkSigil.resetInkSigilSession();
+  vi.restoreAllMocks();
 });
 
 describe('useCanvasPointerRouter live input policy', () => {
+  it.each([
+    ['mouse', 'mouse'],
+    ['pen', 'pen'],
+    ['touch', 'finger'],
+  ] as const)(
+    'resolves a pending Select-mode binding with %s without native selection',
+    (pointerType, inputMode) => {
+      useToolStore.setState({ inputModePreference: inputMode });
+      inkSigil.useInkSigilStore.setState({
+        pending: {
+          canvasId: 'space',
+          strokeIds: ['s0', 's1', 's2', 's3'],
+          fingerprint: '1234567890abcdef',
+        },
+      });
+      const resolve = vi
+        .spyOn(inkSigil, 'resolvePendingInkSigilTap')
+        .mockReturnValue(true);
+      act(() => root.render(<Harness inputMode={inputMode} />));
+      const node = document.createElement('div');
+      node.className = 'react-flow__node';
+      wrapper.append(node);
+      const nativeDown = vi.fn();
+      const nativeClick = vi.fn();
+      node.addEventListener('pointerdown', nativeDown);
+      node.addEventListener('click', nativeClick);
+      for (const type of ['pointerdown', 'pointerup']) {
+        act(() =>
+          node.dispatchEvent(
+            new PointerEvent(type, {
+              bubbles: true,
+              cancelable: true,
+              pointerType,
+              pointerId: 1,
+              isPrimary: true,
+              button: 0,
+              clientX: 120,
+              clientY: 140,
+            }),
+          ),
+        );
+      }
+      node.dispatchEvent(
+        new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }),
+      );
+      expect(resolve).toHaveBeenCalledExactlyOnceWith(120, 140);
+      expect(nativeDown).not.toHaveBeenCalled();
+      expect(nativeClick).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['pointermove', 'pointercancel'])(
+    'cancels Select-mode binding on %s rather than binding after a drag or cancellation',
+    (eventType) => {
+      useToolStore.setState({ inputModePreference: 'mouse' });
+      inkSigil.useInkSigilStore.setState({
+        pending: {
+          canvasId: 'space',
+          strokeIds: ['s0', 's1', 's2', 's3'],
+          fingerprint: '1234567890abcdef',
+        },
+      });
+      const resolve = vi
+        .spyOn(inkSigil, 'resolvePendingInkSigilTap')
+        .mockReturnValue(true);
+      act(() => root.render(<Harness inputMode="mouse" />));
+      for (const [type, x] of [
+        ['pointerdown', 0],
+        [eventType, 30],
+        ['pointerup', 0],
+      ] as const) {
+        act(() =>
+          wrapper.dispatchEvent(
+            new PointerEvent(type, {
+              bubbles: true,
+              cancelable: true,
+              pointerType: 'mouse',
+              pointerId: 1,
+              isPrimary: true,
+              button: 0,
+              clientX: x,
+            }),
+          ),
+        );
+      }
+      expect(resolve).not.toHaveBeenCalled();
+      expect(inkSigil.useInkSigilStore.getState().pending).toBeNull();
+    },
+  );
+
   it.each(['auto', 'finger', 'mouse'] satisfies InputModePreference[])(
     'resolves the first pen contact before gating and claiming under %s',
     (preference) => {

@@ -158,10 +158,14 @@ export function CanvasFloatingPopover({
       size({
         boundary: domNode ?? undefined,
         padding: viewportPadding,
-        apply({ availableWidth, elements }) {
+        apply({ availableWidth, availableHeight, elements }) {
           elements.floating.style.setProperty(
             '--canvas-popover-available-width',
             `${Math.max(0, availableWidth)}px`,
+          );
+          elements.floating.style.setProperty(
+            '--canvas-popover-available-height',
+            `${Math.max(0, availableHeight)}px`,
           );
         },
       }),

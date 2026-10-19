@@ -25,6 +25,59 @@ function node(
 }
 
 describe('buildSpaceMovePlan', () => {
+  it('does not carry same-Space Sigil bindings into another Space', () => {
+    const ink = node('ink', 'sketch', 0, 0);
+    ink.data.strokes = [
+      {
+        id: 'stroke-original',
+        points: [
+          [0, 0],
+          [20, 20],
+        ],
+        color: 'black',
+        size: 2,
+        createdAt: 1,
+        resourceBinding: {
+          id: 'binding',
+          targetNodeId: 'source-pdf',
+          targetType: 'pdf',
+          label: 'Paper',
+          fingerprint: '1234567890abcdef',
+          strokeIds: ['stroke-original', 's2', 's3', 's4'],
+        },
+      },
+    ];
+    const plan = buildSpaceMovePlan({
+      sourceNodes: [ink],
+      sourceEdges: [],
+      destinationNodes: [],
+      selectedNodeIds: [ink.id],
+      destinationCanvasId: 'destination',
+      createSourcePreview: false,
+    });
+    expect(plan.commands[0]).toMatchObject({
+      type: 'CREATE_NODES',
+      nodes: [
+        {
+          data: {
+            strokes: [
+              {
+                id: expect.not.stringMatching(/^stroke-original$/),
+                points: [
+                  [0, 0],
+                  [20, 20],
+                ],
+                resourceBinding: undefined,
+              },
+            ],
+          },
+        },
+      ],
+    });
+    expect(ink.data.strokes).toMatchObject([
+      { resourceBinding: { id: 'binding' } },
+    ]);
+  });
   it('deduplicates selected Frame descendants and preserves local geometry', () => {
     const frame = node('frame-a', 'frame', 50, 60);
     const child = node('node-a', 'note', 10, 20, frame.id);

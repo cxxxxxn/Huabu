@@ -28,6 +28,10 @@ export const FONT_FAMILY_CSS: Record<NodeFontFamily, string> = {
   hand: '"Comic Sans MS", "Chalkboard SE", sans-serif',
 };
 
+/** Bundled mixed-language handwriting for resource Sigil annotations. */
+export const INK_HANDWRITING_FONT_FAMILY =
+  '"Caveat", "LXGW WenKai Lite", "Kaiti SC", STKaiti, KaiTi, sans-serif';
+
 /** Base horizontal TextNode padding (px per side), scaled by fontSize / 16. */
 export const TEXT_NODE_PADDING_X = 8;
 /** Base vertical TextNode padding (px per side), scaled by fontSize / 16. */

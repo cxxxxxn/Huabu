@@ -12,6 +12,10 @@ import {
   type WebSearchToolResponse,
 } from '@huabu/shared';
 import {
+  inkResourceAttachments,
+  inkSelectionNodeIds,
+} from '@huabu/shared/canvas-engine';
+import {
   readInkInterpretation,
   settleInkInterpretation,
 } from '@huabu/shared/ink-interpretation';
@@ -816,6 +820,7 @@ export interface AgentTurnInput {
   sources: CapturedAgentTurnSources;
   attachments?: ChatAttachment[];
   groundingVisual?: VisibleCanvasGrounding;
+  inkResources?: AgentRequest['inkResources'];
   invokedSkills?: string[];
   quotedComments?: AgentRequest['quotedComments'];
 }
@@ -939,10 +944,20 @@ export function prepareAgentTurnRetry(
     sources,
     content: message.content,
     inputKind: message.inputKind ?? 'text',
-    attachments: message.attachments,
+    attachments: message.inkResources?.length
+      ? message.attachments?.filter(
+          (attachment) =>
+            attachment.source !== 'selection' ||
+            !attachment.originNodeId ||
+            !message.inkResources?.some(
+              (reference) => reference.targetNodeId === attachment.originNodeId,
+            ),
+        )
+      : message.attachments,
     invokedSkills: message.invokedSkills,
     quotedComments: message.quotedComments,
     groundingVisual: message.groundingVisual,
+    inkResources: message.inkResources,
   });
 }
 
@@ -986,7 +1001,20 @@ export function createAgentTurnUserMessage(
       ? { inkInterpretation: { state: 'pending' as const } }
       : {}),
     groundingVisual: prepared.groundingVisual,
-    attachments: prepared.attachments,
+    inkResources: prepared.inkResources,
+    attachments: prepared.inkResources?.length
+      ? [
+          ...(prepared.attachments ?? []),
+          ...inkResourceAttachments(prepared.inkResources, [
+            ...inkSelectionNodeIds(
+              prepared.sources.canvasContext.selectedNodes,
+            ),
+            ...(prepared.attachments ?? []).flatMap((attachment) =>
+              attachment.originNodeId ? [attachment.originNodeId] : [],
+            ),
+          ]),
+        ]
+      : prepared.attachments,
     ...(selectedNodeIds.length > 0 ? { selectedNodeIds } : {}),
     ...(selectedStrokeIds.length > 0 ? { selectedStrokeIds } : {}),
     ...(prepared.invokedSkills?.length
@@ -1262,6 +1290,7 @@ export async function dispatchAgentTurn(
         {
           inputKind,
           groundingVisual: prepared.groundingVisual,
+          inkResources: prepared.inkResources,
           canvasContext,
           canvasId: requestScope.canvasId || undefined,
           attachments,

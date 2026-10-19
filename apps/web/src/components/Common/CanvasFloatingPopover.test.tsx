@@ -25,6 +25,32 @@ afterEach(() => {
 });
 
 describe('CanvasFloatingPopover', () => {
+  it('publishes nonnegative available dimensions for bounded scrollable content', async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () =>
+      root?.render(
+        <CanvasFloatingPopover
+          open
+          anchor={{ x: 100, y: 100, width: 40, height: 40 }}
+          className="sized-popover"
+        >
+          Content
+        </CanvasFloatingPopover>,
+      ),
+    );
+    const popover = document.querySelector<HTMLElement>('.sized-popover');
+    expect(popover).not.toBeNull();
+    for (const dimension of ['width', 'height']) {
+      expect(
+        popover?.style.getPropertyValue(
+          `--canvas-popover-available-${dimension}`,
+        ),
+      ).toMatch(/^\d+(\.\d+)?px$/);
+    }
+  });
+
   it.each([false, true])(
     'owns double-clicks without cancelling native defaults (nested portal: %s)',
     async (nested) => {
