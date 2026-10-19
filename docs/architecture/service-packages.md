@@ -17,6 +17,8 @@ The bundled packages live under `apps/server/src/services/<id>/`:
 
 Phase 1 packages are trusted files shipped with Huabu. User upload, installation, remote registries, and Server execution of uploaded code are not supported.
 
+Server bundling copies the Service tree to `apps/server/dist-bundle/services/`. Desktop packaging includes that tree at `resources/server/services/`, alongside `server.js`, excluding `*.test.*` source files while retaining every `service.yaml` and its declared runtime Package files. The loader validates these files during module initialization, so missing resources prevent the local Server from starting even when no Service has been configured. The bundle runtime regression test verifies the desktop resource mapping, excludes test sources, and loads the packages from an isolated packaged layout without the source-tree fallback.
+
 ## Manifest contract
 
 `huabu-service/v1` is defined by `serviceManifestSchema` in `packages/shared/src/types/api/service-package.ts`. Unknown properties, malformed IDs, duplicate configuration IDs, invalid enum declarations, ambiguous Package paths, duplicate Package files, and `entry.mjs` without `SKILL.md` fail validation.
