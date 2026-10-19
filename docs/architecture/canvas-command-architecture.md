@@ -50,9 +50,17 @@ Types and resolvers: `apps/web/src/handler/canvasCommand/uiIntent.ts` + `apps/we
 
 ### Post-create editing
 
-`UiIntentResolution.editNodeId` is a transient web-only request applied after the resolved commands commit successfully. `ADD_NODES` sets it when one `note` or `text` node is created: a note opens in the expanded view and focuses its editor, while a text node enters inline editing and focuses its textarea. Batch creation leaves it unset because there is no unambiguous editor target.
+`UiIntentResolution.editNodeId` is a transient web-only request applied after the resolved commands commit successfully. `ADD_NODES` sets it when one `note` or `text` node with `user-created` origin is created: a note opens in the expanded view and focuses its editor, while a text node enters inline editing and focuses its textarea. Notes saved from Chat do not request editing. Batch creation leaves it unset because there is no unambiguous editor target.
 
 The request never enters `CanvasCommand`, persisted node data, or deltas. Agent execution, SSE application, delta replay, and rejected create commands therefore cannot open a view or steal focus.
+
+### Automatic placement and post-create reveal
+
+`ADD_NODES` inputs without an explicit `placementPoint`, including saving a Chat as an Agent node and saving a whole response or selected Markdown as a Note, are centred in the unobscured Canvas area. `dispatchUiIntent` reuses `getCanvasVisibleArea()` to subtract both panel insets before converting the centre through React Flow. Explicit drag/drop anchors and frame hit-testing are unchanged.
+
+`UiIntentResolution.revealNodeIds` requests a reveal only for automatically placed additions. After execution, the store queues only IDs that were actually created, excluding rejected commands and pre-existing nodes. `useRevealCreatedNodes` consumes the latest request once Canvas is mounted and its initial viewport is ready; `revealNodesOnCanvas()` preserves zoom and pans only as much as needed to expose the bounds. These requests are transient and cleared on Space load/switch, not persisted or replayed through undo.
+
+Fullscreen Preview unmounts Canvas. Saving there uses the stored viewport as a placement fallback, keeps the conversation fullscreen, and defers the reveal until the user returns to Canvas. If no viewport exists yet, placement falls back to `(0, 0)` and the same post-mount reveal makes the new node discoverable.
 
 Composite intent examples:
 

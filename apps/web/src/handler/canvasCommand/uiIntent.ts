@@ -78,9 +78,10 @@ export interface AddNodeInput {
    * Providing `placementPoint` is a contract that the caller has chosen
    * the node's position (drag-drop, paste, toolbar click, sketch overlay,
    * group-into-frame, etc.). When omitted the resolver falls back to the
-   * viewport centre (or `(0, 0)` when the canvas is not yet mounted), so
+   * unobscured viewport centre (or the stored viewport while unmounted), so
    * a final explicit position is always emitted in the `CREATE_NODES`
-   * command — the shared engine no longer ships a layout fallback.
+   * command. Without either viewport it uses `(0, 0)` and reveals the node
+   * once Canvas is ready — the shared engine has no layout fallback.
    */
   placementPoint?: Point;
   /**
@@ -318,6 +319,8 @@ export interface UiIntentResolution {
    * The store maps this to the node type's editing surface.
    */
   editNodeId?: string;
+  /** Reveal newly created, automatically placed nodes after the canvas is ready. */
+  revealNodeIds?: string[];
   /**
    * UI-only presentation request that bypasses the command pipeline.
    *
@@ -339,10 +342,9 @@ export interface UiResolverState {
    * `dispatchUiIntent` from the live React Flow instance + canvas wrapper
    * rect. Resolvers use it as the anchor when a new node has no explicit
    * `placementPoint` (e.g. "Add as note" from a chat panel), so the node
-   * lands in the visible area. Undefined when the canvas DOM is not yet
-   * mounted (initial boot) or when the React Flow instance has not
-   * registered yet — resolvers then default the position to `(0, 0)`
-   * because the shared engine no longer ships a layout fallback.
+   * lands in the unobscured visible area. When Canvas is unmounted, the
+   * stored viewport supplies a fallback centre. Without either viewport,
+   * resolvers default to `(0, 0)` and reveal automatic additions on mount.
    */
   viewportCenter?: Point;
 }
