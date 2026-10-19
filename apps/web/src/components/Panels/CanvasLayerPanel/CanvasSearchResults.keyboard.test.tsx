@@ -1,35 +1,52 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+import { createInstance } from 'i18next';
 import { act, useImperativeHandle, type ReactNode, type Ref } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { I18nextProvider } from 'react-i18next';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import enCommon from '@/i18n/resources/en/common.json';
+import zhCNCommon from '@/i18n/resources/zh-CN/common.json';
 import { useSearchStore, type SearchResultRow } from '@/store/searchStore';
 
 import { CanvasSearchResults } from './CanvasSearchResults';
+
+import type * as SearchDom from '@/hooks/searchDom';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-const { selectNodes, openPreviewNode, canvasState } = vi.hoisted(() => {
+const {
+  selectNodes,
+  openPreviewNode,
+  canvasState,
+  scheduleScrollToMatch,
+  toast,
+} = vi.hoisted(() => {
   const selectNodes = vi.fn();
+  const nodes: { id: string; data: { threadId?: string } }[] = [];
   return {
     selectNodes,
     openPreviewNode: vi.fn(),
     canvasState: {
       selectNodes,
-      nodes: [],
+      nodes,
       rfInstance: null,
       canvasWrapper: null,
     },
+    scheduleScrollToMatch: vi.fn<typeof SearchDom.scheduleScrollToMatch>(),
+    toast: vi.fn(),
   };
 });
 
 vi.mock('@/store/canvasStore', () => ({
-  default: (select: (state: typeof canvasState) => unknown) =>
-    select(canvasState),
+  default: Object.assign(
+    (select: (state: typeof canvasState) => unknown) => select(canvasState),
+    { getState: () => canvasState },
+  ),
 }));
 vi.mock('@/store/previewWorkspace/store', () => ({
   selectActiveNodeId: () => null,
@@ -37,7 +54,8 @@ vi.mock('@/store/previewWorkspace/store', () => ({
 }));
 vi.mock('@/store/previewWorkspace/actions', () => ({ openPreviewNode }));
 vi.mock('@/hooks/useTextHighlight', () => ({ useTextHighlight: vi.fn() }));
-vi.mock('@/hooks/searchDom', () => ({ scheduleScrollToMatch: vi.fn() }));
+vi.mock('@/hooks/searchDom', () => ({ scheduleScrollToMatch }));
+vi.mock('../../Common/Toast', () => ({ toast }));
 vi.mock('./LayerNodeIcon', () => ({ CanvasSearchNodeIcon: () => null }));
 vi.mock('./focusNodesOnCanvas', () => ({ revealNodesOnCanvas: vi.fn() }));
 vi.mock('../../Nodes/previews', () => ({ hasNodePreview: () => true }));
@@ -82,6 +100,7 @@ const results: SearchResultRow[] = ['first', 'second'].map((nodeId) => ({
 let root: Root | undefined;
 let container: HTMLDivElement | undefined;
 let searchInput: HTMLInputElement | undefined;
+const testI18n = createInstance();
 
 function getRow(index: number): HTMLButtonElement {
   const row = container?.querySelector<HTMLButtonElement>(
@@ -101,7 +120,19 @@ function press(element: HTMLElement, key: string) {
   return event;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await testI18n.init({
+    lng: 'en',
+    fallbackLng: 'en',
+    defaultNS: 'common',
+    resources: {
+      en: { common: enCommon },
+      'zh-CN': { common: zhCNCommon },
+    },
+    interpolation: { escapeValue: false },
+    react: { useSuspense: false },
+  });
+  canvasState.nodes.splice(0);
   useSearchStore.setState({
     query: 'test',
     results,
@@ -117,8 +148,116 @@ beforeEach(() => {
   searchInput.dataset.canvasSearchInput = '';
   document.body.append(searchInput, container);
   root = createRoot(container);
-  act(() => root?.render(<CanvasSearchResults />));
+  act(() =>
+    root?.render(
+      <I18nextProvider i18n={testI18n}>
+        <CanvasSearchResults />
+      </I18nextProvider>,
+    ),
+  );
   vi.clearAllMocks();
+});
+
+describe('Canvas search localization', () => {
+  it.each([
+    {
+      language: 'en',
+      empty: 'No matches',
+      streaming: 'Searching note contents…',
+      truncated:
+        'The result set only contains a subset of all matches. Be more specific in your search to narrow down the results.',
+    },
+    {
+      language: 'zh-CN',
+      empty: '没有匹配结果',
+      streaming: '正在搜索笔记正文…',
+      truncated: '当前仅显示部分匹配结果，请使用更具体的搜索内容缩小范围。',
+    },
+  ])(
+    'localizes empty, streaming, and truncated states in $language',
+    async ({ language, empty, streaming, truncated }) => {
+      await act(async () => {
+        await testI18n.changeLanguage(language);
+      });
+      act(() => useSearchStore.setState({ results: [] }));
+      expect(container?.textContent).toBe(empty);
+      act(() =>
+        useSearchStore.setState({ isStreaming: true, contentPhase: true }),
+      );
+      expect(container?.textContent).toBe(streaming);
+      act(() => useSearchStore.setState({ truncated: true }));
+      expect(container?.textContent).toContain(truncated);
+    },
+  );
+
+  it('localizes every result field and switches language without resetting results', async () => {
+    const fields = [
+      'label',
+      'summary',
+      'keywords',
+      'content',
+      'conversation',
+    ] as const;
+    const fieldResults: SearchResultRow[] = fields.map((field) => ({
+      ...results[0],
+      key: `first:${field}:0`,
+      match: { ...results[0].match, field },
+    }));
+    act(() => useSearchStore.setState({ results: fieldResults }));
+    const getLabels = () =>
+      Array.from(
+        container?.querySelectorAll('[data-search-row-index] .uppercase') ?? [],
+        (element) => element.textContent,
+      );
+    expect(getLabels()).toEqual([
+      'Title',
+      'Summary',
+      'Keywords',
+      'Content',
+      'Conversation',
+    ]);
+    await act(async () => {
+      await testI18n.changeLanguage('zh-CN');
+    });
+    expect(getLabels()).toEqual(['标题', '摘要', '关键词', '正文', '对话']);
+    expect(useSearchStore.getState().results).toBe(fieldResults);
+    expect(useSearchStore.getState().query).toBe('test');
+  });
+
+  it.each([
+    {
+      language: 'en',
+      message:
+        'Match not visible in the conversation — scroll manually to find it.',
+    },
+    { language: 'zh-CN', message: '对话中未显示匹配内容，请手动滚动查找。' },
+  ])(
+    'localizes conversation match timeout feedback in $language',
+    async ({ language, message }) => {
+      await act(async () => {
+        await testI18n.changeLanguage(language);
+      });
+      canvasState.nodes.push({ id: 'first', data: { threadId: 'thread' } });
+      act(() =>
+        useSearchStore.setState({
+          results: [
+            {
+              ...results[0],
+              match: { ...results[0].match, field: 'conversation' },
+            },
+          ],
+        }),
+      );
+      act(() => getRow(1).click());
+      const options = scheduleScrollToMatch.mock.calls[0]?.[3];
+      expect(options?.onTimeout).toBeTypeOf('function');
+      options?.onTimeout?.();
+      expect(toast).toHaveBeenCalledExactlyOnceWith(message, {
+        tone: 'info',
+        duration: 4000,
+      });
+    },
+  );
 });
 
 afterEach(() => {

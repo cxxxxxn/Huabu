@@ -530,7 +530,18 @@
     "previousMatch": "Previous match",
     "nextMatch": "Next match",
     "clear": "Clear search",
-    "searching": "Searching"
+    "searching": "Searching",
+    "noMatches": "No matches",
+    "searchingNoteContents": "Searching note contents…",
+    "resultsTruncated": "The result set only contains a subset of all matches. Be more specific in your search to narrow down the results.",
+    "conversationMatchNotVisible": "Match not visible in the conversation — scroll manually to find it.",
+    "fields": {
+      "label": "Title",
+      "summary": "Summary",
+      "keywords": "Keywords",
+      "content": "Content",
+      "conversation": "Conversation"
+    }
   },
   "editor": {
     "readOnlyContent": "Read-only content",

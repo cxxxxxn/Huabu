@@ -34,6 +34,7 @@
 
 import { ChevronDown, ChevronRight, TriangleAlert } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 
 import { shouldCanvasSearchOwnKeyboard } from './canvasSearchKeyboard';
@@ -65,6 +66,7 @@ import { hasNodePreview } from '../../Nodes/previews';
 const ROW_HEIGHT = 40;
 
 export const CanvasSearchResults = (): React.JSX.Element => {
+  const { t } = useTranslation();
   const query = useSearchStore((s) => s.query);
   const results = useSearchStore((s) => s.results);
   const isStreaming = useSearchStore((s) => s.isStreaming);
@@ -312,10 +314,10 @@ export const CanvasSearchResults = (): React.JSX.Element => {
             row.match.occurrenceIndex,
             {
               onTimeout: () =>
-                toast(
-                  'Match not visible in the conversation — scroll manually to find it.',
-                  { tone: 'info', duration: 4000 },
-                ),
+                toast(t('search.conversationMatchNotVisible'), {
+                  tone: 'info',
+                  duration: 4000,
+                }),
             },
           );
         }
@@ -330,7 +332,7 @@ export const CanvasSearchResults = (): React.JSX.Element => {
       }
       focusNodeOnCanvas(nodeId);
     },
-    [focusNodeOnCanvas, focusGroupOnCanvas, openConversationForNode, query],
+    [focusNodeOnCanvas, focusGroupOnCanvas, openConversationForNode, query, t],
   );
 
   // Live-follow only on the Canvas. Browsing with ↑ / ↓ must not open,
@@ -463,10 +465,7 @@ export const CanvasSearchResults = (): React.JSX.Element => {
             className="text-warning mt-0.5 shrink-0"
             aria-hidden
           />
-          <span className="text-fg-muted">
-            The result set only contains a subset of all matches. Be more
-            specific in your search to narrow down the results.
-          </span>
+          <span className="text-fg-muted">{t('search.resultsTruncated')}</span>
         </div>
       )}
 
@@ -516,13 +515,13 @@ export const CanvasSearchResults = (): React.JSX.Element => {
 
       {!error && nodeGroups.length === 0 && showEmpty && (
         <div className="text-fg-subtle px-3 py-5 text-center text-xs">
-          No matches
+          {t('search.noMatches')}
         </div>
       )}
 
       {!error && isStreaming && contentPhase && (
         <div className="text-fg-subtle border-edge-default border-t px-3 py-1.5 text-xs">
-          Searching note contents…
+          {t('search.searchingNoteContents')}
         </div>
       )}
     </div>
@@ -642,35 +641,38 @@ const NodeMatchItem = ({
   active,
   onClick,
   onFocus,
-}: NodeMatchItemProps): React.JSX.Element => (
-  <div className="px-2">
-    <Button
-      variant="ghost"
-      size="sm"
-      tabIndex={-1}
-      style={{ minHeight: ROW_HEIGHT }}
-      className={cn(
-        'flex w-full cursor-pointer flex-col items-stretch justify-start gap-0 px-3 py-1 pl-[54px] text-left font-normal',
-        LAYER_ROW_SURFACE_CLASS,
-        layerRowBackground({ selected: active }),
-      )}
-      onClick={onClick}
-      onFocus={onFocus}
-      data-search-row-index={index}
-    >
-      <div className="flex items-center gap-2 text-xs">
-        <span className="text-fg-subtle shrink-0 uppercase">
-          {row.match.field}
-        </span>
-      </div>
-      <SnippetLine
-        text={row.match.snippet}
-        matchStart={row.match.matchStart}
-        matchLength={row.match.matchLength}
-      />
-    </Button>
-  </div>
-);
+}: NodeMatchItemProps): React.JSX.Element => {
+  const { t } = useTranslation();
+  return (
+    <div className="px-2">
+      <Button
+        variant="ghost"
+        size="sm"
+        tabIndex={-1}
+        style={{ minHeight: ROW_HEIGHT }}
+        className={cn(
+          'flex w-full cursor-pointer flex-col items-stretch justify-start gap-0 px-3 py-1 pl-[54px] text-left font-normal',
+          LAYER_ROW_SURFACE_CLASS,
+          layerRowBackground({ selected: active }),
+        )}
+        onClick={onClick}
+        onFocus={onFocus}
+        data-search-row-index={index}
+      >
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-fg-subtle shrink-0 uppercase">
+            {t(`search.fields.${row.match.field}`)}
+          </span>
+        </div>
+        <SnippetLine
+          text={row.match.snippet}
+          matchStart={row.match.matchStart}
+          matchLength={row.match.matchLength}
+        />
+      </Button>
+    </div>
+  );
+};
 
 /**
  * Max characters of leading context shown before the highlighted
