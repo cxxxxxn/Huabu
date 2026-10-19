@@ -226,6 +226,60 @@ describe('agentlet daemon integration', () => {
     })).toMatchObject({ result: { sessionId: 'native-bootstrap', pid: expect.any(Number) } })
     expect(await request(15, ServerMethods.STOP, { sessionId: 'native-bootstrap' }))
       .toMatchObject({ result: { stopped: true } })
+    expect(await request(16, ServerMethods.SPAWN, {
+      appId: 'thread-before-restart',
+      sessionSpec: { command: `node ${JSON.stringify(mockAgentPath)}`, autoRestart: true },
+    })).toMatchObject({ result: { sessionId: 'native-bootstrap' } })
+    await waitUntil(() => sessionSocket?.readyState === WebSocket.OPEN)
+    const oldControlSocket = controlSocket
+    const oldSessionSocket = sessionSocket
+    const helloCount = () => controlMessages.filter(
+      message => 'method' in message && message.method === AgentletMethods.HELLO,
+    ).length
+    const beforeRestart = helloCount()
+    controlSocket?.send(JSON.stringify({
+      jsonrpc: '2.0', method: ServerMethods.SHUTDOWN, params: { reason: 'server_shutting_down' },
+    }))
+    await waitUntil(() => oldControlSocket?.readyState === WebSocket.CLOSED)
+    await waitUntil(() => oldSessionSocket?.readyState === WebSocket.CLOSED)
+    await new Promise<void>((resolve, reject) =>
+      httpServer?.close(error => error ? reject(error) : resolve()),
+    )
+    await new Promise(resolve => setTimeout(resolve, 1100))
+    expect(exitSpy).not.toHaveBeenCalled()
+    await new Promise<void>(resolve => httpServer?.listen(port, '127.0.0.1', resolve))
+    await waitUntil(() => helloCount() > beforeRestart)
+    expect(controlHello?.agentletId).toBe('machine-a')
+    expect(await request(17, ServerMethods.LIST, {})).toMatchObject({ result: { agents: [] } })
+    expect(await request(18, ServerMethods.SPAWN, {
+      appId: 'thread-after-restart',
+      sessionSpec: { command: `node ${JSON.stringify(mockAgentPath)}` },
+    })).toMatchObject({ result: { sessionId: 'native-bootstrap' } })
+    expect(await request(19, ServerMethods.STOP, { sessionId: 'native-bootstrap' }))
+      .toMatchObject({ result: { stopped: true } })
+    const pendingAgentPath = join(fixtureDir, 'pending-agent.cjs')
+    const pendingStarted = join(fixtureDir, 'pending-started')
+    writeFileSync(pendingAgentPath, [
+      `require('node:fs').writeFileSync(${JSON.stringify(pendingStarted)}, 'started')`,
+      'process.stdin.resume()',
+    ].join('\n'))
+    controlSocket?.send(JSON.stringify({
+      jsonrpc: '2.0', id: 100, method: ServerMethods.SPAWN,
+      params: { sessionSpec: { command: `node ${JSON.stringify(pendingAgentPath)}` } },
+    }))
+    await waitUntil(() => existsSync(pendingStarted))
+    const beforePendingRestart = helloCount()
+    controlSocket?.send(JSON.stringify({
+      jsonrpc: '2.0', method: ServerMethods.SHUTDOWN, params: { reason: 'server_shutting_down' },
+    }))
+    await waitUntil(() => helloCount() > beforePendingRestart)
+    expect(await request(101, ServerMethods.LIST, {})).toMatchObject({ result: { agents: [] } })
+    expect(await request(102, ServerMethods.SPAWN, {
+      appId: 'thread-after-pending-restart',
+      sessionSpec: { command: `node ${JSON.stringify(mockAgentPath)}` },
+    })).toMatchObject({ result: { sessionId: 'native-bootstrap' } })
+    expect(await request(103, ServerMethods.STOP, { sessionId: 'native-bootstrap' }))
+      .toMatchObject({ result: { stopped: true } })
     controlSocket?.send(JSON.stringify({ jsonrpc: '2.0', method: ServerMethods.SHUTDOWN }))
     await waitUntil(() => (exitSpy?.mock.calls.length ?? 0) > 0)
     expect(exitSpy).toHaveBeenCalledWith(0)

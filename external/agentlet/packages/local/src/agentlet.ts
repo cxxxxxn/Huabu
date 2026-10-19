@@ -77,6 +77,7 @@ export class Agentlet {
   private reconnectAttempt = 0
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private shutdownInProgress = false
+  private serverRestartInProgress = false
 
   private readonly daemonId: string
   private readonly machine = {
@@ -87,6 +88,7 @@ export class Agentlet {
   private controlWs: WebSocket | null = null
   private readonly agents = new Map<string, ManagedAgent>()
   private pendingSpawns = 0
+  private readonly startingAgents = new Set<AgentProcess>()
   private readonly stopOperations = new Map<string, Promise<StopResult>>()
   private handshakeComplete = false
 
@@ -153,7 +155,8 @@ export class Agentlet {
     }
     url.searchParams.set('role', 'agentlet')
     url.searchParams.set('id', this.daemonId)
-    this.controlWs = new WebSocket(url.toString())
+    const controlWs = new WebSocket(url.toString())
+    this.controlWs = controlWs
 
     this.controlWs.on('open', () => {
       this.logger.info('ws_connected', { server: this.options.server })
@@ -161,6 +164,7 @@ export class Agentlet {
     })
 
     this.controlWs.on('message', (data, isBinary) => {
+      if (this.controlWs !== controlWs || this.shutdownInProgress) return
       if (isBinary) {
         this.logger.error('binary_frame', { message: 'Received binary WebSocket frame' })
         return
@@ -175,7 +179,7 @@ export class Agentlet {
     })
 
     this.controlWs.on('close', (code, reason) => {
-      if (this.shutdownInProgress) return
+      if (this.shutdownInProgress || this.controlWs !== controlWs) return
       this.logger.warn('ws_disconnected', { code, reason: reason.toString() })
       this.controlWs = null
       this.handshakeComplete = false
@@ -184,6 +188,20 @@ export class Agentlet {
 
     this.controlWs.on('error', (err) => {
       this.logger.error('ws_error', { message: err.message })
+    })
+
+    this.controlWs.on('unexpected-response', (_request, response) => {
+      response.resume()
+      if (response.statusCode === 401 || response.statusCode === 403) {
+        this.logger.error('authentication_failed', {
+          statusCode: response.statusCode,
+          message: 'Connection rejected. Copy a new connection command from Huabu and run it again.',
+        })
+        void this.shutdown('authentication_failed', 1)
+      } else {
+        this.logger.error('ws_upgrade_rejected', { statusCode: response.statusCode })
+      }
+      controlWs.terminate()
     })
   }
 
@@ -216,7 +234,11 @@ export class Agentlet {
     // Handle handshake response
     if (!this.handshakeComplete && 'id' in msg && msg.id === 1) {
       if ('error' in msg && msg.error) {
-        this.logger.error('handshake_failed', { code: msg.error.code, message: msg.error.message })
+        this.logger.error('handshake_failed', {
+          code: msg.error.code,
+          message: msg.error.message,
+          action: 'Check the server connection settings. If credentials were rejected, copy a new connection command and run it again.',
+        })
         this.shutdown('handshake_failed', 1)
         return
       }
@@ -239,7 +261,11 @@ export class Agentlet {
     if ('method' in msg && !('id' in msg)) {
       if (msg.method === ServerMethods.SHUTDOWN) {
         this.logger.info('shutdown_requested', { params: msg.params })
-        this.shutdown('server_requested')
+        if (msg.params?.reason === 'server_shutting_down') {
+          void this.reconnectAfterServerShutdown()
+        } else {
+          void this.shutdown('server_requested')
+        }
       } else if (msg.method === ServerMethods.SEND_RESOURCE) {
         this.handleSendResource(msg.params as unknown as SendResourceParams)
       }
@@ -414,14 +440,15 @@ export class Agentlet {
 
     this.logger.info('spawning_agent', { command, cwd, sessionId: params.sessionId })
 
+    const spawnSocket = this.controlWs
+    const agent = new AgentProcess({
+      command,
+      cwd,
+      env: agentEnv,
+      inheritEnv: false,
+    })
+    this.startingAgents.add(agent)
     try {
-      const agent = new AgentProcess({
-        command,
-        cwd,
-        env: agentEnv,
-        inheritEnv: false,
-      })
-
       agent.on('error', (err) => {
         this.logger.error('agent_error', { command, message: err.message })
       })
@@ -443,13 +470,18 @@ export class Agentlet {
       } catch (err) {
         this.logger.error('session_bootstrap_failed', { message: err instanceof Error ? err.message : String(err) })
         agent.terminate()
-        this.sendDaemonResponse(requestId, undefined, {
+        if (this.controlWs === spawnSocket) this.sendDaemonResponse(requestId, undefined, {
           code: -32000,
           message: `Session bootstrap failed: ${err instanceof Error ? err.message : String(err)}`,
           ...(err instanceof SessionResumeUnavailableError
             ? { data: { code: err.code } }
             : {}),
         })
+        return
+      }
+      if (this.controlWs !== spawnSocket || this.shutdownInProgress || this.serverRestartInProgress) {
+        this.logger.warn('spawn_cancelled', { message: 'Server disconnected during agent bootstrap.' })
+        await this.stopAgentProcess(agent)
         return
       }
 
@@ -548,6 +580,7 @@ export class Agentlet {
           this.logger.info('agent_restarting', { sessionId })
           setTimeout(() => {
             if (this.agents.has(sessionId) && !this.shutdownInProgress) {
+              if (this.serverRestartInProgress || managed.status === 'stopping') return
               agent.start()
               managed.pid = agent.pid ?? 0
               managed.status = 'running'
@@ -630,11 +663,15 @@ export class Agentlet {
       // Return spawn result immediately (agent PID is already known)
       this.sendDaemonResponse(requestId, { sessionId, pid: managed.pid })
     } catch (err) {
-      this.sendDaemonResponse(requestId, undefined, {
+      this.logger.error('spawn_failed', {
+        message: err instanceof Error ? err.message : String(err),
+      })
+      if (this.controlWs === spawnSocket) this.sendDaemonResponse(requestId, undefined, {
         code: -32000,
         message: `Failed to spawn agent: ${err instanceof Error ? err.message : String(err)}`,
       })
     } finally {
+      this.startingAgents.delete(agent)
       this.pendingSpawns--
     }
   }
@@ -691,19 +728,7 @@ export class Agentlet {
       managed.ws.send(goodbye)
     }
 
-    managed.agent.closeStdin()
-    await this.waitForAgentExit(managed.agent, 5000)
-    if (managed.agent.running) {
-      managed.agent.terminate()
-      await this.waitForAgentExit(managed.agent, 2000)
-    }
-    if (managed.agent.running) {
-      managed.agent.kill()
-      await this.waitForAgentExit(managed.agent, 2000)
-    }
-    if (managed.agent.running) {
-      throw new Error(`Agent process did not exit for session: ${managed.sessionId}`)
-    }
+    await this.stopAgentProcess(managed.agent)
 
     managed.ws?.close()
     this.agents.delete(managed.sessionId)
@@ -803,13 +828,60 @@ export class Agentlet {
   }
 
   private startDaemonReconnection(): void {
+    if (this.shutdownInProgress || this.serverRestartInProgress || this.reconnectTimer) return
     this.reconnectAttempt++
     const backoff = Math.min(
       Math.pow(2, this.reconnectAttempt - 1) * 1000,
       this.options.reconnectMax * 1000
     )
     this.logger.info('reconnecting', { attempt: this.reconnectAttempt, backoff_ms: backoff })
-    this.reconnectTimer = setTimeout(() => this.connectDaemonControl(), backoff)
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      if (!this.shutdownInProgress) this.connectDaemonControl()
+    }, backoff)
+  }
+
+  private async reconnectAfterServerShutdown(): Promise<void> {
+    if (this.shutdownInProgress || this.serverRestartInProgress) return
+    this.serverRestartInProgress = true
+    this.logger.info('server_restarting', { message: 'Waiting for the server to return; this device will reconnect automatically.' })
+    const controlWs = this.controlWs
+    this.controlWs = null
+    this.handshakeComplete = false
+    controlWs?.close()
+    try {
+      await Promise.all([
+        ...[...this.agents.values()].map(managed =>
+          this.stopOperations.get(managed.sessionId) ?? this.stopManagedAgent(managed),
+        ),
+        ...[...this.startingAgents].map(agent => this.stopAgentProcess(agent)),
+      ])
+    } catch (error) {
+      this.logger.error('restart_cleanup_failed', {
+        message: error instanceof Error ? error.message : String(error),
+      })
+      await this.shutdown('restart_cleanup_failed', 1)
+      return
+    } finally {
+      this.serverRestartInProgress = false
+    }
+    this.startDaemonReconnection()
+  }
+
+  private async stopAgentProcess(agent: AgentProcess): Promise<void> {
+    agent.closeStdin()
+    await this.waitForAgentExit(agent, 5000)
+    if (agent.running) {
+      agent.terminate()
+      await this.waitForAgentExit(agent, 2000)
+    }
+    if (agent.running) {
+      agent.kill()
+      await this.waitForAgentExit(agent, 2000)
+    }
+    if (agent.running) {
+      throw new Error(`Agent process did not exit: ${agent.pid}`)
+    }
   }
 
   private async shutdown(reason: string, exitCode = 0): Promise<void> {
@@ -824,14 +896,23 @@ export class Agentlet {
       this.reconnectTimer = null
     }
 
-    await this.shutdownDaemon(reason, exitCode)
+    try {
+      await this.shutdownDaemon(reason, exitCode)
+    } catch (error) {
+      this.logger.error('shutdown_failed', {
+        message: error instanceof Error ? error.message : String(error),
+      })
+      process.exit(1)
+    }
     this.logger.info('stopped', { reason })
   }
 
   private async shutdownDaemon(reason: string, exitCode: number): Promise<void> {
+    await Promise.all([...this.startingAgents].map(agent => this.stopAgentProcess(agent)))
     // Stop all managed agents
     for (const [sessionId, managed] of this.agents) {
       this.logger.info('stopping_agent', { sessionId })
+      managed.status = 'stopping'
       managed.relay?.stop()
       managed.agent.closeStdin()
       await this.waitForAgentExit(managed.agent, 3000)

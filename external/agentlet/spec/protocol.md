@@ -86,7 +86,9 @@ Both hello methods are requests and require a matching JSON-RPC response before 
 | `server/sendResource` | Notification | Write a host-provided resource through the daemon environment registry. |
 | `server/replay` | Notification | Replay Gateway-to-daemon messages buffered during disconnection. |
 | `server/ping` | Notification | Application-level heartbeat request. |
-| `server/shutdown` | Notification | Ask the daemon to stop gracefully. |
+| `server/shutdown` | Notification | Stop gracefully, except reason `server_shutting_down`, which stops managed agents but keeps the daemon waiting to reconnect. |
+
+For `server/shutdown` with `{ "reason": "server_shutting_down" }`, the host is stopping its service. Agentlet closes the old control connection, stops existing agents and pending launches, and reconnects using its existing identity and credentials. Device reconnection does not resume old ACP sessions or tasks. Other reasons, including an omitted reason, retain the terminal graceful-shutdown behavior. User interruption remains terminal. Control reconnection uses exponential delays beginning at one second, capped by `--reconnect-max` (30 seconds by default), with no attempt limit and a reset after a successful handshake. Authentication rejection is terminal rather than a transient reconnect condition.
 
 `server/discoverHarnesses` accepts omitted params, `{}`, or `{ "prepareWorkspaces": boolean }`; every other option and invalid request shape is rejected with `-32602`. The advertised `AgentletProfile.capabilities.harnessDiscovery` is `{ version: 2 }`. Unsupported daemons must not be inferred to support discovery.
 
