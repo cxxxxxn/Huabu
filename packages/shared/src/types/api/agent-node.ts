@@ -4,6 +4,7 @@
 import { z } from 'zod';
 
 import { agentBindingSchema } from './agent.js';
+import { sketchResourceBindingDataSchema } from './ink-sigil.js';
 
 export const agentNodeBindingStateSchema = z.enum(['editing', 'bound']);
 export type AgentNodeBindingState = z.infer<typeof agentNodeBindingStateSchema>;
@@ -47,8 +48,13 @@ const canvasNodeEditBaseSchema = z
   .catchall(z.unknown());
 export const canvasEditableNodeSchema = canvasNodeEditBaseSchema.superRefine(
   (node, ctx) => {
-    if (node.type !== 'question' || !node.data) return;
-    const parsed = canvasEditableNodeDataSchema.safeParse(node.data);
+    if (!node.data || (node.type !== 'question' && node.type !== 'sketch'))
+      return;
+    const parsed = (
+      node.type === 'sketch'
+        ? sketchResourceBindingDataSchema
+        : canvasEditableNodeDataSchema
+    ).safeParse(node.data);
     if (!parsed.success) {
       for (const issue of parsed.error.issues) {
         ctx.addIssue({ ...issue, path: ['data', ...issue.path] });

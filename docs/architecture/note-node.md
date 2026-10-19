@@ -27,6 +27,8 @@ Inline text and background colors persist as HTML spans with `data-huabu-text-co
 
 ## 3. Lifecycle
 
+The shared NoteContentViewport keeps its `h-full` constraint in both scrollbar modes. Native scrollbar visibility adds the separate `huabu-scrollbar` class through the shared class-name helper; it never replaces or concatenates with the height token.
+
 **Creation** — notes have no creation path of their own. They go through the generic `ADD_NODES` UI intent, which resolves to a `CREATE_NODES` command; paste, canvas drop and agent-issued creation all funnel through it. See [canvas-command-architecture.md](./canvas-command-architecture.md).
 
 **Rendering** — the canvas card mounts the read-only `MilkdownPreview`; the expanded panel mounts the editable `MilkdownEditor`, which also offers a raw-Markdown source mode alongside WYSIWYG. See §4.

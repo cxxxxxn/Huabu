@@ -8,7 +8,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   agentRequestSchema,
   type RecentCanvasConversationResponse,
+  type SketchStroke,
 } from '@huabu/shared';
+import {
+  getInkSigilStrokes,
+  inkSigilFingerprint,
+} from '@huabu/shared/canvas-engine';
 
 import { Button } from '@/components/Common/Button';
 import { toast } from '@/components/Common/Toast';
@@ -1947,6 +1952,105 @@ describe('StrokeSelectionToolbar Ink submission', () => {
     expect(useGesturePreviewStore.getState().inkSubmissionPreparing).toBe(
       false,
     );
+  });
+
+  it('reuses the reservation and frozen Sigil grounding after the target is renamed', async () => {
+    const strokes: SketchStroke[] = [
+      [
+        [10, 0],
+        [10, 40],
+      ],
+      [
+        [30, 0],
+        [30, 40],
+      ],
+      [
+        [0, 10],
+        [40, 10],
+      ],
+      [
+        [0, 30],
+        [40, 30],
+      ],
+    ].map((points, index) => ({
+      id: `stroke-${index}`,
+      points,
+      color: 'black',
+      size: 2,
+      createdAt: index * 500,
+    }));
+    const ink = {
+      id: 'sketch-1',
+      type: 'sketch',
+      position: { x: 0, y: 0 },
+      style: { width: 40, height: 40 },
+      data: { initialSize: { width: 40, height: 40 }, strokes },
+    };
+    strokes[0].resourceBinding = {
+      id: 'sigil',
+      fingerprint: inkSigilFingerprint(getInkSigilStrokes([ink])),
+      strokeIds: strokes.map((stroke) => stroke.id),
+      targetNodeId: 'pdf',
+      targetType: 'pdf',
+      label: 'Original paper',
+    };
+    useCanvasStore.getState()._setStateNoAutosave({
+      nodes: [
+        ink,
+        {
+          id: 'pdf',
+          type: 'pdf',
+          position: { x: 300, y: 0 },
+          data: { label: 'Original paper' },
+        },
+      ],
+    });
+    useGesturePreviewStore.setState({
+      sketchStrokeSelection: { 'sketch-1': strokes.map((stroke) => stroke.id) },
+    });
+    mocks.dispatch.mockResolvedValue({ status: 'rejected' });
+    const button = await renderToolbar();
+    const annotation = document.createElement('div');
+    annotation.dataset.inkSigil = 'sigil';
+    annotation.dataset.inkSigilLabelWidth = '120';
+    annotation.dataset.inkSigilLabelHeight = '36';
+    annotation.innerHTML =
+      '<span data-ink-sigil-label style="font-size: 32px; font-family: sans-serif">Original paper</span>';
+    container.append(annotation);
+    try {
+      await act(async () => button.click());
+      expect(mocks.dispatch).toHaveBeenCalledTimes(1);
+      const original = mocks.prepare.mock.calls[0][0];
+      expect(original.inkResources).toEqual([
+        expect.objectContaining({
+          targetNodeId: 'pdf',
+          label: 'Original paper',
+        }),
+      ]);
+      await act(async () => {
+        useCanvasStore.getState()._setStateNoAutosave({
+          nodes: useCanvasStore
+            .getState()
+            .nodes.map((node) =>
+              node.id === 'pdf'
+                ? { ...node, data: { ...node.data, label: 'Renamed paper' } }
+                : node,
+            ),
+        });
+      });
+      await act(async () => sendButton().click());
+      expect(mocks.createQuestion).toHaveBeenCalledTimes(1);
+      expect(mocks.prepareGrounding).toHaveBeenCalledTimes(1);
+      expect(mocks.captureGrounding).toHaveBeenCalledTimes(1);
+      expect(mocks.dispatch).toHaveBeenCalledTimes(2);
+      const retried = mocks.prepare.mock.calls[1][0];
+      expect(retried.sources).toBe(original.sources);
+      expect(retried.inkResources).toBe(original.inkResources);
+      expect(retried.groundingVisual).toBe(original.groundingVisual);
+      expect(retried.session).toBe(original.session);
+    } finally {
+      annotation.remove();
+    }
   });
 
   it('reuses the created Question when a rejected selection is retried', async () => {

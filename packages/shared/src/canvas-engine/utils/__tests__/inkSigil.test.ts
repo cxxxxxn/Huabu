@@ -1,8 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import { executeCanvasCommands } from '../../index.js';
 import {
   detectInkHash,
   getInkSigilStrokes,
@@ -13,6 +14,10 @@ import {
 } from '../inkSigil.js';
 
 import type { InkResourceBinding } from '../../../types/api/ink-sigil.js';
+import type {
+  CanvasCommand,
+  CanvasNodeId,
+} from '../../../types/canvas/index.js';
 import type { Node } from '@xyflow/react';
 
 it('lays out two-line labels at 288px and includes their entire height in grounding', () => {
@@ -154,6 +159,120 @@ describe('hash geometry', () => {
 });
 
 describe('resource binding identity', () => {
+  it.each(['CREATE_NODES', 'MERGE_NODE_DATA'] as const)(
+    'rejects malformed binding writes through %s without changing existing Ink',
+    (type) => {
+      const nodes = boundNodes();
+      const stroke = getInkSigilStrokes(nodes)[0].stroke;
+      const malformedData: Record<string, unknown> = {
+        strokes: [{ ...stroke, resourceBinding: { strokeIds: 42 } }],
+      };
+      const command: CanvasCommand =
+        type === 'CREATE_NODES'
+          ? {
+              type,
+              nodes: [
+                {
+                  nodeType: 'sketch',
+                  position: { x: 0, y: 0 },
+                  data: malformedData,
+                },
+              ],
+            }
+          : {
+              type,
+              patches: [
+                { nodeId: 'ink' as CanvasNodeId, patch: malformedData },
+              ],
+            };
+      const result = executeCanvasCommands(
+        { source: 'ui', commands: [command] },
+        { nodes, edges: [], canvasId: 'space' },
+      );
+      expect(result.commandResults[0]).toMatchObject({
+        applied: false,
+        reason: 'invalid-target',
+      });
+      expect(result.writeResult.nodes).toEqual(nodes);
+    },
+  );
+
+  it('accepts well-formed metadata and permits unrelated updates to legacy malformed Ink', () => {
+    const nodes = boundNodes();
+    const strokes = getInkSigilStrokes(nodes).map((source) => source.stroke);
+    const valid = executeCanvasCommands(
+      {
+        source: 'ui',
+        commands: [
+          {
+            type: 'MERGE_NODE_DATA',
+            patches: [{ nodeId: 'ink' as CanvasNodeId, patch: { strokes } }],
+          },
+        ],
+      },
+      { nodes, edges: [], canvasId: 'space' },
+    );
+    expect(valid.commandResults[0].applied).toBe(true);
+    nodes[0].data.strokes = [
+      { ...strokes[0], resourceBinding: { strokeIds: 42 } },
+    ];
+    const renamed = executeCanvasCommands(
+      {
+        source: 'ui',
+        commands: [
+          {
+            type: 'MERGE_NODE_DATA',
+            patches: [
+              { nodeId: 'ink' as CanvasNodeId, patch: { label: 'Renamed' } },
+            ],
+          },
+        ],
+      },
+      { nodes, edges: [], canvasId: 'space' },
+    );
+    expect(renamed.commandResults[0].applied).toBe(true);
+    expect(renamed.writeResult.nodes[0].data.strokes).toEqual(
+      nodes[0].data.strokes,
+    );
+  });
+
+  it.each([
+    null,
+    42,
+    'binding',
+    {},
+    { strokeIds: 42 },
+    { strokeIds: 's0' },
+    { strokeIds: [null, 's1', 's2', 's3'] },
+  ])(
+    'reports malformed persisted bindings without crashing or mutating Ink: %j',
+    (binding) => {
+      const nodes = boundNodes();
+      const broken = sketch();
+      broken.id = 'bad-ink';
+      broken.data.strokes = [
+        {
+          ...getInkSigilStrokes([broken])[0].stroke,
+          id: 'bad-stroke',
+          resourceBinding: binding,
+        },
+      ];
+      nodes.push(broken);
+      const original = structuredClone(nodes);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        expect(projectInkResourceBindings(nodes)).toHaveLength(1);
+        expect(warn).toHaveBeenCalledWith(
+          '[ink-sigil] Ignoring malformed persisted resource binding',
+          { nodeId: 'bad-ink', strokeId: 'bad-stroke' },
+        );
+        expect(nodes).toEqual(original);
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
+
   it('preserves complete moves, uniform scale and region rebasing', () => {
     const nodes = boundNodes();
     nodes[0].position = { x: 200, y: 600 };

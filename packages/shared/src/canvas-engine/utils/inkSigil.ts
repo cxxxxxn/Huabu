@@ -52,6 +52,56 @@ export function isInkResourceType(type: unknown): type is InkResourceType {
   );
 }
 
+/** Runtime guard for persisted metadata; the Canvas engine must remain zod-free. */
+export function isInkResourceBinding(
+  value: unknown,
+): value is InkResourceBinding {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const binding = value as Record<string, unknown>;
+  const identity = (field: unknown): field is string =>
+    typeof field === 'string' && field.length > 0 && field.length <= 200;
+  return (
+    Object.keys(binding).every((key) =>
+      [
+        'id',
+        'fingerprint',
+        'targetNodeId',
+        'targetType',
+        'label',
+        'strokeIds',
+      ].includes(key),
+    ) &&
+    identity(binding.id) &&
+    typeof binding.fingerprint === 'string' &&
+    /^[0-9a-f]{16}$/.test(binding.fingerprint) &&
+    identity(binding.targetNodeId) &&
+    isInkResourceType(binding.targetType) &&
+    identity(binding.label) &&
+    Array.isArray(binding.strokeIds) &&
+    binding.strokeIds.length === 4 &&
+    binding.strokeIds.every(identity) &&
+    new Set(binding.strokeIds).size === 4
+  );
+}
+
+export function hasValidInkResourceBindings(
+  data: Record<string, unknown>,
+): boolean {
+  if (data.strokes === undefined) return true;
+  return (
+    Array.isArray(data.strokes) &&
+    data.strokes.every(
+      (stroke: unknown) =>
+        !!stroke &&
+        typeof stroke === 'object' &&
+        !Array.isArray(stroke) &&
+        (!('resourceBinding' in stroke) ||
+          stroke.resourceBinding === undefined ||
+          isInkResourceBinding(stroke.resourceBinding)),
+    )
+  );
+}
+
 export function inkResourceLabel(node: Node): string {
   const label = node.data.label;
   return typeof label === 'string' && label.trim()
@@ -232,10 +282,24 @@ export function projectInkResourceBindings(
   nodes: Node[],
 ): InkSigilProjection[] {
   const ids = new Set<string>();
+  const bindings = new Map<SketchStroke, InkResourceBinding>();
   for (const node of nodes) {
     if (node.type !== 'sketch' || !Array.isArray(node.data.strokes)) continue;
     for (const stroke of node.data.strokes as SketchStroke[]) {
-      for (const id of stroke.resourceBinding?.strokeIds ?? []) ids.add(id);
+      const binding: unknown = stroke.resourceBinding;
+      if (binding === undefined) continue;
+      if (!isInkResourceBinding(binding)) {
+        console.warn(
+          '[ink-sigil] Ignoring malformed persisted resource binding',
+          {
+            nodeId: node.id,
+            strokeId: stroke.id,
+          },
+        );
+        continue;
+      }
+      bindings.set(stroke, binding);
+      for (const id of binding.strokeIds) ids.add(id);
     }
   }
   if (!ids.size) return [];
@@ -243,7 +307,7 @@ export function projectInkResourceBindings(
   const byId = new Map(strokes.map((source) => [source.stroke.id, source]));
   const nodesById = new Map(nodes.map((node) => [node.id, node]));
   return strokes.flatMap(({ stroke }) => {
-    const binding = stroke.resourceBinding;
+    const binding = bindings.get(stroke);
     if (!binding || binding.strokeIds[0] !== stroke.id) return [];
     const sources = binding.strokeIds.flatMap((id) => {
       const source = byId.get(id);

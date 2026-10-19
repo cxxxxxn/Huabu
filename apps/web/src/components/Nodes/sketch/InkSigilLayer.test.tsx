@@ -5,6 +5,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { I18nextProvider } from 'react-i18next';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createStore } from 'zustand/vanilla';
 
 import {
   getInkSigilStrokes,
@@ -23,6 +24,10 @@ import {
 import { useToolStore } from '@/store/toolStore';
 
 import { InkSigilLayer } from './InkSigilLayer';
+import {
+  FrameZoomController,
+  FrameZoomProvider,
+} from '../frame/FrameZoomContext';
 
 import type { CanvasFloatingPopoverProps } from '@/components/Common/CanvasFloatingPopover';
 import type { CanvasCommand } from '@huabu/shared';
@@ -42,6 +47,10 @@ const mocks = vi.hoisted(() => ({
     y,
   })),
 }));
+const frameFlow = createStore(() => ({
+  nodes: [] as Node[],
+  transform: [0, 0, 1],
+}));
 vi.mock('@/store/canvasStore', () => ({
   default: Object.assign(
     (selector: (state: typeof mocks.state) => unknown) => selector(mocks.state),
@@ -50,6 +59,7 @@ vi.mock('@/store/canvasStore', () => ({
   saveCanvasForSubmission: mocks.save,
 }));
 vi.mock('@xyflow/react', () => ({
+  useStoreApi: () => frameFlow,
   useViewport: () => ({ x: 0, y: 0, zoom: 1 }),
   useReactFlow: () => ({ screenToFlowPosition: mocks.screenToFlowPosition }),
 }));
@@ -193,6 +203,7 @@ beforeEach(async () => {
     sketchDraft: { ...useToolStore.getState().sketchDraft, mode: 'draw' },
   });
   useGesturePreviewStore.setState({
+    nodeGeometryPreviews: null,
     sketchStrokeSelection: {},
     sketchStrokeMovePreview: null,
     sketchStrokeMoveCarriedNodeIds: [],
@@ -224,6 +235,170 @@ afterEach(async () => {
 });
 
 describe('Ink resource picker', () => {
+  it.each(['source', 'ancestor', 'both', 'resize'] as const)(
+    'follows %s geometry previews without changing canonical binding validity',
+    async (preview) => {
+      await act(async () => element('[role="option"]').click());
+      const canonical = mocks.state.nodes;
+      const projection = projectInkResourceBindings(canonical)[0];
+      const initial = element('[data-ink-sigil-label]').style.left;
+      const frame: Node = {
+        id: 'source-frame',
+        type: 'frame',
+        position: { x: 0, y: 0 },
+        style: { width: 1400, height: 700 },
+        data: {},
+      };
+      mocks.state.nodes = [
+        frame,
+        ...canonical.map((node) =>
+          node.id === 'ink' ? { ...node, parentId: frame.id } : node,
+        ),
+      ];
+      await act(async () =>
+        useGesturePreviewStore.setState({
+          nodeGeometryPreviews: new Map([
+            ...(preview === 'source' || preview === 'both'
+              ? [['ink', { position: { x: 50, y: 20 } }] as const]
+              : []),
+            ...(preview === 'ancestor' || preview === 'both'
+              ? [[frame.id, { position: { x: 100, y: 60 } }] as const]
+              : []),
+            ...(preview === 'resize'
+              ? [
+                  [
+                    'ink',
+                    {
+                      position: { x: 0, y: 0 },
+                      style: { width: 80, height: 40 },
+                    },
+                  ] as const,
+                ]
+              : []),
+          ]),
+        }),
+      );
+      const dx =
+        preview === 'source'
+          ? 50
+          : preview === 'ancestor'
+            ? 100
+            : preview === 'both'
+              ? 150
+              : 0;
+      const dy =
+        preview === 'source'
+          ? 20
+          : preview === 'ancestor'
+            ? 60
+            : preview === 'both'
+              ? 80
+              : 0;
+      const target = element('[data-ink-sigil-hit-target]');
+      expect(target.style.left).toBe(`${dx}px`);
+      expect(target.style.top).toBe(`${dy}px`);
+      expect(target.style.width).toBe(preview === 'resize' ? '80px' : '40px');
+      expect(element('[data-ink-sigil-label]').style.left).toBe(
+        `${Number.parseFloat(initial) + dx + (preview === 'resize' ? 40 : 0)}px`,
+      );
+      const highlight = element('[data-ink-sigil-highlight]');
+      expect(highlight.style.left).toBe(`${dx}px`);
+      expect(highlight.style.top).toBe(`${dy}px`);
+      expect(projectInkResourceBindings(mocks.state.nodes)[0]).toMatchObject({
+        binding: projection.binding,
+        bounds: projection.bounds,
+        sourceValid: true,
+      });
+      await act(async () =>
+        useGesturePreviewStore.setState({ nodeGeometryPreviews: null }),
+      );
+      expect(element('[data-ink-sigil-hit-target]').style.left).toBe('0px');
+      expect(element('[data-ink-sigil-label]').style.left).toBe(initial);
+    },
+  );
+
+  it.each([
+    'hidden-primary',
+    'hidden-secondary',
+    'suppressed-secondary',
+  ] as const)(
+    'hides the label, highlight and hit targets for %s without losing the binding',
+    async (reason) => {
+      await act(async () => element('[role="option"]').click());
+      const projection = projectInkResourceBindings(mocks.state.nodes)[0];
+      const strokes = projection.sources.map((source) => source.stroke);
+      const ink = mocks.state.nodes[0];
+      const frame: Node = {
+        id: 'source-frame',
+        type: 'frame',
+        position: { x: 0, y: 0 },
+        style: { width: 1400, height: 700 },
+        data: {},
+      };
+      mocks.state.nodes = [
+        frame,
+        { ...ink, data: { ...ink.data, strokes: strokes.slice(0, 2) } },
+        {
+          ...ink,
+          id: 'other-ink',
+          parentId: frame.id,
+          data: { ...ink.data, strokes: strokes.slice(2) },
+        },
+        ...mocks.state.nodes.slice(1),
+      ];
+      const render = () =>
+        act(async () => {
+          frameFlow.setState({
+            nodes: mocks.state.nodes,
+            transform: [0, 0, 1],
+          });
+          root.render(
+            <I18nextProvider i18n={i18n}>
+              <FrameZoomProvider>
+                <FrameZoomController />
+                <InkSigilLayer />
+              </FrameZoomProvider>
+            </I18nextProvider>,
+          );
+        });
+      await render();
+      expect(container.querySelector('[data-ink-sigil-label]')).not.toBeNull();
+      await act(async () => element('[data-ink-sigil-label]').click());
+      expect(useInkSigilStore.getState().pending).not.toBeNull();
+      if (reason === 'suppressed-secondary') {
+        await act(async () => frameFlow.setState({ transform: [0, 0, 0.09] }));
+      } else {
+        mocks.state.nodes = mocks.state.nodes.map((node) =>
+          node.id === (reason === 'hidden-primary' ? 'ink' : 'other-ink')
+            ? { ...node, hidden: true }
+            : node,
+        );
+        await render();
+      }
+      for (const selector of [
+        '[data-ink-sigil]',
+        '[data-ink-sigil-highlight]',
+        '[data-ink-sigil-label]',
+        '[data-ink-sigil-hit-target]',
+      ]) {
+        expect(container.querySelector(selector)).toBeNull();
+      }
+      expect(projectInkResourceBindings(mocks.state.nodes)[0].binding).toEqual(
+        projection.binding,
+      );
+      expect(useInkSigilStore.getState().pending).toBeNull();
+      mocks.state.nodes = mocks.state.nodes.map((node) => ({
+        ...node,
+        hidden: false,
+      }));
+      await render();
+      expect(container.querySelector('[data-ink-sigil-label]')).not.toBeNull();
+      expect(
+        container.querySelector('[data-ink-sigil-highlight]'),
+      ).not.toBeNull();
+    },
+  );
+
   it.each(['list', 'canvas'])(
     'closes on a %s choice before persistence finishes',
     async (source) => {

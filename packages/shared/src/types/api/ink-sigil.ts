@@ -27,6 +27,21 @@ export const inkResourceBindingSchema = z.strictObject({
     .refine((ids) => new Set(ids).size === 4, 'Sigil strokes must be unique'),
 });
 
+/** Validate semantic metadata without narrowing unrelated Sketch data or stroke fields. */
+export const sketchResourceBindingDataSchema = z
+  .object({
+    strokes: z
+      .array(
+        z
+          .object({
+            resourceBinding: inkResourceBindingSchema.optional(),
+          })
+          .catchall(z.unknown()),
+      )
+      .optional(),
+  })
+  .catchall(z.unknown());
+
 export const inkResourceReferenceSchema = z.strictObject({
   ...bindingFields,
   sourceBounds: z.strictObject({

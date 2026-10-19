@@ -301,10 +301,12 @@ export function buildHistoryFromTurns(
     // 1. User item, straight from the structured envelope.
     if (envelope) {
       const allAttachments = [
-        ...inkResourceAttachments(
-          envelope.focus.resources?.bindings ?? [],
-          envelope.focus.selection.refs.map((ref) => ref.id),
-        ),
+        ...inkResourceAttachments(envelope.focus.resources?.bindings ?? [], [
+          ...envelope.focus.selection.refs.map((ref) => ref.id),
+          ...envelope.user.attachments.flatMap((attachment) =>
+            attachment.originNodeId ? [attachment.originNodeId] : [],
+          ),
+        ]),
         ...envelope.user.attachments,
         ...envelope.focus.selection.imageAttachments,
         ...envelope.focus.selection.snapshotAttachments,

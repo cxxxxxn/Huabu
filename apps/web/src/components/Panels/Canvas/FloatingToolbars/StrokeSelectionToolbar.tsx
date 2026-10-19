@@ -501,7 +501,6 @@ export const StrokeSelectionToolbar = () => {
       sourceIdentity,
       destinationIdentity,
       selectionSessionId,
-      selectedSigils.references,
     ]);
     const lassoIdentity = inkLassoIdentity(
       canvas.canvasId,

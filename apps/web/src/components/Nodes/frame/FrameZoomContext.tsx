@@ -39,9 +39,11 @@ export function useFrameRegionVisible(id: string) {
   );
 }
 
-export function useFrameSuppressed(id: string) {
+export function useFrameSuppressed(id: string | readonly string[]) {
   return useStore(useContext(FrameZoomContext), (state) =>
-    state.suppressed.has(id),
+    typeof id === 'string'
+      ? state.suppressed.has(id)
+      : id.some((nodeId) => state.suppressed.has(nodeId)),
   );
 }
 

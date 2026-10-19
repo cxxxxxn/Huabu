@@ -4,6 +4,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import useCanvasStore from '@/store/canvasStore';
+import { resetInkSigilSession, useInkSigilStore } from '@/store/inkSigilStore';
 
 import { createViewportNavigationRecognizer } from './viewportNavigation';
 
@@ -69,6 +70,7 @@ function context(): CanvasPointerRouterContext {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetInkSigilSession();
   beginCanvasGesture.mockReturnValue(true);
   updateCanvasGesture.mockReturnValue('pending');
   nodeIdAtScreenPoint.mockReturnValue('node-1');
@@ -85,6 +87,34 @@ beforeEach(() => {
 });
 
 describe('createViewportNavigationRecognizer', () => {
+  it.each(['button', 'input', 'textarea'])(
+    'does not observe or claim native %s touches while a binding is pending',
+    (tag) => {
+      useInkSigilStore.setState({
+        pending: {
+          canvasId: 'space',
+          strokeIds: ['s0', 's1', 's2', 's3'],
+          fingerprint: '0123456789abcdef',
+        },
+      });
+      try {
+        const recognizer = createViewportNavigationRecognizer();
+        const ctx = context();
+        const event = pointer(3, document.createElement(tag));
+        recognizer.observe?.onDown?.(event, {
+          ...ctx,
+          preempt: vi.fn(),
+          cancelPointer: vi.fn(),
+        });
+        expect(recognizer.canClaim(event, ctx)).toBe(false);
+        expect(event.preventDefault).not.toHaveBeenCalled();
+        expect(event.stopPropagation).not.toHaveBeenCalled();
+      } finally {
+        resetInkSigilSession();
+      }
+    },
+  );
+
   it.each(['react-flow__handle', 'react-flow__resize-control'])(
     'does not observe or claim a Sketch %s touch',
     (controlClass) => {

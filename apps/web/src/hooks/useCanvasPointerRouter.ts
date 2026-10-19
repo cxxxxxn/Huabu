@@ -138,7 +138,8 @@ export function useCanvasPointerRouter(
       if (
         owner === 'mouse-marquee' ||
         owner === 'lasso' ||
-        owner === 'note-content'
+        owner === 'note-content' ||
+        owner === 'ink-sigil'
       ) {
         core.handleCancel(event);
       }

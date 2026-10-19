@@ -37,6 +37,7 @@ import { CanvasFloatingPopover } from '@/components/Common/CanvasFloatingPopover
 import { cn } from '@/components/Common/cn';
 import { TabGroup } from '@/components/Common/TabGroup';
 import { toast } from '@/components/Common/Toast';
+import { applyNodeGeometryPreviews } from '@/components/Panels/Canvas/applyNodeGeometryPreview';
 import { getNodeIcon } from '@/config/nodeIcons';
 import useCanvasStore from '@/store/canvasStore';
 import { useGesturePreviewStore } from '@/store/gesturePreviewStore';
@@ -52,9 +53,14 @@ import { useToolStore } from '@/store/toolStore';
 import { INK_HANDWRITING_FONT_FAMILY } from '@/utils/node/nodeFontConfig';
 
 import { useInkSigilDrag } from './useInkSigilDrag';
+import { useFrameSuppressed } from '../frame/FrameZoomContext';
 
+import type { CanvasNode } from '@/components/Nodes/types';
 import type { CanvasTool } from '@/components/Panels/Canvas/canvasInputPolicy';
-import type { InkSigilProjection } from '@huabu/shared/canvas-engine';
+import type {
+  InkSigilProjection,
+  InkSigilStroke,
+} from '@huabu/shared/canvas-engine';
 import type { Node } from '@xyflow/react';
 
 const RESOURCE_CATEGORIES = ['pdf', 'web', 'image', 'text'] as const;
@@ -180,6 +186,9 @@ export function InkSigilLayer({ tool = 'select' }: { tool?: CanvasTool }) {
     (state) => state.sketchStrokeMoveCarriedNodeIds,
   );
   const erased = useGesturePreviewStore((state) => state.sketchErasePreview);
+  const geometries = useGesturePreviewStore(
+    (state) => state.nodeGeometryPreviews,
+  );
   const [highlightLayer, setHighlightLayer] = useState<HTMLDivElement | null>(
     null,
   );
@@ -192,11 +201,37 @@ export function InkSigilLayer({ tool = 'select' }: { tool?: CanvasTool }) {
     tool === 'select' && (pendingNodeType === null || drawing);
   const drag = useInkSigilDrag(nodes, canvasId, interactive);
   const projections = useMemo(() => projectInkResourceBindings(nodes), [nodes]);
+  const displayNodes = useMemo(
+    () => applyNodeGeometryPreviews(nodes as CanvasNode[], geometries),
+    [nodes, geometries],
+  );
+  const hiddenNodeIds = useMemo(
+    () => new Set(nodes.filter((node) => node.hidden).map((node) => node.id)),
+    [nodes],
+  );
+  const displayedStrokes = useMemo(() => {
+    if (!geometries?.size) return null;
+    const ids = new Set(
+      projections.flatMap((projection) => projection.binding.strokeIds),
+    );
+    return new Map(
+      getInkSigilStrokes(displayNodes, ids).map((source) => [
+        source.stroke.id,
+        source,
+      ]),
+    );
+  }, [displayNodes, geometries, projections]);
   const pendingSources = useMemo(() => {
     if (!pending) return [];
     const ids = new Set(pending.strokeIds);
-    return getInkSigilStrokes(nodes, ids);
-  }, [nodes, pending]);
+    return getInkSigilStrokes(displayNodes, ids);
+  }, [displayNodes, pending]);
+  const pendingSuppressed = useFrameSuppressed(
+    pendingSources.map((source) => source.nodeId),
+  );
+  const pendingHidden =
+    pendingSuppressed ||
+    pendingSources.some((source) => hiddenNodeIds.has(source.nodeId));
 
   useEffect(() => {
     resetInkSigilSession();
@@ -206,8 +241,9 @@ export function InkSigilLayer({ tool = 'select' }: { tool?: CanvasTool }) {
     dismissInkSigil();
   }, [tool, pendingNodeType, mode]);
   useEffect(() => {
-    if (pending && !validatePendingInkSigil()) dismissInkSigil();
-  }, [nodes, pending]);
+    if (pending && (pendingHidden || !validatePendingInkSigil()))
+      dismissInkSigil();
+  }, [nodes, pending, pendingHidden]);
 
   return (
     <>
@@ -228,6 +264,12 @@ export function InkSigilLayer({ tool = 'select' }: { tool?: CanvasTool }) {
           }}
         >
           {projections.map((projection) => {
+            if (
+              projection.sources.some((source) =>
+                hiddenNodeIds.has(source.nodeId),
+              )
+            )
+              return null;
             const selectedCount = projection.sources.filter((source) =>
               selection[source.nodeId]?.includes(source.stroke.id),
             ).length;
@@ -238,28 +280,31 @@ export function InkSigilLayer({ tool = 'select' }: { tool?: CanvasTool }) {
               )
             )
               return null;
-            let display = projection;
-            if (move && selectedCount === 4) {
-              const sources = projection.sources.map((source) =>
-                carried.includes(source.nodeId)
-                  ? source
-                  : {
-                      ...source,
-                      points: source.points.map(([x, y]) => [
-                        x + move.dx,
-                        y + move.dy,
-                      ]),
-                    },
-              );
-              display = {
-                ...projection,
-                bounds: inkSigilBounds(sources),
-                sourceValid:
-                  inkSigilFingerprint(sources) ===
-                  projection.binding.fingerprint,
-              };
-            }
-            if (!display.sourceValid) return null;
+            const moveSource = (source: InkSigilStroke): InkSigilStroke =>
+              move && selectedCount === 4 && !carried.includes(source.nodeId)
+                ? {
+                    ...source,
+                    points: source.points.map(([x, y]) => [
+                      x + move.dx,
+                      y + move.dy,
+                    ]),
+                  }
+                : source;
+            const sourceValid =
+              move && selectedCount === 4
+                ? inkSigilFingerprint(projection.sources.map(moveSource)) ===
+                  projection.binding.fingerprint
+                : projection.sourceValid;
+            if (!sourceValid) return null;
+            const display = {
+              ...projection,
+              sourceValid,
+              bounds: inkSigilBounds(
+                projection.sources.map((source) =>
+                  moveSource(displayedStrokes?.get(source.stroke.id) ?? source),
+                ),
+              ),
+            };
             return (
               <InkSigilAnnotation
                 key={projection.binding.id}
@@ -283,6 +328,7 @@ export function InkSigilLayer({ tool = 'select' }: { tool?: CanvasTool }) {
       {pending &&
       !pending.bindingId &&
       pending.canvasId === canvasId &&
+      !pendingHidden &&
       pendingSources.length === 4 ? (
         <InkResourcePicker
           key={`${pending.fingerprint}-${pending.bindingId ?? 'new'}`}
@@ -312,6 +358,9 @@ function InkSigilAnnotation({
   picker?: { nodes: Node[] };
 }) {
   const { t } = useTranslation();
+  const frameSuppressed = useFrameSuppressed(
+    projection.sources.map((source) => source.nodeId),
+  );
   const text = useRef<HTMLSpanElement>(null);
   const [labelSize, setLabelSize] = useState<{
     width: number;
@@ -324,6 +373,7 @@ function InkSigilAnnotation({
   );
   const broken = !projection.target;
   useLayoutEffect(() => {
+    if (frameSuppressed) return;
     const element = text.current;
     if (!element) return;
     let active = true;
@@ -362,7 +412,8 @@ function InkSigilAnnotation({
       active = false;
       observer.disconnect();
     };
-  }, [zoom, projection.label, layout.fontSize, broken, t]);
+  }, [zoom, projection.label, layout.fontSize, broken, frameSuppressed, t]);
+  if (frameSuppressed) return null;
   return (
     <div
       data-ink-sigil={projection.binding.id}

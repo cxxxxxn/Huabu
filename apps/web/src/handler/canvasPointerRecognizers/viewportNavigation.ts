@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 import {
+  canStartInkSigilBinding,
   isNodeControlTarget,
   isPanelTarget,
 } from '@/components/Panels/Canvas/canvasInputPolicy';
@@ -25,7 +26,10 @@ import {
   zoomAroundPoint,
 } from '@/hooks/useCanvasGestures';
 import useCanvasStore from '@/store/canvasStore';
-import { resolvePendingInkSigilTap } from '@/store/inkSigilStore';
+import {
+  resolvePendingInkSigilTap,
+  useInkSigilStore,
+} from '@/store/inkSigilStore';
 
 import type { CanvasPointerRouterContext } from '@/handler/canvasPointerRouterContext';
 import type {
@@ -79,6 +83,11 @@ export function createViewportNavigationRecognizer(): PointerRecognizer<
   ): void => {
     if (event.pointerType !== 'touch') return;
     if (ctx.inputMode === 'mouse') return;
+    if (
+      useInkSigilStore.getState().pending &&
+      !canStartInkSigilBinding(event.target as Element | null)
+    )
+      return;
     if (isPanelTarget(event.target as Element | null)) return;
     if (isNodeControlTarget(event.target as Element | null)) return;
     const point = { x: event.clientX, y: event.clientY };
@@ -210,6 +219,8 @@ export function createViewportNavigationRecognizer(): PointerRecognizer<
     canClaim: (event, ctx) =>
       event.pointerType === 'touch' &&
       ctx.inputMode !== 'mouse' &&
+      (!useInkSigilStore.getState().pending ||
+        canStartInkSigilBinding(event.target as Element | null)) &&
       // While a pinch is live, extra fingers must not spin up a competing
       // single-finger pan owner; they only extend the pinch touch set.
       !isPinching &&

@@ -66,6 +66,14 @@ beforeEach(() => {
   useInputModeStore.setState({ mode: 'touch' });
   container = document.createElement('div');
   wrapper = document.createElement('div');
+  const captures = new Set<number>();
+  wrapper.setPointerCapture = vi.fn((id: number) => {
+    captures.add(id);
+  });
+  wrapper.hasPointerCapture = vi.fn((id: number) => captures.has(id));
+  wrapper.releasePointerCapture = vi.fn((id: number) => {
+    captures.delete(id);
+  });
   document.body.append(container, wrapper);
   root = createRoot(container);
   window.addEventListener('pointerdown', observePen, true);
@@ -84,6 +92,127 @@ afterEach(() => {
 });
 
 describe('useCanvasPointerRouter live input policy', () => {
+  function openPending() {
+    inkSigil.useInkSigilStore.setState({
+      pending: {
+        canvasId: 'space',
+        strokeIds: ['s0', 's1', 's2', 's3'],
+        fingerprint: '1234567890abcdef',
+      },
+    });
+  }
+
+  function pointer(target: Element, type: string, x = 120) {
+    const event = new PointerEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      pointerType: 'mouse',
+      pointerId: 1,
+      isPrimary: true,
+      button: 0,
+      clientX: x,
+      clientY: 140,
+    });
+    act(() => target.dispatchEvent(event));
+    return event;
+  }
+
+  it.each([
+    '<button><span>Play</span></button>',
+    '<input type="range">',
+    '<textarea></textarea>',
+    '<select><option>Choice</option></select>',
+    '<div contenteditable="true"><span>Editor</span></div>',
+    '<div role="slider"><span>Seek</span></div>',
+  ])(
+    'keeps native controls and editors usable while a binding is pending: %s',
+    (html) => {
+      useToolStore.setState({ inputModePreference: 'mouse' });
+      openPending();
+      const pending = inkSigil.useInkSigilStore.getState().pending;
+      const resolve = vi
+        .spyOn(inkSigil, 'resolvePendingInkSigilTap')
+        .mockReturnValue(true);
+      act(() => root.render(<Harness inputMode="mouse" />));
+      const node = document.createElement('div');
+      node.className = 'react-flow__node react-flow__node-audio';
+      node.innerHTML = html;
+      wrapper.append(node);
+      const target = node.querySelector('span') ?? node.firstElementChild;
+      if (!target) throw new Error('Missing native control fixture');
+      const click = vi.fn();
+      target.addEventListener('click', click);
+      expect(pointer(target, 'pointerdown').defaultPrevented).toBe(false);
+      pointer(target, 'pointerup');
+      target.dispatchEvent(
+        new MouseEvent('click', { bubbles: true, detail: 1 }),
+      );
+      expect(click).toHaveBeenCalledOnce();
+      expect(resolve).not.toHaveBeenCalled();
+      expect(inkSigil.useInkSigilStore.getState().pending).toBe(pending);
+    },
+  );
+
+  it('still binds a Web link surface instead of following the link', () => {
+    useToolStore.setState({ inputModePreference: 'mouse' });
+    openPending();
+    const resolve = vi
+      .spyOn(inkSigil, 'resolvePendingInkSigilTap')
+      .mockReturnValue(true);
+    act(() => root.render(<Harness inputMode="mouse" />));
+    const link = document.createElement('a');
+    link.href = '/resource';
+    wrapper.append(link);
+    const click = vi.fn();
+    link.addEventListener('click', click);
+    pointer(link, 'pointerdown');
+    pointer(link, 'pointerup');
+    link.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }),
+    );
+    expect(resolve).toHaveBeenCalledOnce();
+    expect(click).not.toHaveBeenCalled();
+  });
+
+  it.each(['pointerup', 'pointercancel', 'lostpointercapture'])(
+    'cleans up capture on %s and accepts the next press with the same pointer ID',
+    (completion) => {
+      useToolStore.setState({ inputModePreference: 'mouse' });
+      openPending();
+      const resolve = vi
+        .spyOn(inkSigil, 'resolvePendingInkSigilTap')
+        .mockReturnValue(true);
+      act(() => root.render(<Harness inputMode="mouse" />));
+      const node = document.createElement('div');
+      wrapper.append(node);
+      pointer(node, 'pointerdown');
+      expect(wrapper.setPointerCapture).toHaveBeenCalledWith(1);
+      expect(wrapper.hasPointerCapture(1)).toBe(true);
+      // Captured release is delivered to the wrapper even outside its bounds.
+      pointer(wrapper, completion, 2000);
+      expect(wrapper.releasePointerCapture).toHaveBeenCalledWith(1);
+      expect(inkSigil.useInkSigilStore.getState().pending).toBeNull();
+      expect(resolve).not.toHaveBeenCalled();
+      openPending();
+      pointer(node, 'pointerdown');
+      pointer(wrapper, 'pointerup');
+      expect(wrapper.setPointerCapture).toHaveBeenCalledTimes(2);
+      expect(resolve).toHaveBeenCalledExactlyOnceWith(120, 140);
+      expect(wrapper.hasPointerCapture(1)).toBe(false);
+    },
+  );
+
+  it('releases pending binding capture on router teardown', () => {
+    useToolStore.setState({ inputModePreference: 'mouse' });
+    openPending();
+    act(() => root.render(<Harness inputMode="mouse" />));
+    pointer(wrapper, 'pointerdown');
+    expect(wrapper.hasPointerCapture(1)).toBe(true);
+    act(() => root.render(null));
+    expect(wrapper.hasPointerCapture(1)).toBe(false);
+    expect(inkSigil.useInkSigilStore.getState().pending).toBeNull();
+  });
+
   it.each([
     ['mouse', 'mouse'],
     ['pen', 'pen'],

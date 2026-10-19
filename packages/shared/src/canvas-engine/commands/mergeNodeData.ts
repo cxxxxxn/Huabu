@@ -6,6 +6,7 @@ import {
   hasAgentNodeOwnedData,
   changesAgentNodePreparation,
 } from '../agentNodeOwnership.js';
+import { hasValidInkResourceBindings } from '../utils/inkSigil.js';
 
 import type { CanvasCommand } from '../../index.js';
 import type { Node } from '@xyflow/react';
@@ -24,6 +25,8 @@ const mergeNodeData: CommandDefinition<Cmd> = {
       const node = state.nodes.find(
         (candidate) => candidate.id === entry.nodeId,
       );
+      if (node?.type === 'sketch' && !hasValidInkResourceBindings(entry.patch))
+        return noop(state, 'invalid-target');
       if (node?.type === 'question' && hasAgentNodeOwnedData(entry.patch))
         return noop(state, 'invalid-target');
       if (

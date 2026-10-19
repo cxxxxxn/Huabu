@@ -2,7 +2,10 @@
 // Licensed under the MIT license.
 
 import { isVideoControlTarget } from '@/components/Nodes/video/videoInteraction';
-import { isKeyboardInteractiveTarget } from '@/hooks/shortcuts/isKeyboardInteractiveTarget';
+import {
+  isControlOrEditableTarget,
+  isKeyboardInteractiveTarget,
+} from '@/hooks/shortcuts/isKeyboardInteractiveTarget';
 
 import type { EffectiveInputMode } from '@/store/toolStore';
 
@@ -58,6 +61,15 @@ export function canStartRetainedSelectionMove(target: Element | null): boolean {
     !isPanelTarget(target) &&
     !isNodeControlTarget(target) &&
     !isKeyboardInteractiveTarget(target)
+  );
+}
+
+/** Binding may consume a resource link, but never a native control or editor. */
+export function canStartInkSigilBinding(target: Element | null): boolean {
+  return (
+    !isPanelTarget(target) &&
+    !isNodeControlTarget(target) &&
+    !isControlOrEditableTarget(target)
   );
 }
 

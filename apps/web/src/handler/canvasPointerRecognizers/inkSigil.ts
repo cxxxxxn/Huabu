@@ -3,9 +3,8 @@
 
 import {
   canDirectlyManipulateWithPointer,
-  isNodeControlTarget,
+  canStartInkSigilBinding,
   isNodePlacementTap,
-  isPanelTarget,
 } from '@/components/Panels/Canvas/canvasInputPolicy';
 import { getDragActivationDistance } from '@/handler/canvasGestureSession';
 import {
@@ -25,6 +24,17 @@ export function createInkSigilRecognizer(): PointerRecognizer<
   let start: PointerEvent | null = null;
   let pending: ReturnType<typeof useInkSigilStore.getState>['pending'] = null;
   let moved = false;
+  let captureTarget: HTMLDivElement | null = null;
+  const reset = () => {
+    const pointerId = start?.pointerId;
+    const element = captureTarget;
+    start = null;
+    pending = null;
+    captureTarget = null;
+    moved = false;
+    if (pointerId !== undefined && element?.hasPointerCapture(pointerId))
+      element.releasePointerCapture(pointerId);
+  };
   const suppress = (event: PointerEvent) => {
     event.preventDefault();
     event.stopPropagation();
@@ -48,12 +58,13 @@ export function createInkSigilRecognizer(): PointerRecognizer<
       event.button === 0 &&
       event.isPrimary &&
       canDirectlyManipulateWithPointer(event.pointerType, ctx.inputMode) &&
-      !isPanelTarget(event.target as Element | null) &&
-      !isNodeControlTarget(event.target as Element | null),
-    onDown: (event) => {
+      canStartInkSigilBinding(event.target as Element | null),
+    onDown: (event, ctx) => {
       start = event;
       pending = useInkSigilStore.getState().pending;
       moved = false;
+      captureTarget = ctx.wrapper;
+      captureTarget.setPointerCapture(event.pointerId);
       suppress(event);
       return 'claim';
     },
@@ -73,14 +84,12 @@ export function createInkSigilRecognizer(): PointerRecognizer<
           dismissInkSigil();
         }
       }
-      start = null;
-      pending = null;
+      reset();
     },
     onCancel: (event) => {
       suppress(event);
       if (useInkSigilStore.getState().pending === pending) dismissInkSigil();
-      start = null;
-      pending = null;
+      reset();
     },
   };
 }

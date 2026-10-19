@@ -3,16 +3,23 @@
 
 import { isEditableTarget } from './isEditableTarget';
 
-const INTERACTIVE_TARGET_SELECTOR =
-  'input, textarea, button, a[href], select, [contenteditable="true"], [role="textbox"], [role="button"], [role="menuitem"], [role="slider"], [data-keyboard-interactive]';
+const CONTROL_TARGET_SELECTOR =
+  'input, textarea, button, select, [contenteditable="true"], [contenteditable="plaintext-only"], [role="textbox"], [role="button"], [role="menuitem"], [role="slider"], [data-keyboard-interactive]';
+
+export function isControlOrEditableTarget(target: EventTarget | null): boolean {
+  return (
+    isEditableTarget(target) ||
+    (target instanceof Element &&
+      target.closest(CONTROL_TARGET_SELECTOR) !== null)
+  );
+}
 
 /** Shared keyboard ownership for editors, native controls, and their descendants. */
 export function isKeyboardInteractiveTarget(
   target: EventTarget | null,
 ): boolean {
   return (
-    isEditableTarget(target) ||
-    (target instanceof Element &&
-      target.closest(INTERACTIVE_TARGET_SELECTOR) !== null)
+    isControlOrEditableTarget(target) ||
+    (target instanceof Element && target.closest('a[href]') !== null)
   );
 }

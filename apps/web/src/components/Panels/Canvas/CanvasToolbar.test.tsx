@@ -7,13 +7,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { NodeToolbar } from './CanvasToolbar';
 
+import type * as ReactI18next from 'react-i18next';
+
 const { listCanvases } = vi.hoisted(() => ({ listCanvases: vi.fn() }));
 const toolState = vi.hoisted(() => ({
   pendingNodeType: null as string | null,
 }));
 const inputState = vi.hoisted(() => ({ isNotMouse: false }));
 
-vi.mock('react-i18next', () => ({
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...(await importOriginal<typeof ReactI18next>()),
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
