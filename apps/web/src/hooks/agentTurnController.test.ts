@@ -553,6 +553,50 @@ describe('Ink interpretation lifecycle', () => {
 });
 
 describe('shared Agent turn input', () => {
+  it('freezes Sigil targets through asynchronous saving and keeps them distinct from Canvas selection', async () => {
+    const gate = deferred();
+    mocks.save.mockReturnValueOnce(gate.promise);
+    const prepared = request('ink-intent');
+    prepared.inkResources = [
+      {
+        id: 'sigil',
+        fingerprint: '0123456789abcdef',
+        targetNodeId: 'paper',
+        targetType: 'pdf',
+        label: 'Original paper',
+        sourceBounds: { x: 0, y: 0, width: 40, height: 40 },
+        sources: [1, 2, 3, 4].map((i) => ({
+          nodeId: 'sketch-1',
+          strokeId: `stroke-${i}`,
+        })),
+      },
+    ];
+    const running = dispatchAgentTurn(prepared);
+    prepared.inkResources[0].targetNodeId = 'replacement';
+    gate.resolve();
+    expect((await running).status).toBe('completed');
+    expect(mocks.stream.mock.calls[0][4].inkResources[0].targetNodeId).toBe(
+      'paper',
+    );
+    const message = selectThreadMessages(
+      useChatStore.getState(),
+      session.threadId,
+    )[0];
+    expect(message).toMatchObject({
+      inkResources: [expect.objectContaining({ targetNodeId: 'paper' })],
+      attachments: [
+        expect.objectContaining({
+          originNodeId: 'paper',
+          label: 'Original paper',
+        }),
+      ],
+    });
+    if (message.role !== 'user') throw new Error('Expected user input');
+    expect(message.selectedNodeIds).not.toContain('paper');
+    const retry = prepareAgentTurnRetry(session, message, 'operate');
+    expect(retry.inkResources?.[0].targetNodeId).toBe('paper');
+    expect(retry.attachments).toEqual([]);
+  });
   it('deduplicates Frame-nested Ink while excluding its Question anchor', () => {
     useCanvasStore.getState()._setStateNoAutosave({
       nodes: [

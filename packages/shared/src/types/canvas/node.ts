@@ -14,6 +14,7 @@ import type {
   AgentNodeLaunchOverrides,
 } from '../api/agent-node.js';
 import type { AgentIcon } from '../api/agent-profile.js';
+import type { InkResourceBinding } from '../api/ink-sigil.js';
 import type { InteractiveViewDefinitionV1 } from '../api/interactive-view.js';
 
 // ==================== Basic Node Types ====================
@@ -700,6 +701,8 @@ export interface SketchStroke {
    * `SketchOverlay` to decide whether a new stroke joins this node.
    */
   createdAt: number;
+  /** One canonical resource binding, carried by its first source stroke. */
+  resourceBinding?: InkResourceBinding;
 }
 
 /** Sketch node: freehand drawing stored as one or more pressure-sensitive strokes. */

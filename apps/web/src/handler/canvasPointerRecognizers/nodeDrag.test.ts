@@ -3,6 +3,8 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { useInkSigilStore } from '@/store/inkSigilStore';
+
 import { createNodeDragRecognizer } from './nodeDrag';
 
 import type { CanvasPointerRouterContext } from '@/handler/canvasPointerRouterContext';
@@ -71,6 +73,7 @@ function pointer(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  useInkSigilStore.setState({ pending: null });
   nodeIdAtScreenPoint.mockReturnValue(selectedNode.id);
   getState.mockImplementation(() => ({
     nodes: [selectedNode],
@@ -82,6 +85,19 @@ beforeEach(() => {
 });
 
 describe('createNodeDragRecognizer', () => {
+  it('yields selected-node finger taps to a pending resource binding', () => {
+    useInkSigilStore.setState({
+      pending: {
+        canvasId: 'space',
+        strokeIds: ['s1', 's2', 's3', 's4'],
+        fingerprint: '1234567890abcdef',
+      },
+    });
+    expect(createNodeDragRecognizer().canClaim(pointer(1, 0, 0), context)).toBe(
+      false,
+    );
+    expect(nodeIdAtScreenPoint).not.toHaveBeenCalled();
+  });
   it('does not claim an out-of-body toolbar grip owned by its portal hook', () => {
     nodeIdAtScreenPoint.mockReturnValue(null);
     const node = document.createElement('div');

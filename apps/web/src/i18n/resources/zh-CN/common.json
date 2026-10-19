@@ -1,4 +1,30 @@
 {
+  "sigil": {
+    "chooseResource": "选择资源",
+    "bindingHint": "点击画布对象，或从列表选择资源",
+    "currentResource": "当前：{{label}}",
+    "fontsUnavailable": "手写字体尚未就绪，请加载完成后重新发送。",
+    "resourceCategories": "资源分类",
+    "categories": {
+      "pdf": "文档",
+      "web": "网页",
+      "image": "图像",
+      "text": "文本"
+    },
+    "noResources": "暂无可引用的资源",
+    "changeResource": "更换引用：{{label}}",
+    "repair": "修复失效引用：{{label}}",
+    "missing": "资源已失效",
+    "close": "关闭资源选择器",
+    "saveFailed": "无法保存引用，请重试。",
+    "moveFailed": "无法移动引用，请重试。",
+    "unavailable": "符号或资源已变化，请重新选择。",
+    "detectionFailed": "资源符号识别失败，仍可继续绘写。",
+    "brokenSelection": "请先为失效的 # 引用重新选择可用资源，再发送。",
+    "partialSelection": "未完整圈选的 # 引用不会被包含。",
+    "tooMany": "每次请求最多圈选 32 个 # 引用。",
+    "finishBinding": "请先选择资源或关闭 # 选择器，再发送。"
+  },
   "app": {
     "loadingWorkspace": "正在加载你的 Home 文件夹…",
     "savingCanvas": "正在保存 Space…",

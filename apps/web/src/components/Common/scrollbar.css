@@ -1,0 +1,52 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
+.huabu-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--fg-subtle) 45%, transparent)
+    transparent;
+}
+
+.huabu-scrollbar:hover {
+  scrollbar-color: var(--fg-subtle) transparent;
+}
+
+@supports selector(::-webkit-scrollbar) {
+  .huabu-scrollbar,
+  .huabu-scrollbar:hover {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+
+  .huabu-scrollbar::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .huabu-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+    margin-block: 8px;
+  }
+
+  .huabu-scrollbar::-webkit-scrollbar-thumb {
+    background-color: color-mix(in srgb, var(--fg-subtle) 45%, transparent);
+    background-clip: padding-box;
+    border: 2px solid transparent;
+    border-radius: 999px;
+    min-height: 24px;
+  }
+
+  .huabu-scrollbar::-webkit-scrollbar-thumb:hover {
+    background-color: var(--fg-subtle);
+  }
+
+  .huabu-scrollbar::-webkit-scrollbar-thumb:active {
+    background-color: var(--fg-muted);
+  }
+
+  .huabu-scrollbar::-webkit-scrollbar-button {
+    display: none;
+  }
+}

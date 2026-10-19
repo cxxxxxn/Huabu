@@ -296,6 +296,11 @@ export function prepareVisibleCanvasGrounding(options: {
         skipAutoScale: true,
         cacheBust: true,
         style: {
+          // Reset physical and logical offsets copied from the offscreen snapshot.
+          position: 'relative',
+          inset: 'auto',
+          insetInline: 'auto',
+          insetBlock: 'auto',
           '--canvas-grounding-edge-filter': 'none',
           '--canvas-grounding-edge-stroke':
             'var(--xy-edge-stroke, var(--xy-edge-stroke-default))',

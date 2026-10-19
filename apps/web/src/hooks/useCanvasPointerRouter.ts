@@ -7,6 +7,7 @@ import {
   canManipulateCanvasWithPointer,
   isPanelTarget,
 } from '@/components/Panels/Canvas/canvasInputPolicy';
+import { createInkSigilRecognizer } from '@/handler/canvasPointerRecognizers/inkSigil';
 import { createNodeDragRecognizer } from '@/handler/canvasPointerRecognizers/nodeDrag';
 import { createNoteContentRecognizer } from '@/handler/canvasPointerRecognizers/noteContent';
 import { createViewportNavigationRecognizer } from '@/handler/canvasPointerRecognizers/viewportNavigation';
@@ -66,6 +67,7 @@ export function useCanvasPointerRouter(
       PointerEvent,
       CanvasPointerRouterContext
     >[] = [
+      createInkSigilRecognizer(),
       createNoteContentRecognizer(),
       // Offered before viewport-navigation so a Pen-mode finger pressing
       // an already-selected node drags it instead of panning; everything
@@ -105,17 +107,18 @@ export function useCanvasPointerRouter(
       event.stopPropagation();
       event.stopImmediatePropagation();
     };
-    let suppressNoteClick = false;
-    let suppressNoteTouch = false;
+    let suppressOwnedClick = false;
+    let suppressOwnedTouch = false;
     let lastPointerType = '';
     const onDown = (event: PointerEvent) => {
       lastPointerType = event.pointerType;
-      suppressNoteClick = false;
+      suppressOwnedClick = false;
       if (shouldBlock(event)) return block(event);
       core.handleDown(event);
-      suppressNoteClick = core.ownerOf(event.pointerId)?.id === 'note-content';
-      if (suppressNoteClick && event.pointerType === 'touch')
-        suppressNoteTouch = true;
+      const owner = core.ownerOf(event.pointerId)?.id;
+      suppressOwnedClick = owner === 'note-content' || owner === 'ink-sigil';
+      if (suppressOwnedClick && event.pointerType === 'touch')
+        suppressOwnedTouch = true;
     };
     const onMove = (event: PointerEvent) => {
       if (shouldBlock(event)) return block(event);
@@ -135,7 +138,8 @@ export function useCanvasPointerRouter(
       if (
         owner === 'mouse-marquee' ||
         owner === 'lasso' ||
-        owner === 'note-content'
+        owner === 'note-content' ||
+        owner === 'ink-sigil'
       ) {
         core.handleCancel(event);
       }
@@ -151,18 +155,18 @@ export function useCanvasPointerRouter(
         !optionsRef.current.explicitToolActive &&
         viewport?.dataset.noteScrollEnabled === 'true' &&
         viewport.scrollHeight > viewport.clientHeight + 1;
-      if ((!suppressNoteClick && !touchNoteDoubleClick) || event.detail === 0)
+      if ((!suppressOwnedClick && !touchNoteDoubleClick) || event.detail === 0)
         return;
       event.preventDefault();
       event.stopPropagation();
     };
     // React Flow's d3 drag also listens to legacy Touch Events. Pointer
-    // ownership alone cannot stop that independent stream from moving a Note.
+    // ownership alone cannot stop that independent stream from moving a node.
     const onTouch = (event: TouchEvent) => {
-      if (!suppressNoteTouch) return;
+      if (!suppressOwnedTouch) return;
       event.preventDefault();
       event.stopPropagation();
-      if (event.touches.length === 0) suppressNoteTouch = false;
+      if (event.touches.length === 0) suppressOwnedTouch = false;
     };
 
     el.addEventListener('pointerdown', onDown, { capture: true });

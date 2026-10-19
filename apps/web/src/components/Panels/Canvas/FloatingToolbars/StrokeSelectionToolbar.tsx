@@ -9,6 +9,10 @@ import { useShallow } from 'zustand/react/shallow';
 
 import {
   getSelectionBounds,
+  inkSigilLayout,
+  MAX_INK_RESOURCE_REFERENCES,
+  projectInkResourceBindings,
+  selectedInkResourceReferences,
   type NestableNode,
 } from '@huabu/shared/canvas-engine';
 
@@ -64,6 +68,7 @@ import {
   useChatStore,
 } from '@/store/chatStore';
 import { useGesturePreviewStore } from '@/store/gesturePreviewStore';
+import { useInkSigilStore } from '@/store/inkSigilStore';
 
 import './NodeToolbar.css';
 
@@ -97,6 +102,7 @@ import type {
   CanvasNodeId,
   SketchStroke,
   VisibleCanvasGrounding,
+  InkResourceReference,
 } from '@huabu/shared';
 
 interface InkSubmissionAttempt {
@@ -105,6 +111,7 @@ interface InkSubmissionAttempt {
   mode: AgentMode;
   sources: CapturedAgentTurnSources;
   groundingVisual?: VisibleCanvasGrounding;
+  inkResources?: InkResourceReference[];
   pendingGrounding?: {
     snapshot: PreparedVisibleCanvasGrounding;
     viewport: { x: number; y: number; zoom: number };
@@ -219,6 +226,22 @@ export const StrokeSelectionToolbar = () => {
   const hasSelection = Object.keys(selection).length > 0;
   const hasNodeSelection = nodes.some((n) => n.selected);
   const isMixed = hasSelection && hasNodeSelection;
+  const pendingSigil = useInkSigilStore((state) => state.pending);
+  const sigilSelection = useMemo(
+    () =>
+      selectedInkResourceReferences(
+        projectInkResourceBindings(nodes),
+        selection,
+      ),
+    [nodes, selection],
+  );
+  const sigilIssue = pendingSigil
+    ? t('sigil.finishBinding')
+    : sigilSelection.brokenCount
+      ? t('sigil.brokenSelection')
+      : sigilSelection.references.length > MAX_INK_RESOURCE_REFERENCES
+        ? t('sigil.tooMany')
+        : undefined;
 
   const strokeBounds = useMemo(() => {
     if (!hasSelection) return null;
@@ -442,6 +465,28 @@ export const StrokeSelectionToolbar = () => {
       canvas.nodes,
       strokeSelection,
     );
+    const sigilProjections = projectInkResourceBindings(canvas.nodes);
+    const selectedSigils = selectedInkResourceReferences(
+      sigilProjections,
+      strokeSelection,
+    );
+    if (
+      useInkSigilStore.getState().pending ||
+      selectedSigils.brokenCount ||
+      selectedSigils.references.length > MAX_INK_RESOURCE_REFERENCES
+    ) {
+      toast(
+        t(
+          useInkSigilStore.getState().pending
+            ? 'sigil.finishBinding'
+            : selectedSigils.brokenCount
+              ? 'sigil.brokenSelection'
+              : 'sigil.tooMany',
+        ),
+        { tone: 'danger' },
+      );
+      return;
+    }
     let selectionSessionId: number | null = null;
     if (selectionSession) {
       const sessionIds = selectionSessionIdsRef.current;
@@ -510,7 +555,7 @@ export const StrokeSelectionToolbar = () => {
         const nodeBounds = getSelectionBounds(selectedNodes, canvas.nodes);
         const currentStrokeBounds =
           getSketchStrokeSelectionBounds(strokeSelection);
-        const sourceBounds = unionSelectionBounds(
+        let sourceBounds = unionSelectionBounds(
           currentStrokeBounds,
           nodeBounds
             ? {
@@ -521,10 +566,52 @@ export const StrokeSelectionToolbar = () => {
               }
             : null,
         );
+        const includedSigilIds = new Set(
+          selectedSigils.references.map((reference) => reference.id),
+        );
+        for (const projection of sigilProjections) {
+          if (includedSigilIds.has(projection.binding.id)) {
+            const annotation = document.querySelector<HTMLElement>(
+              `[data-ink-sigil="${CSS.escape(projection.binding.id)}"]`,
+            );
+            const width = Number(annotation?.dataset.inkSigilLabelWidth);
+            const height = Number(annotation?.dataset.inkSigilLabelHeight);
+            if (
+              !annotation ||
+              !Number.isFinite(width) ||
+              width <= 0 ||
+              !Number.isFinite(height) ||
+              height <= 0
+            ) {
+              throw new Error(t('sigil.unavailable'));
+            }
+            const label = annotation.querySelector<HTMLElement>(
+              '[data-ink-sigil-label]',
+            );
+            if (!label) throw new Error(t('sigil.unavailable'));
+            const labelStyle = getComputedStyle(label);
+            if (
+              document.fonts &&
+              !document.fonts.check(
+                `${labelStyle.fontSize} ${labelStyle.fontFamily}`,
+                projection.label,
+              )
+            ) {
+              throw new Error(t('sigil.fontsUnavailable'));
+            }
+            sourceBounds = unionSelectionBounds(
+              sourceBounds,
+              inkSigilLayout(projection.bounds, width, height).semanticBounds,
+            );
+          }
+        }
         if (!sourceBounds) return;
         let pendingGrounding: InkSubmissionAttempt['pendingGrounding'];
         try {
-          if (groundingNodeIds.length > 0) {
+          if (
+            groundingNodeIds.length > 0 ||
+            selectedSigils.references.length > 0
+          ) {
             const viewport = getViewport();
             pendingGrounding = {
               snapshot: prepareVisibleCanvasGrounding({
@@ -550,6 +637,7 @@ export const StrokeSelectionToolbar = () => {
               mode: inkTargetAgent(freshCandidate.target).mode,
               pendingGrounding,
               sources: capturedSources,
+              inkResources: selectedSigils.references,
               session: {
                 canvasId: canvas.canvasId,
                 ownerCanvasId: canvas.canvasId,
@@ -602,6 +690,7 @@ export const StrokeSelectionToolbar = () => {
               mode,
               pendingGrounding,
               sources: capturedSources,
+              inkResources: selectedSigils.references,
               session: {
                 canvasId: canvas.canvasId,
                 ownerCanvasId: canvas.canvasId,
@@ -656,6 +745,7 @@ export const StrokeSelectionToolbar = () => {
         content: '',
         mode: attempt.mode,
         groundingVisual: attempt.groundingVisual,
+        inkResources: attempt.inkResources,
         sources: attempt.sources,
       });
       let dispatchInvalidReason: string | undefined;
@@ -836,6 +926,7 @@ export const StrokeSelectionToolbar = () => {
   const showSubmit = hasSelection;
   const open = hasSelection && anchor !== null && (showStyle || showSubmit);
   const submitDisabled =
+    Boolean(sigilIssue) ||
     candidate.kind !== 'ready' ||
     confirmingDestination ||
     isPreparing ||
@@ -844,7 +935,8 @@ export const StrokeSelectionToolbar = () => {
     ? t('toolbar.sendingInkRequest')
     : confirmingDestination
       ? t('toolbar.inkAgentPicker.loadingConversation')
-      : (unavailableReason?.message ??
+      : (sigilIssue ??
+        unavailableReason?.message ??
         (candidate.kind === 'ready'
           ? t('toolbar.sendInkRequest')
           : t('toolbar.invalidQuestionTarget')));
@@ -974,6 +1066,14 @@ export const StrokeSelectionToolbar = () => {
           </Button>
         </FloatingToolbar.Group>
       )}
+      {sigilSelection.partialCount > 0 ? (
+        <span
+          role="status"
+          className="text-fg-muted bg-surface rounded px-2 py-1 text-xs"
+        >
+          {t('sigil.partialSelection')}
+        </span>
+      ) : null}
     </CanvasFloatingPopover>
   );
 };

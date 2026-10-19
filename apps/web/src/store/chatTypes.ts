@@ -16,6 +16,7 @@ import type {
   ChatAttachment,
   AgentRequest,
   InkInterpretation,
+  InkResourceReference,
   QuotedComment,
   SelectedStrokeSubset,
   VisibleCanvasGrounding,
@@ -63,6 +64,7 @@ export type ChatMessage =
       inkInterpretation?: InkInterpretation;
       /** Hidden relationship evidence retained only for exact Ink retry. */
       groundingVisual?: VisibleCanvasGrounding;
+      inkResources?: InkResourceReference[];
       /** Image/file attachments included with this message. */
       attachments?: ChatAttachment[];
       /** IDs of canvas nodes selected when this message was sent. */

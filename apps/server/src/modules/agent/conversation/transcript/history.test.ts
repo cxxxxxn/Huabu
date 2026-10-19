@@ -42,6 +42,54 @@ function makeEnvelope(text: string): ChatEnvelope {
   } as unknown as ChatEnvelope;
 }
 
+it.each([false, true])(
+  'round-trips frozen Sigil references without duplicating an existing attachment: %s',
+  (hasAttachment) => {
+    const envelope = makeEnvelope('');
+    envelope.user.inputKind = 'ink-intent';
+    const reference = {
+      id: 'sigil',
+      fingerprint: '0123456789abcdef',
+      targetNodeId: 'pdf',
+      targetType: 'pdf' as const,
+      label: 'Frozen paper',
+      sourceBounds: { x: 10, y: 20, width: 40, height: 40 },
+      sources: [1, 2, 3, 4].map((i) => ({ nodeId: 'ink', strokeId: `s${i}` })),
+    };
+    envelope.focus.resources = {
+      bindings: [reference, { ...reference, id: 'second' }],
+      refs: [{ id: 'pdf', type: 'pdf', filename: 'nodes/pdf.md' }],
+      imageAttachments: [],
+    };
+    const attachment = {
+      type: 'pdf' as const,
+      source: 'selection' as const,
+      originNodeId: 'pdf',
+      label: 'Explicit attachment',
+    };
+    if (hasAttachment) envelope.user.attachments = [attachment];
+    const messages: ChatHistoryItem[] = [];
+    buildHistoryFromTurns(
+      [{ request: createChatSubmission(envelope), transcript: [] }],
+      messages,
+    );
+    expect(messages[0]).toMatchObject({
+      role: 'user',
+      inkResources: envelope.focus.resources.bindings,
+      attachments: hasAttachment
+        ? [attachment]
+        : [
+            {
+              type: 'pdf',
+              source: 'selection',
+              originNodeId: 'pdf',
+              label: 'Frozen paper',
+            },
+          ],
+    });
+  },
+);
+
 function makeTurn(
   text: string | null,
   transcript: FoldedMessage[],

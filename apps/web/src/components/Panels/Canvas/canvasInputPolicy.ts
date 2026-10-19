@@ -2,7 +2,10 @@
 // Licensed under the MIT license.
 
 import { isVideoControlTarget } from '@/components/Nodes/video/videoInteraction';
-import { isKeyboardInteractiveTarget } from '@/hooks/shortcuts/isKeyboardInteractiveTarget';
+import {
+  isControlOrEditableTarget,
+  isKeyboardInteractiveTarget,
+} from '@/hooks/shortcuts/isKeyboardInteractiveTarget';
 
 import type { EffectiveInputMode } from '@/store/toolStore';
 
@@ -25,7 +28,9 @@ const REACT_FLOW_INTERACTIVE =
 export function isPanelTarget(target: Element | null): boolean {
   return (
     Boolean(
-      target?.closest(`${REACT_FLOW_PANEL}, [data-multi-resize-control]`),
+      target?.closest(
+        `${REACT_FLOW_PANEL}, [data-multi-resize-control], [data-ink-sigil-label], [data-ink-sigil-hit-target]`,
+      ),
     ) || isVideoControlTarget(target)
   );
 }
@@ -56,6 +61,15 @@ export function canStartRetainedSelectionMove(target: Element | null): boolean {
     !isPanelTarget(target) &&
     !isNodeControlTarget(target) &&
     !isKeyboardInteractiveTarget(target)
+  );
+}
+
+/** Binding may consume a resource link, but never a native control or editor. */
+export function canStartInkSigilBinding(target: Element | null): boolean {
+  return (
+    !isPanelTarget(target) &&
+    !isNodeControlTarget(target) &&
+    !isControlOrEditableTarget(target)
   );
 }
 

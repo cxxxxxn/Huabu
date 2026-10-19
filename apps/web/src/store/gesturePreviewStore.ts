@@ -3,6 +3,8 @@
 
 import { create } from 'zustand';
 
+import { resetInkSigilSession } from './inkSigilStore';
+
 import type { Guide } from '@/handler/snap/types';
 import type {
   FrameFitResult,
@@ -355,5 +357,8 @@ export const useGesturePreviewStore = create<GesturePreviewState>()((set) => ({
         ? state
         : { nodeGeometryPreviews: null },
     ),
-  resetCanvasScopedTransients: () => set({ ...INITIAL_PREVIEW_DATA }),
+  resetCanvasScopedTransients: () => {
+    resetInkSigilSession();
+    set({ ...INITIAL_PREVIEW_DATA });
+  },
 }));

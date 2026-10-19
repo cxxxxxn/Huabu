@@ -43,6 +43,7 @@
   --success-light: #a4c9a4;
   --success-bg: #e3f2e8;
   --success-bg-hover: #deeedd;
+  --ink-reference-highlight: #dcfce7;
 
   /* Status: warning */
   --warning: #eb7f31;
@@ -110,6 +111,7 @@
   --success-light: #22c55e;
   --success-bg: oklch(0.22 0.04 150);
   --success-bg-hover: oklch(0.28 0.05 150);
+  --ink-reference-highlight: var(--success-bg-hover);
 
   /* Status: warning */
   --warning: #fbbf24;
@@ -184,6 +186,7 @@
   --color-success-light: var(--success-light);
   --color-success-bg: var(--success-bg);
   --color-success-bg-hover: var(--success-bg-hover);
+  --color-ink-reference-highlight: var(--ink-reference-highlight);
 
   /* Status: warning */
   --color-warning: var(--warning);

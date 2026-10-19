@@ -17,6 +17,13 @@ import {
 import { readEffectiveInputMode } from '@/hooks/useInputMode';
 import useCanvasStore from '@/store/canvasStore';
 import { useGesturePreviewStore } from '@/store/gesturePreviewStore';
+import {
+  cancelInkSigilDetection,
+  dismissInkSigil,
+  notifyInkSigilStrokeCommitted,
+  resolvePendingInkSigilTap,
+  useInkSigilStore,
+} from '@/store/inkSigilStore';
 import { useToolStore } from '@/store/toolStore';
 
 import { findSketchStrokeHits } from './sketchHitTest';
@@ -166,6 +173,7 @@ export function SketchOverlay({
   // node. Kept alongside `livePtsRef` (the same stroke in overlay-relative
   // coords) so neither has to be re-derived per event.
   const screenPtsRef = useRef<number[][]>([]);
+  const sigilTapRef = useRef(false);
   // The overlay node lives in state rather than a ref so the raw-touch effect
   // can depend on it and follow a remounted element. A ref would be no more
   // synchronous here: the ref callback and the state update land in the same
@@ -444,6 +452,8 @@ export function SketchOverlay({
         return;
       }
       activePointerIdRef.current = e.pointerId;
+      cancelInkSigilDetection();
+      sigilTapRef.current = useInkSigilStore.getState().pending !== null;
       e.currentTarget.setPointerCapture(e.pointerId);
       // Invalidate any pending "clear preview" callback from the previous
       // stroke so it can't wipe the first point of the new one.
@@ -454,7 +464,7 @@ export function SketchOverlay({
       const { lx, ly } = toLocal(e.clientX, e.clientY);
       screenPtsRef.current = [[e.clientX, e.clientY, e.pressure]];
       livePtsRef.current = [[lx, ly, e.pressure]];
-      flushPointsNow();
+      if (!sigilTapRef.current) flushPointsNow();
     },
     [
       acceptsPointer,
@@ -472,12 +482,20 @@ export function SketchOverlay({
       if (tryUpdatePan(e)) return;
       if (e.pointerId !== activePointerIdRef.current) return;
       if (e.pointerType === 'mouse' && e.buttons !== 1) return;
-      updateCanvasGesture(e.pointerId, { x: e.clientX, y: e.clientY });
+      const phase = updateCanvasGesture(e.pointerId, {
+        x: e.clientX,
+        y: e.clientY,
+      });
       const { lx, ly } = toLocal(e.clientX, e.clientY);
       // Append in place — rebuilding both arrays per event made recording a
       // point O(n), so a single stroke cost O(n²) just to accumulate.
       screenPtsRef.current.push([e.clientX, e.clientY, e.pressure]);
       livePtsRef.current.push([lx, ly, e.pressure]);
+      if (sigilTapRef.current) {
+        if (phase !== 'locked') return;
+        sigilTapRef.current = false;
+        dismissInkSigil();
+      }
       schedulePointsFlush();
     },
     [schedulePointsFlush, toLocal, tryUpdatePan],
@@ -495,6 +513,19 @@ export function SketchOverlay({
       activePointerIdRef.current = null;
       endCanvasGesture(e.pointerId);
       e.currentTarget.releasePointerCapture(e.pointerId);
+      if (sigilTapRef.current) {
+        sigilTapRef.current = false;
+        if (phase === 'pending') {
+          const first = screenPtsRef.current[0];
+          resolvePendingInkSigilTap(
+            first?.[0] ?? e.clientX,
+            first?.[1] ?? e.clientY,
+          );
+          resetStroke();
+          return;
+        }
+        dismissInkSigil();
+      }
       // The stroke deliberately ends at the last pointermove. A pointerup
       // carries its own coordinates, but as the tip leaves the digitizer the
       // reported position degrades and lands several px off the real one —
@@ -573,8 +604,8 @@ export function SketchOverlay({
       // coord-space invariant no longer holds). Without this fallback
       // the user's stroke would be silently dropped on the rare race.
       let merged = false;
+      const strokeId = createId('stroke');
       if (targetId) {
-        const strokeId = createId('stroke');
         const commands = buildMergeCommands(
           targetId,
           newParentId,
@@ -628,7 +659,7 @@ export function SketchOverlay({
             type: 'sketch',
             strokes: [
               {
-                id: createId('stroke'),
+                id: strokeId,
                 points: result.points,
                 color: strokeColor,
                 size: strokeSize,
@@ -640,6 +671,7 @@ export function SketchOverlay({
           },
         });
       }
+      notifyInkSigilStrokeCommitted(strokeId);
 
       // Keep the overlay preview painted until ReactFlow has actually
       // mounted and measured the new SketchNode (see

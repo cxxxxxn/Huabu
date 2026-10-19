@@ -59,6 +59,125 @@ function snapshot(nodeId: string, content: string): NodeSnapshot {
 }
 
 describe('buildChatEnvelope selection records', () => {
+  const resource = {
+    id: 'sigil',
+    fingerprint: '0123456789abcdef',
+    targetNodeId: 'child-1',
+    targetType: 'note' as const,
+    label: 'Frozen title',
+    sourceBounds: { x: 0, y: 0, width: 40, height: 40 },
+    sources: [1, 2, 3, 4].map((index) => ({
+      nodeId: 'ink-1',
+      strokeId: `stroke-${index}`,
+    })),
+  };
+
+  function sigilInput() {
+    const strokeIds = resource.sources.map((source) => source.strokeId);
+    readCanvas.mockResolvedValue({
+      state: {
+        nodes: [
+          {
+            id: 'ink-1',
+            type: 'sketch',
+            position: { x: 0, y: 0 },
+            data: {
+              initialSize: { width: 100, height: 100 },
+              strokes: strokeIds.map((id) => ({
+                id,
+                points: [
+                  [1, 2],
+                  [3, 4],
+                ],
+                color: 'black',
+                size: 2,
+                createdAt: 0,
+              })),
+            },
+          },
+        ],
+      },
+    });
+    return {
+      inputKind: 'ink-intent' as const,
+      content: '',
+      canvasId: 'space',
+      logger,
+      selectedNodes: [{ id: 'ink-1', type: 'sketch' as const, strokeIds }],
+      inkResources: [resource],
+    };
+  }
+
+  it('prepares off-selection references without expanding the Lasso or changing frozen labels', async () => {
+    const envelope = await buildChatEnvelope(sigilInput());
+    expect(envelope.focus.selection.selectedIds).toEqual(['ink-1']);
+    expect(envelope.focus.resources?.refs).toEqual([
+      expect.objectContaining({ id: 'child-1', type: 'note' }),
+    ]);
+    expect(envelope.focus.resources?.bindings[0].label).toBe('Frozen title');
+    expect(envelope.user.attachments).toEqual([]);
+    expect(chatEnvelopeSchema.safeParse(envelope).success).toBe(true);
+  });
+
+  it('deduplicates preparation against selected resources while retaining binding provenance', async () => {
+    const input = sigilInput();
+    const envelope = await buildChatEnvelope({
+      ...input,
+      selectedNodes: [...input.selectedNodes, { id: 'child-1', type: 'note' }],
+    });
+    expect(envelope.focus.resources?.refs).toEqual([]);
+    expect(envelope.focus.resources?.bindings).toEqual([resource]);
+  });
+
+  it('rejects missing and wrong-type references instead of silently omitting them', async () => {
+    const input = sigilInput();
+    await expect(
+      buildChatEnvelope({
+        ...input,
+        inkResources: [{ ...resource, targetNodeId: 'missing' }],
+      }),
+    ).rejects.toThrow('missing or changed type');
+    await expect(
+      buildChatEnvelope({
+        ...input,
+        inkResources: [{ ...resource, targetType: 'pdf' }],
+      }),
+    ).rejects.toThrow('missing or changed type');
+  });
+
+  it('uses the authoritative image source and fails explicitly when it is unavailable', async () => {
+    const input = sigilInput();
+    const imageRecord: NodeSnapshot = {
+      record: {
+        nodeId: 'image',
+        type: 'image',
+        label: 'Image',
+        src: 'actual.png',
+        content: '',
+      },
+      revision: 'rev',
+    };
+    readMany.mockResolvedValue(new Map([['image', imageRecord]]));
+    const envelope = await buildChatEnvelope({
+      ...input,
+      inkResources: [
+        { ...resource, targetNodeId: 'image', targetType: 'image' },
+      ],
+    });
+    expect(envelope.focus.resources?.imageAttachments).toEqual([
+      expect.objectContaining({ originNodeId: 'image', url: 'actual.png' }),
+    ]);
+    delete imageRecord.record.src;
+    await expect(
+      buildChatEnvelope({
+        ...input,
+        inkResources: [
+          { ...resource, targetNodeId: 'image', targetType: 'image' },
+        ],
+      }),
+    ).rejects.toThrow('no readable image source');
+  });
+
   beforeEach(() => {
     rasterize.mockReset();
     rasterize.mockResolvedValue([

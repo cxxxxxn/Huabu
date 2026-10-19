@@ -137,6 +137,9 @@ function historyItemsToMessages(
         ...(message.groundingVisual
           ? { groundingVisual: message.groundingVisual }
           : {}),
+        ...(message.inkResources?.length
+          ? { inkResources: message.inkResources }
+          : {}),
         ...attachments,
         ...selectedNodeIds,
         ...(message.selectedStrokeIds && message.selectedStrokeIds.length > 0

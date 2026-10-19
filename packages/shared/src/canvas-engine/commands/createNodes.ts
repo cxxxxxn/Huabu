@@ -6,6 +6,7 @@ import { createId, type CanvasCommand } from '../../index.js';
 import { projectAgentNodeEditableData } from '../agentNodeOwnership.js';
 import { materializeAutoHeight } from '../height/materialize.js';
 import { getHeightPolicy } from '../height/policy.js';
+import { hasValidInkResourceBindings } from '../utils/inkSigil.js';
 import { deduplicateLabel, generateNextLabel } from '../utils/labels.js';
 import {
   getNodeCreationStyle,
@@ -41,6 +42,14 @@ const createNodes: CommandDefinition<Cmd> = {
 
   handler(cmd, state) {
     if (cmd.nodes.length === 0) return noop(state);
+    if (
+      cmd.nodes.some(
+        (node) =>
+          node.nodeType === 'sketch' &&
+          !hasValidInkResourceBindings(node.data ?? {}),
+      )
+    )
+      return noop(state, 'invalid-target');
 
     const existingLabels = state.nodes.map(
       (n) => n.data?.label as string | undefined,

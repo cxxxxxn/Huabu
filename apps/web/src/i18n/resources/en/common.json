@@ -1,4 +1,30 @@
 {
+  "sigil": {
+    "chooseResource": "Choose a resource",
+    "bindingHint": "Click a canvas object or choose a resource from the list",
+    "currentResource": "Current: {{label}}",
+    "fontsUnavailable": "Handwriting fonts are not ready. Wait for them to load, then send again.",
+    "resourceCategories": "Resource categories",
+    "categories": {
+      "pdf": "Docs",
+      "web": "Web",
+      "image": "Image",
+      "text": "Text"
+    },
+    "noResources": "No referenceable resources",
+    "changeResource": "Change reference: {{label}}",
+    "repair": "Repair missing reference: {{label}}",
+    "missing": "Missing resource",
+    "close": "Close resource picker",
+    "saveFailed": "The reference could not be saved. Please retry.",
+    "moveFailed": "The reference could not be moved. Please retry.",
+    "unavailable": "The Sigil or resource changed. Please select it again.",
+    "detectionFailed": "Resource sign recognition failed. Drawing is still available.",
+    "brokenSelection": "Choose an available resource for the missing # reference before sending.",
+    "partialSelection": "A partially selected # reference is not included.",
+    "tooMany": "Select at most 32 # references per request.",
+    "finishBinding": "Choose a resource or close the # picker before sending."
+  },
   "app": {
     "loadingWorkspace": "Loading your Home folder…",
     "savingCanvas": "Saving Space…",

@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+import { toPng } from 'html-to-image';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -8,9 +9,47 @@ import {
   freezeVisibleCanvasPresentation,
   GroundingSelectionOutsideViewportError,
   isVisibleCanvasGroundingChrome,
+  prepareVisibleCanvasGrounding,
 } from './screenshot';
 
+vi.mock('html-to-image', () => ({ toPng: vi.fn() }));
+
 describe('visible Canvas grounding capture', () => {
+  it('rasterizes the detached snapshot at the origin without moving its offscreen DOM', async () => {
+    const root = document.createElement('div');
+    root.className = 'react-flow';
+    document.body.append(root);
+    vi.spyOn(root, 'getBoundingClientRect').mockReturnValue(
+      new DOMRect(0, 0, 800, 600),
+    );
+    const rasterFailure = new Error('Test raster boundary');
+    vi.mocked(toPng).mockRejectedValueOnce(rasterFailure);
+    const prepared = prepareVisibleCanvasGrounding({
+      bounds: { x: 100, y: 100, width: 288, height: 72 },
+    });
+    try {
+      await expect(prepared.capture()).rejects.toThrow(rasterFailure);
+      expect(toPng).toHaveBeenCalledWith(
+        expect.any(HTMLElement),
+        expect.objectContaining({
+          style: expect.objectContaining({
+            position: 'relative',
+            inset: 'auto',
+            insetInline: 'auto',
+            insetBlock: 'auto',
+          }),
+        }),
+      );
+      const snapshot = document.querySelector<HTMLElement>(
+        '[data-canvas-grounding-snapshot]',
+      );
+      expect(snapshot?.style.left).toBe('-900px');
+    } finally {
+      prepared.dispose();
+      root.remove();
+    }
+  });
+
   it('pads and clips a crop to the visible viewport', () => {
     expect(
       clampVisibleCanvasCrop(

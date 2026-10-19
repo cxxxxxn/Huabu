@@ -169,6 +169,75 @@ describe('POST /api/canvas lifecycle', () => {
 });
 
 describe('PUT /api/canvas/:canvasId lifecycle', () => {
+  it.each(['sketch', undefined])(
+    'rejects malformed persisted Sigil metadata before saving or renaming with type %s',
+    async (type) => {
+      createCanvas('c1', 'Original');
+      const app = await buildApp();
+      try {
+        const seed = await app.inject({
+          method: 'PUT',
+          url: '/canvas/c1',
+          payload: {
+            version: 0,
+            state: {
+              nodes: [
+                {
+                  id: 'ink',
+                  type: 'sketch',
+                  position: { x: 0, y: 0 },
+                  data: { strokes: [] },
+                },
+              ],
+              edges: [],
+            },
+          },
+        });
+        expect(seed.statusCode).toBe(200);
+        const before = await space('c1').read();
+        const response = await app.inject({
+          method: 'PUT',
+          url: '/canvas/c1',
+          payload: {
+            version: seed.json().version,
+            title: 'Must not rename',
+            state: {
+              nodes: [
+                {
+                  id: 'ink',
+                  type,
+                  position: { x: 0, y: 0 },
+                  data: {
+                    strokes: [
+                      {
+                        id: 's0',
+                        points: [
+                          [0, 0],
+                          [10, 10],
+                        ],
+                        color: 'black',
+                        size: 2,
+                        resourceBinding: { strokeIds: 42 },
+                      },
+                    ],
+                  },
+                },
+              ],
+              edges: [],
+            },
+          },
+        });
+        expect(response.statusCode).toBe(400);
+        expect(response.json()).toMatchObject({
+          message: 'Invalid request body',
+        });
+        expect(await space('c1').read()).toEqual(before);
+      } finally {
+        await app.close();
+      }
+    },
+  );
+
   it('preserves the legacy structural response, version bump, and no-delta behavior', async () => {
     createCanvas('c1', 'Original');
     const app = await buildApp();

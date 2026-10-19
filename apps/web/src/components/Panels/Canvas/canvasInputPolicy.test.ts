@@ -21,6 +21,20 @@ import {
 } from './canvasInputPolicy';
 
 describe('canvas input policy', () => {
+  it.each(['data-ink-sigil-label', 'data-ink-sigil-hit-target'])(
+    'reserves native input for the Sigil control %s',
+    (attribute) => {
+      const control = document.createElement('button');
+      control.setAttribute(attribute, '');
+      const child = document.createElement('span');
+      control.append(child);
+      expect(isPanelTarget(control)).toBe(true);
+      expect(isPanelTarget(child)).toBe(true);
+      expect(canStartRetainedSelectionMove(child)).toBe(false);
+      expect(isLassoStartTarget(child)).toBe(false);
+    },
+  );
+
   it('exposes Select, Pan, and Lasso for the mouse but only Lasso for touch/pen', () => {
     expect(getAvailableCanvasTools(false)).toEqual(['select', 'pan', 'lasso']);
     expect(getAvailableCanvasTools(true)).toEqual(['lasso']);

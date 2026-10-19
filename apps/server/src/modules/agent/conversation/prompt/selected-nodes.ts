@@ -23,10 +23,10 @@ import { renderNodes } from './node-element.js';
 import type { RenderProfile } from './profile.js';
 import type { AgentNodePreview } from '../../node-ref.js';
 
-const READ_INTRO =
-  'Nodes the user selected. Each <node> is metadata only: pass `file` straight to read() for the full body, or use `id` with inspect_nodes() for layout / style / spatial relations. `summary` / `preview` are short scan hints, not the full content.';
-const READ_NODE_INTRO =
-  "The user selected the canvas nodes below. Each <node> is metadata only: download any you need at `GET ${HUABU_RFS_URL}/download/<file>` (use the node's `file` path). Use the direct Space operations from `GET ${HUABU_RFS_URL}/skill` to query, create, edit, move, or link nodes. `summary` / `preview` are short scan hints, not the full content.";
+const READ_INTRO = (origin: string) =>
+  `Nodes the user ${origin}. Each <node> is metadata only: pass \`file\` straight to read() for the full body, or use \`id\` with inspect_nodes() for layout / style / spatial relations. \`summary\` / \`preview\` are short scan hints, not the full content.`;
+const READ_NODE_INTRO = (origin: string) =>
+  `The user ${origin} the canvas nodes below. Each <node> is metadata only: download any you need at \`GET \${HUABU_RFS_URL}/download/<file>\` (use the node's \`file\` path). Use the direct Space operations from \`GET \${HUABU_RFS_URL}/skill\` to query, create, edit, move, or link nodes. \`summary\` / \`preview\` are short scan hints, not the full content.`;
 
 /**
  * Render the `<selected_nodes>` block, or `undefined` when the turn has
@@ -36,13 +36,14 @@ const READ_NODE_INTRO =
 export function renderSelectedNodesSection(
   refs: readonly AgentNodePreview[],
   profile: RenderProfile,
+  source: 'selected' | 'referenced' = 'selected',
 ): string | undefined {
   if (refs.length === 0) return undefined;
-  const intro = profile.toolset === 'reachback' ? READ_NODE_INTRO : READ_INTRO;
-  return [
-    '<selected_nodes>',
-    intro,
-    renderNodes(refs),
-    '</selected_nodes>',
-  ].join('\n');
+  const origin = source === 'referenced' ? 'explicitly referenced' : 'selected';
+  const intro =
+    profile.toolset === 'reachback'
+      ? READ_NODE_INTRO(origin)
+      : READ_INTRO(origin);
+  const tag = source === 'referenced' ? 'referenced_nodes' : 'selected_nodes';
+  return [`<${tag}>`, intro, renderNodes(refs), `</${tag}>`].join('\n');
 }

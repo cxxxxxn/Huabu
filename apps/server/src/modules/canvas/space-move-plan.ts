@@ -212,6 +212,7 @@ export function buildSpaceMovePlan(input: {
       data.strokes = data.strokes.map((stroke: Record<string, unknown>) => ({
         ...stroke,
         id: createId('stroke'),
+        resourceBinding: undefined,
       }));
     }
     if (

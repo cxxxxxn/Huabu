@@ -10,6 +10,7 @@ import {
   visibleCanvasGroundingSchema,
   wireNodeRefSchema,
 } from './agent.js';
+import { inkResourceReferencesSchema } from './ink-sigil.js';
 
 const envelopeNodeSchema = wireNodeRefSchema.extend({
   filename: z.string(),
@@ -90,6 +91,13 @@ export const chatEnvelopeSchema = z.object({
     resolved: z.array(resolvedSkillSchema),
   }),
   focus: z.object({
+    resources: z
+      .object({
+        bindings: inkResourceReferencesSchema,
+        refs: z.array(envelopeNodeSchema),
+        imageAttachments: z.array(chatAttachmentSchema),
+      })
+      .optional(),
     groundingVisual: visibleCanvasGroundingSchema.optional(),
     selection: z.object({
       refs: z.array(envelopeNodeSchema),

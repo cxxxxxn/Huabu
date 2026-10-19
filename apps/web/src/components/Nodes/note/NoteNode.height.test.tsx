@@ -11,6 +11,7 @@ import { NoteNode, type NoteNodeType } from './NoteNode';
 
 import type * as CanvasEngine from '@huabu/shared/canvas-engine';
 import type { Node, NodeProps } from '@xyflow/react';
+import type * as ReactI18next from 'react-i18next';
 
 const mocks = vi.hoisted(() => ({
   nodes: [] as Node[],
@@ -42,7 +43,8 @@ vi.mock('@/store/canvasStore', () => {
     ),
   };
 });
-vi.mock('react-i18next', () => ({
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...(await importOriginal<typeof ReactI18next>()),
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 vi.mock('@/hooks/useNodePresentation', () => ({

@@ -8,6 +8,7 @@ import {
 import { getDragActivationDistance } from '@/handler/canvasGestureSession';
 import { nodeIdAtScreenPoint } from '@/handler/canvasNodeAtPoint';
 import useCanvasStore from '@/store/canvasStore';
+import { useInkSigilStore } from '@/store/inkSigilStore';
 
 import type { CanvasPointerRouterContext } from '@/handler/canvasPointerRouterContext';
 import type { PointerRecognizer } from '@/handler/pointerRouter';
@@ -132,6 +133,7 @@ export function createNodeDragRecognizer(options?: {
     id: 'node-drag',
     canClaim: (event, ctx) =>
       pointerId === null &&
+      !useInkSigilStore.getState().pending &&
       (options
         ? options.acceptsPointer(event, ctx)
         : event.pointerType === 'touch' && ctx.inputMode === 'pen') &&

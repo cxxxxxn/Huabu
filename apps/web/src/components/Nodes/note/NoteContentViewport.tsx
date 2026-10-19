@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+import { cn } from '@/components/Common/cn';
+
 import {
   NOTE_CONTENT_HOST_CLASS,
   NOTE_CONTENT_HOST_STYLE,
@@ -37,7 +39,10 @@ export function NoteContentViewport({
           data-note-scroll-enabled={scrollingEnabled}
           data-note-native-scrollbar={nativeScrollbarVisible}
           data-note-touch-reading={touchReading}
-          className="huabu-note-scroll-viewport h-full"
+          className={cn(
+            'huabu-note-scroll-viewport h-full',
+            nativeScrollbarVisible && 'huabu-scrollbar',
+          )}
           style={{
             overflowY: scrollingEnabled ? 'auto' : 'hidden',
             overflowX: 'hidden',

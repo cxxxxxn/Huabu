@@ -23,6 +23,7 @@ import {
   preprocessNodeBodySchema,
   putCanvasBodySchema,
   canvasEditableNodeDataSchema,
+  sketchResourceBindingDataSchema,
   acknowledgeAgentNodeResultBodySchema,
   associateAgentNodeBodySchema,
   associateAgentNodeParamsSchema,
@@ -1307,6 +1308,22 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
         } satisfies CanvasConflictResponse);
       }
 
+      const currentById = new Map(
+        ((existing?.state.nodes ?? []) as NodeLike[]).map((node) => [
+          node.id,
+          node,
+        ]),
+      );
+      for (const node of incomingState.nodes ?? []) {
+        if (
+          node.type === undefined &&
+          currentById.get(node.id)?.type === 'sketch' &&
+          !sketchResourceBindingDataSchema.safeParse(node.data ?? {}).success
+        ) {
+          return reply.code(400).send({ message: 'Invalid request body' });
+        }
+      }
+
       try {
         assertWorldPreviewTopologyAllowed(
           canvasId,
@@ -1371,12 +1388,6 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
 
       const rawState = incomingState;
 
-      const currentById = new Map(
-        ((existing?.state.nodes ?? []) as NodeLike[]).map((node) => [
-          node.id,
-          node,
-        ]),
-      );
       let releaseDrafts: () => void;
       try {
         for (const node of rawState.nodes ?? []) {
