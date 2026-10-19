@@ -70,7 +70,7 @@ describe('explicit owner-only connection copy', () => {
       mocks.isOwner.mockReturnValue(true);
       mocks.buildCommand.mockReturnValue({
         content: 'explicit secret-bearing copy text',
-        source: 'generated',
+        source: 'managed',
         warnings: ['loopback'],
       });
       const server = await setup();
@@ -82,6 +82,7 @@ describe('explicit owner-only connection copy', () => {
       expect(response.statusCode).toBe(200);
       expect(response.headers['cache-control']).toBe('no-store');
       expect(response.headers.pragma).toBe('no-cache');
+      expect(response.json().source).toBe('managed');
       expect(mocks.buildCommand).toHaveBeenCalledWith({ ...payload, format });
     },
   );

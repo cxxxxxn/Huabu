@@ -8,6 +8,17 @@
 
 Canary use is additional end-to-end evidence only. It does not replace pull-request CI, review, documentation, release validation, or authorization to promote or publish.
 
+## Configuration
+
+These optional settings are specific to source-run personal Canary deployments and are not needed for ordinary local or remote use:
+
+```dotenv
+HUABU_CANARY_REDEPLOY_ENABLED=1
+HUABU_CANARY_READINESS_TIMEOUT_SECONDS=300
+```
+
+Set them in the hosting Server's environment or repository-root `.env`, then restart the Server. The first enables owner-only redeployment controls; the second is a positive integer limiting the non-interactive readiness wait, in seconds, and defaults to 300. When invoking `scripts/start-huabu.sh` directly, export the timeout in the shell environment; the script does not read that setting from `.env` itself.
+
 ## Supported workflow
 
 The supported helper runs from a source checkout through `pnpm start:web`. `scripts/start-web.mjs` captures the startup commit in `HUABU_DEPLOYED_SHA` and exports the resolved checkout root as `HUABU_REPO_ROOT` before loading the bundled Server. Production-style startup binds the fixed `SERVER_PORT` (default `3001`) and fails rather than selecting another port when it is unavailable.

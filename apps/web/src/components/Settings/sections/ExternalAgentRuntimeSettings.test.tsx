@@ -520,14 +520,11 @@ describe('ExternalAgentRuntimeSettings', () => {
       [...container.querySelectorAll(`[id="${detailsId}"] > p`)].map(
         (paragraph) => paragraph.textContent,
       ),
-    ).toEqual([
-      'settings.agentletEnvFileInstructions',
-      'settings.agentletStableConnection',
-    ]);
+    ).toEqual(['settings.agentletEnvFileInstructions']);
     expect(container.textContent).toContain(
       'pnpm start:daemon --env-file ./connection.env',
     );
-    expect(container.textContent).toContain(
+    expect(container.textContent).not.toContain(
       'settings.agentletStableConnection',
     );
     expect(createConnectionCommand).not.toHaveBeenCalled();
@@ -626,6 +623,21 @@ describe('ExternalAgentRuntimeSettings', () => {
       expect(toast).toHaveBeenCalledWith(key, { tone: 'warning' });
     },
   );
+
+  it('copies a managed token without temporary-key warnings or rendering credentials', async () => {
+    createConnectionCommand.mockResolvedValue({
+      content,
+      source: 'managed',
+      warnings: [],
+    });
+    await render();
+    await act(async () => button('settings.agentletCommandCopy').click());
+    expect(toast).toHaveBeenCalledWith('settings.agentletCommandCopied', {
+      tone: 'success',
+    });
+    expect(container.querySelector('[role="status"]')).toBeNull();
+    expect(container.textContent).not.toContain('secret');
+  });
 
   it('shows every applicable connection warning inline without exposing copied content', async () => {
     createConnectionCommand.mockResolvedValue({

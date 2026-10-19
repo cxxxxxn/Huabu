@@ -518,7 +518,6 @@ export function AgentConnectionSettings() {
                 {'pnpm start:daemon --env-file ./connection.env'}
               </code>
             </pre>
-            <p>{t('settings.agentletStableConnection')}</p>
           </div>
         )}
       </div>
