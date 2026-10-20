@@ -2,7 +2,15 @@
 // Licensed under the MIT license.
 
 import { createInstance } from 'i18next';
-import { act, useImperativeHandle, type ReactNode, type Ref } from 'react';
+import {
+  act,
+  useImperativeHandle,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type Ref,
+} from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { I18nextProvider } from 'react-i18next';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -26,6 +34,7 @@ const {
   canvasState,
   scheduleScrollToMatch,
   toast,
+  virtualization,
 } = vi.hoisted(() => {
   const selectNodes = vi.fn();
   const nodes: { id: string; data: { threadId?: string } }[] = [];
@@ -40,6 +49,10 @@ const {
     },
     scheduleScrollToMatch: vi.fn<typeof SearchDom.scheduleScrollToMatch>(),
     toast: vi.fn(),
+    virtualization: {
+      enabled: false,
+      beforeDone: undefined as (() => void) | undefined,
+    },
   };
 });
 
@@ -66,18 +79,37 @@ vi.mock('react-virtuoso', () => ({
     data,
     itemContent,
   }: {
-    ref: Ref<{ scrollIntoView: (location: { done?: () => void }) => void }>;
+    ref: Ref<{
+      scrollIntoView: (location: { index: number; done?: () => void }) => void;
+    }>;
     data: unknown[];
     itemContent: (index: number, item: unknown) => ReactNode;
   }) => {
+    const [target, setTarget] = useState(0);
+    const pendingDone = useRef<(() => void) | undefined>(undefined);
     useImperativeHandle(ref, () => ({
-      scrollIntoView: ({ done }) => done?.(),
+      scrollIntoView: ({ index, done }) => {
+        if (!virtualization.enabled) {
+          done?.();
+          return;
+        }
+        pendingDone.current = done;
+        setTarget(index);
+      },
     }));
+    useLayoutEffect(() => {
+      virtualization.beforeDone?.();
+      pendingDone.current?.();
+      pendingDone.current = undefined;
+    }, [target]);
     return (
       <div>
-        {data.map((item, index) => (
-          <div key={index}>{itemContent(index, item)}</div>
-        ))}
+        {data.map(
+          (item, index) =>
+            (!virtualization.enabled || index === target || index === 0) && (
+              <div key={index}>{itemContent(index, item)}</div>
+            ),
+        )}
       </div>
     );
   },
@@ -122,6 +154,8 @@ function press(element: HTMLElement, key: string) {
 }
 
 beforeEach(async () => {
+  virtualization.enabled = false;
+  virtualization.beforeDone = undefined;
   await testI18n.init({
     lng: 'en',
     fallbackLng: 'en',
@@ -157,6 +191,36 @@ beforeEach(async () => {
     ),
   );
   vi.clearAllMocks();
+});
+
+describe('virtualized result focus ownership', () => {
+  it.each([false, true])(
+    'restores an unmounted result without overriding outside focus (%s)',
+    (moveOutside) => {
+      virtualization.enabled = true;
+      const rows = Array.from({ length: 80 }, (_, i) => ({
+        ...results[0],
+        key: `first:content:${i}`,
+        match: { ...results[0].match, occurrenceIndex: i },
+      }));
+      act(() => useSearchStore.setState({ results: rows }));
+      act(() => getRow(0).focus());
+      for (let i = 0; i < 80; i++) {
+        const focused = document.activeElement;
+        if (!(focused instanceof HTMLElement))
+          throw new Error('Missing focused row');
+        press(focused, 'ArrowDown');
+      }
+      const last = getRow(80);
+      expect(document.activeElement).toBe(last);
+      if (moveOutside) virtualization.beforeDone = () => searchInput?.focus();
+      press(last, 'ArrowLeft');
+      expect(last.isConnected).toBe(false);
+      expect(document.activeElement).toBe(
+        moveOutside ? searchInput : getRow(0),
+      );
+    },
+  );
 });
 
 describe('Canvas search localization', () => {

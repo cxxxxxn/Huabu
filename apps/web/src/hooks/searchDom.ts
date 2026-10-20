@@ -29,10 +29,15 @@ export function findNthRange(
   query: string,
   nth: number,
 ): Range | null {
-  const needle = query.toLowerCase();
-  if (!needle) return null;
-  const ranges = findRanges(root, query, nth + 1);
-  return ranges[nth] ?? null;
+  let index = 0;
+  for (const { node, offset, length } of walkTextMatches(root, query)) {
+    if (index++ !== nth) continue;
+    const range = document.createRange();
+    range.setStart(node, offset);
+    range.setEnd(node, offset + length);
+    return range;
+  }
+  return null;
 }
 
 /**
@@ -45,10 +50,32 @@ export function findRanges(
   query: string,
   maxRanges = Number.POSITIVE_INFINITY,
 ): Range[] {
-  const needle = query.toLowerCase();
-  if (!needle || maxRanges <= 0) return [];
-
   const ranges: Range[] = [];
+  if (maxRanges <= 0) return ranges;
+  for (const { node, offset, length } of walkTextMatches(root, query)) {
+    const range = document.createRange();
+    range.setStart(node, offset);
+    range.setEnd(node, offset + length);
+    ranges.push(range);
+    if (ranges.length >= maxRanges) break;
+  }
+  return ranges;
+}
+
+/** Count all searchable occurrences without allocating DOM Range objects. */
+export function countMatches(root: HTMLElement, query: string): number {
+  let count = 0;
+  const matches = walkTextMatches(root, query);
+  while (!matches.next().done) count += 1;
+  return count;
+}
+
+function* walkTextMatches(
+  root: HTMLElement,
+  query: string,
+): Generator<{ node: Node; offset: number; length: number }> {
+  const needle = query.toLowerCase();
+  if (!needle) return;
   for (const searchRoot of getSearchRoots(root)) {
     const walker = document.createTreeWalker(searchRoot, NodeFilter.SHOW_TEXT, {
       acceptNode: (node) =>
@@ -57,23 +84,18 @@ export function findRanges(
           : NodeFilter.FILTER_REJECT,
     });
     let current = walker.nextNode();
-    while (current && ranges.length < maxRanges) {
+    while (current) {
       const text = (current.textContent ?? '').toLowerCase();
       let from = 0;
-      while (ranges.length < maxRanges) {
+      while (true) {
         const idx = text.indexOf(needle, from);
         if (idx === -1) break;
-        const range = document.createRange();
-        range.setStart(current, idx);
-        range.setEnd(current, idx + needle.length);
-        ranges.push(range);
+        yield { node: current, offset: idx, length: needle.length };
         from = idx + Math.max(1, needle.length);
       }
       current = walker.nextNode();
     }
-    if (ranges.length >= maxRanges) break;
   }
-  return ranges;
 }
 
 function getSearchRoots(root: HTMLElement): HTMLElement[] {
@@ -194,6 +216,7 @@ export function scheduleScrollToMatch(
     timeoutMs?: number;
     onTimeout?: () => void;
     onMatch?: (range: Range) => void;
+    fallbackToFirst?: boolean;
   },
 ): () => void {
   if (!query) return () => {};
@@ -249,7 +272,8 @@ export function scheduleScrollToMatch(
     // ordinals must never fall back to an unrelated, more recent occurrence.
     const range =
       findNthRange(root, query, nth) ??
-      (root.matches('[data-chat-thread-root]')
+      (root.matches('[data-chat-thread-root]') ||
+      options?.fallbackToFirst === false
         ? null
         : findNthRange(root, query, 0));
     if (!range) return false;

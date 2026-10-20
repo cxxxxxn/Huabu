@@ -105,6 +105,7 @@ describe('DropdownMenu keyboard contract', () => {
   it.each(['ArrowDown', 'ArrowUp'])(
     'opens from %s at the expected edge',
     async (key) => {
+      const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
       await mount(
         <DropdownMenu trigger={<Button data-testid="trigger">Actions</Button>}>
           <DropdownMenuItem data-testid="first">First</DropdownMenuItem>
@@ -114,11 +115,12 @@ describe('DropdownMenu keyboard contract', () => {
       const trigger = getElement('[data-testid="trigger"]');
       act(() => trigger.focus());
       await press(trigger, key);
-      expect(document.activeElement).toBe(
-        getElement(
-          key === 'ArrowUp' ? '[data-testid="last"]' : '[data-testid="first"]',
-        ),
+      const item = getElement(
+        key === 'ArrowUp' ? '[data-testid="last"]' : '[data-testid="first"]',
       );
+      expect(document.activeElement).toBe(item);
+      expect(scroll).toHaveBeenCalledWith({ block: 'nearest' });
+      expect(scroll.mock.instances.at(-1)).toBe(item);
     },
   );
 

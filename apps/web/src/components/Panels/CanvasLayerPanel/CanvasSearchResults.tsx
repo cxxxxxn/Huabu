@@ -478,13 +478,25 @@ export const CanvasSearchResults = (): React.JSX.Element => {
   // API.
   useEffect(() => {
     if (visibleRows.length === 0) return;
+    const root = resultsRef.current;
+    const focusedResult = root?.contains(document.activeElement)
+      ? document.activeElement
+      : null;
+    let cancelled = false;
     virtuosoRef.current?.scrollIntoView({
       index: activeIdx,
       behavior: 'auto',
       align: 'center',
       done: () => {
-        const root = resultsRef.current;
-        if (root?.contains(document.activeElement)) {
+        if (cancelled) return;
+        const activeElement = document.activeElement;
+        if (
+          root &&
+          (root.contains(activeElement) ||
+            (focusedResult &&
+              !focusedResult.isConnected &&
+              activeElement === document.body))
+        ) {
           root
             .querySelector<HTMLElement>(
               `[data-search-row-index="${activeIdx}"]`,
@@ -493,6 +505,9 @@ export const CanvasSearchResults = (): React.JSX.Element => {
         }
       },
     });
+    return () => {
+      cancelled = true;
+    };
   }, [activeIdx, visibleRows.length]);
 
   const showEmpty =

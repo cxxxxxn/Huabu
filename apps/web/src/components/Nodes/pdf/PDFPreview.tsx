@@ -428,8 +428,8 @@ export const PDFPreview = ({
       isPdfSearchActive
         ? {
             matchCount: searchMatches.length,
-            isSearching: textIndex.isIndexing,
-            canNavigate: !textIndex.isIndexing,
+            isSearching: !docLoaded || textIndex.isIndexing,
+            canNavigate: docLoaded && !textIndex.isIndexing,
             navigateToMatch: navigateToSearchMatch,
           }
         : null,
@@ -438,6 +438,7 @@ export const PDFPreview = ({
       navigateToSearchMatch,
       searchMatches.length,
       textIndex.isIndexing,
+      docLoaded,
     ],
   );
 

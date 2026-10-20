@@ -32,7 +32,7 @@ import { usePreviewSearchAdapter } from './PreviewSearchAdapterContext';
 import { formatShortcutById } from '../../../config/shortcuts';
 import {
   findNthRange,
-  findRanges,
+  countMatches,
   scheduleScrollToMatch,
   scrollRangeIntoView,
 } from '../../../hooks/searchDom';
@@ -45,11 +45,13 @@ interface InPreviewSearchBarProps {
   /** Root of the preview content. Highlights paint over its descendants. */
   scopeEl: HTMLElement | null;
   nodeId: string | null;
+  requiresAdapter?: boolean;
 }
 
 export const InPreviewSearchBar = ({
   scopeEl,
   nodeId,
+  requiresAdapter = false,
 }: InPreviewSearchBarProps): React.JSX.Element | null => {
   const { t } = useTranslation();
   const isOpen = usePreviewSearchStore((s) => s.isOpen);
@@ -100,8 +102,13 @@ export const InPreviewSearchBar = ({
   const { matchCount: domMatchCount } = useTextHighlight({
     container: isActive ? scopeEl : null,
     query,
+    activeMatchIndex: activeMatchIdx,
   });
-  const matchCount = searchAdapter?.matchCount ?? domMatchCount;
+  const waitingForAdapter = requiresAdapter && !searchAdapter;
+  const matchCount = waitingForAdapter
+    ? 0
+    : (searchAdapter?.matchCount ?? domMatchCount);
+  const isSearching = waitingForAdapter || searchAdapter?.isSearching;
 
   // Reset cursor whenever the query changes so Next/Prev starts from top.
   useEffect(() => {
@@ -110,7 +117,14 @@ export const InPreviewSearchBar = ({
   }, [query]);
 
   useEffect(() => {
-    if (!isActive || !navigationRequest || !scopeEl || !query) return;
+    if (
+      !isActive ||
+      !navigationRequest ||
+      !scopeEl ||
+      !query ||
+      waitingForAdapter
+    )
+      return;
     const { occurrenceIndex, nonce } = navigationRequest;
     const consume = () =>
       usePreviewSearchStore.getState().consumeNavigation(nonce);
@@ -131,8 +145,9 @@ export const InPreviewSearchBar = ({
       return;
     }
     return scheduleScrollToMatch(() => scopeEl, query, occurrenceIndex, {
+      fallbackToFirst: false,
       onMatch: () => {
-        const count = findRanges(scopeEl, query).length;
+        const count = countMatches(scopeEl, query);
         setActiveMatchIdx(occurrenceIndex < count ? occurrenceIndex : 0);
         setHasNavigated(true);
         consume();
@@ -145,7 +160,15 @@ export const InPreviewSearchBar = ({
         consume();
       },
     });
-  }, [isActive, navigationRequest, scopeEl, query, searchAdapter, t]);
+  }, [
+    isActive,
+    navigationRequest,
+    scopeEl,
+    query,
+    searchAdapter,
+    waitingForAdapter,
+    t,
+  ]);
 
   const jumpToMatch = (idx: number): void => {
     if (
@@ -203,8 +226,8 @@ export const InPreviewSearchBar = ({
       <span className="text-fg-subtle shrink-0 px-1 text-[11px] tabular-nums">
         {query.length > 0
           ? matchCount > 0
-            ? `${activeMatchIdx + 1}/${matchCount}${searchAdapter?.isSearching ? '+' : ''}`
-            : searchAdapter?.isSearching
+            ? `${activeMatchIdx + 1}/${matchCount}${isSearching ? '+' : ''}`
+            : isSearching
               ? '…'
               : '0/0'
           : ''}

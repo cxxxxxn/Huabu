@@ -12,14 +12,6 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
-vi.mock('../../../hooks/useTextHighlight', () => ({
-  useTextHighlight: () => ({ matchCount: 0 }),
-}));
-
-vi.mock('./PreviewSearchAdapterContext', () => ({
-  usePreviewSearchAdapter: () => null,
-}));
-
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
@@ -77,8 +69,18 @@ describe('InPreviewSearchBar preview-search lifecycle', () => {
       root.render(<InPreviewSearchBar scopeEl={scope} nodeId="note-1" />),
     );
     expect(usePreviewSearchStore.getState().navigationRequest).not.toBeNull();
-    scope.innerHTML =
-      '<p data-preview-search-content>first needle</p><p data-preview-search-content>second needle</p>';
+    scope.innerHTML = '<p data-preview-search-content>first needle</p>';
+    await act(async () => {
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+    });
+    expect(scroll).not.toHaveBeenCalled();
+    expect(usePreviewSearchStore.getState().navigationRequest).not.toBeNull();
+    scope.insertAdjacentHTML(
+      'beforeend',
+      '<p data-preview-search-content>second needle</p>',
+    );
     await act(async () => {
       await vi.waitFor(() => expect(scroll).toHaveBeenCalledTimes(1));
     });
@@ -86,6 +88,35 @@ describe('InPreviewSearchBar preview-search lifecycle', () => {
     expect(usePreviewSearchStore.getState().navigationRequest).toBeNull();
     expect(document.activeElement).toBe(focus);
     scroll.mockRestore();
+  });
+
+  it('uses the full count to navigate beyond the 500-range highlight cap', () => {
+    const scope = document.createElement('p');
+    scope.dataset.previewSearchContent = '';
+    scope.textContent = 'needle '.repeat(600);
+    container.append(scope);
+    usePreviewSearchStore.getState().reveal('note-1', 'needle', 500);
+    act(() =>
+      root.render(<InPreviewSearchBar scopeEl={scope} nodeId="note-1" />),
+    );
+    expect(container.textContent).toContain('501/600');
+    const next = container.querySelectorAll('button')[1];
+    act(() => next?.click());
+    expect(container.textContent).toContain('502/600');
+  });
+
+  it('keeps indexed navigation pending before an adapter registers even if DOM text matches', () => {
+    const scope = document.createElement('p');
+    scope.textContent = 'needle';
+    container.append(scope);
+    usePreviewSearchStore.getState().reveal('pdf-1', 'needle', 0);
+    act(() =>
+      root.render(
+        <InPreviewSearchBar scopeEl={scope} nodeId="pdf-1" requiresAdapter />,
+      ),
+    );
+    expect(usePreviewSearchStore.getState().navigationRequest).not.toBeNull();
+    expect(container.querySelector('button')?.disabled).toBe(true);
   });
 
   it('is active while its node owns preview search', () => {

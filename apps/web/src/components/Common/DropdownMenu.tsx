@@ -247,9 +247,9 @@ export const DropdownMenu: React.FC<DropdownMenuProps> = ({
 
   const focusMenuEdge = (edge: 'first' | 'last') => {
     const items = getMenuItems();
-    (edge === 'last' ? items.at(-1) : items[0])?.focus({
-      preventScroll: true,
-    });
+    const item = edge === 'last' ? items.at(-1) : items[0];
+    item?.focus({ preventScroll: true });
+    item?.scrollIntoView({ block: 'nearest' });
   };
 
   const handleToggle = useCallback(() => {

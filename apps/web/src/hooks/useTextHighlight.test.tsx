@@ -16,12 +16,18 @@ let highlights: Map<string, Set<Range>>;
 function Surface({
   element,
   query,
+  activeMatchIndex,
 }: {
   element: HTMLElement | null;
   query: string;
+  activeMatchIndex?: number;
 }) {
-  useTextHighlight({ container: element, query });
-  return null;
+  const { matchCount } = useTextHighlight({
+    container: element,
+    query,
+    activeMatchIndex,
+  });
+  return <output>{matchCount}</output>;
 }
 
 beforeEach(() => {
@@ -79,4 +85,49 @@ it('merges independent canvas and preview highlights and removes only the closin
   ).toBe(canvas.firstChild);
   act(() => root.render(<Surface element={null} query="" />));
   expect(highlights.has('huabu-search')).toBe(false);
+});
+
+it('counts all matches while allocating only the bounded painted ranges', async () => {
+  canvas.textContent = 'needle '.repeat(600);
+  const createRange = vi.spyOn(document, 'createRange');
+  act(() => root.render(<Surface element={canvas} query="needle" />));
+  expect(host.textContent).toBe('600');
+  expect(highlights.get('huabu-search')?.size).toBe(500);
+  expect(createRange).toHaveBeenCalledTimes(500);
+  canvas.textContent += 'needle';
+  await vi.waitFor(async () => {
+    await act(async () => {
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
+    });
+
+    expect(host.textContent).toBe('601');
+  });
+  expect(highlights.get('huabu-search')?.size).toBe(500);
+});
+
+it('keeps an occurrence beyond the cap highlighted without increasing the painted range count', () => {
+  canvas.textContent = 'needle '.repeat(600);
+  const createRange = vi.spyOn(document, 'createRange');
+  act(() =>
+    root.render(
+      <Surface element={canvas} query="needle" activeMatchIndex={500} />,
+    ),
+  );
+  expect(host.textContent).toBe('600');
+  expect(highlights.get('huabu-search')?.size).toBe(500);
+  expect(createRange).toHaveBeenCalledTimes(501);
+  expect(
+    Array.from(highlights.get('huabu-search') ?? []).at(-1)?.startOffset,
+  ).toBe(3500);
+  act(() =>
+    root.render(
+      <Surface element={canvas} query="needle" activeMatchIndex={501} />,
+    ),
+  );
+  expect(highlights.get('huabu-search')?.size).toBe(500);
+  expect(
+    Array.from(highlights.get('huabu-search') ?? []).at(-1)?.startOffset,
+  ).toBe(3507);
 });

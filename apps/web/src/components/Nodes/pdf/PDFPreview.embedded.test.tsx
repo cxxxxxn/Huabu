@@ -5,7 +5,14 @@ import { act, type ReactNode, type KeyboardEventHandler } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { InPreviewSearchBar } from '@/components/Panels/ExpandedNodePanel/InPreviewSearchBar';
+import { PreviewSearchAdapterProvider } from '@/components/Panels/ExpandedNodePanel/PreviewSearchAdapterContext';
+import { usePreviewSearchStore } from '@/store/previewSearchStore';
+
 import { PDFPreview } from './PDFPreview';
+
+import type { PdfPageText } from './pdfTextIndex';
+import type * as PreviewSearchContext from '@/components/Panels/ExpandedNodePanel/PreviewSearchAdapterContext';
 
 interface DocumentProps {
   children: ReactNode;
@@ -22,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   header: null as HTMLElement | null,
   intersection: null as IntersectionObserverCallback | null,
   resize: null as ResizeObserverCallback | null,
+  indexPages: new Map<number, PdfPageText>(),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -46,23 +54,28 @@ vi.mock('@/store/panelStore', () => ({ usePanelStore: {} }));
 vi.mock('@/store/previewWorkspace/store', () => ({
   usePreviewWorkspaceStore: {},
 }));
-vi.mock('@/store/previewSearchStore', () => ({
-  usePreviewSearchStore: (select: (state: unknown) => unknown) =>
-    select({ nodeId: 'pdf-1', query: 'existing search', isOpen: true }),
-}));
 vi.mock('@/components/Nodes/PreviewHeaderSlot', () => ({
   usePreviewHeaderSlot: () => ({ el: mocks.header }),
 }));
 vi.mock(
   '@/components/Panels/ExpandedNodePanel/PreviewSearchAdapterContext',
-  () => ({
-    useRegisterPreviewSearchAdapter: mocks.registerSearch,
-  }),
+  async (importOriginal) => {
+    const actual = await importOriginal<typeof PreviewSearchContext>();
+    return {
+      ...actual,
+      useRegisterPreviewSearchAdapter: (
+        adapter: Parameters<typeof actual.useRegisterPreviewSearchAdapter>[0],
+      ) => {
+        mocks.registerSearch(adapter);
+        actual.useRegisterPreviewSearchAdapter(adapter);
+      },
+    };
+  },
 );
 vi.mock('./usePdfTextIndex', () => ({
   usePdfTextIndex: (options: unknown) => {
     mocks.index(options);
-    return { pages: new Map(), isIndexing: false };
+    return { pages: mocks.indexPages, isIndexing: false };
   },
 }));
 vi.mock('./pdfWorker', () => ({ PDF_DOCUMENT_OPTIONS: {} }));
@@ -102,6 +115,9 @@ let container: HTMLDivElement;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.indexPages = new Map();
+  usePreviewSearchStore.getState().open('pdf-1');
+  usePreviewSearchStore.getState().setQuery('existing search');
   mocks.intersection = null;
   mocks.resize = null;
   mocks.header = document.createElement('div');
@@ -166,6 +182,37 @@ function load() {
 }
 
 describe('embedded PDF reader', () => {
+  it('retains a cold PDF handoff until the document and adapter are ready', () => {
+    usePreviewSearchStore.getState().reveal('pdf-1', 'needle', 3);
+    act(() =>
+      root.render(
+        <PreviewSearchAdapterProvider>
+          <InPreviewSearchBar
+            scopeEl={container}
+            nodeId="pdf-1"
+            requiresAdapter
+          />
+          <p data-preview-search-content>needle</p>
+          <PDFPreview id="pdf-1" data={{ src: 'document.pdf' }} />
+        </PreviewSearchAdapterProvider>,
+      ),
+    );
+    expect(usePreviewSearchStore.getState().navigationRequest).not.toBeNull();
+    expect(mocks.registerSearch.mock.lastCall?.[0]).toMatchObject({
+      matchCount: 0,
+      canNavigate: false,
+      isSearching: true,
+    });
+    mocks.indexPages = new Map(
+      Array.from({ length: 4 }, (_, pageIndex) => [
+        pageIndex,
+        { pageIndex, text: 'needle' },
+      ]),
+    );
+    load();
+    expect(usePreviewSearchStore.getState().navigationRequest).toBeNull();
+    expect(container.textContent).toContain('4/4');
+  });
   it('remembers resolved page dimensions so cold remounts do not shift custom zoom', () => {
     const key = 'node:pdf-preview-test:natural-size';
     render(true, false, undefined, undefined, key);
