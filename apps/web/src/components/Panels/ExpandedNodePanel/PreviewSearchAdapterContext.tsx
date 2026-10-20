@@ -9,12 +9,19 @@ import {
   type ReactNode,
 } from 'react';
 
+import type { CanvasSearchSource } from '@huabu/shared';
+
 export type PreviewSearchAdapter = {
   query: string;
   matchCount: number;
   isSearching: boolean;
   canNavigate: boolean;
-  navigateToMatch: (matchIndex: number) => void;
+  resolveSourceMatch?: (source: CanvasSearchSource) => Promise<number | null>;
+  getMatchRange?: (matchIndex: number) => Range | null;
+  navigateToMatch: (
+    matchIndex: number,
+    onResult: (visible: boolean, range?: Range) => void,
+  ) => (() => void) | void;
 };
 
 type PreviewSearchAdapterContextValue = {

@@ -23,9 +23,10 @@ import {
   computeHighlightUpdate,
   mergeLineRects,
 } from '@/handler/pdfHighlight/highlight';
-import { scheduleScrollToMatch } from '@/hooks/searchDom';
+import { scheduleScrollToMatch, findProjectedRange } from '@/hooks/searchDom';
 import { handleCanvasNavigationKey } from '@/hooks/shortcuts/handleCanvasNavigationKey';
 import { usePreviewScrollMemory } from '@/hooks/usePreviewScrollMemory';
+import { hashSearchSource } from '@/hooks/useSearchSource';
 import { loadDefaultAgentBinding } from '@/store/acpProfilesStore';
 import useCanvasStore from '@/store/canvasStore';
 import { useChatStore } from '@/store/chatStore';
@@ -47,7 +48,7 @@ import {
   updateVisiblePdfPages,
 } from './pdfPageRendering';
 import { PDFPageWithOverlay } from './PDFPageWithOverlay';
-import { findPdfTextMatches } from './pdfTextIndex';
+import { findPdfTextMatches, findPdfSourceMatch } from './pdfTextIndex';
 import { PDF_DOCUMENT_OPTIONS } from './pdfWorker';
 import { PDFZoomControls } from './PDFZoomControls';
 import { usePdfDocumentLifecycle } from './usePdfDocumentLifecycle';
@@ -394,11 +395,37 @@ export const PDFPreview = ({
     [searchQuery, textIndex.pages],
   );
 
+  const getSearchMatchRange = useCallback(
+    (matchIndex: number): Range | null => {
+      const match = searchMatches[matchIndex];
+      if (!match) return null;
+      const page = textIndex.pages.get(match.pageIndex);
+      const shell = scrollContainerRef.current?.querySelector<HTMLElement>(
+        `[data-pdf-page-shell="${match.pageIndex}"]`,
+      );
+      return page && shell
+        ? findProjectedRange(
+            shell.querySelector<HTMLElement>('.textLayer') ?? shell,
+            page.text,
+            match.start,
+            match.end,
+          )
+        : null;
+    },
+    [searchMatches, textIndex.pages],
+  );
+
   const navigateToSearchMatch = useCallback(
-    (matchIndex: number) => {
+    (
+      matchIndex: number,
+      onResult: (visible: boolean, range?: Range) => void,
+    ) => {
       const match = searchMatches[matchIndex];
       const root = scrollContainerRef.current;
-      if (!match || !root) return;
+      if (!match || !root) {
+        onResult(false);
+        return;
+      }
 
       searchNavigationCancelRef.current?.();
       setForcedPageIndex(match.pageIndex);
@@ -407,12 +434,22 @@ export const PDFPreview = ({
       );
       pageShell?.scrollIntoView({ block: 'center', behavior: 'auto' });
       searchNavigationCancelRef.current = scheduleScrollToMatch(
-        () => pageShell,
+        () =>
+          root.querySelector<HTMLElement>(
+            `[data-pdf-page-shell="${match.pageIndex}"]`,
+          ),
         searchQuery.trim(),
         match.pageOccurrenceIndex,
+        {
+          fallbackToFirst: false,
+          getMatchRange: () => getSearchMatchRange(matchIndex),
+          onMatch: (range) => onResult(true, range),
+          onTimeout: () => onResult(false),
+        },
       );
+      return searchNavigationCancelRef.current;
     },
-    [searchMatches, searchQuery],
+    [searchMatches, searchQuery, getSearchMatchRange],
   );
 
   useEffect(() => {
@@ -432,15 +469,39 @@ export const PDFPreview = ({
             isSearching: !docLoaded || textIndex.isIndexing,
             canNavigate: docLoaded && !textIndex.isIndexing,
             navigateToMatch: navigateToSearchMatch,
+            getMatchRange: getSearchMatchRange,
+            resolveSourceMatch: async (
+              source: Parameters<
+                NonNullable<PreviewSearchAdapter['resolveSourceMatch']>
+              >[0],
+            ) => {
+              const markdown =
+                typeof data.content === 'string' ? data.content : '';
+              if (
+                !markdown ||
+                (await hashSearchSource(markdown)) !== source.hash
+              )
+                return null;
+              return findPdfSourceMatch(
+                textIndex.pages.values(),
+                searchQuery.trim(),
+                markdown,
+                source.offset,
+                source.length,
+              );
+            },
           }
         : null,
     [
       isPdfSearchActive,
       searchQuery,
       navigateToSearchMatch,
+      getSearchMatchRange,
       searchMatches.length,
       textIndex.isIndexing,
       docLoaded,
+      data.content,
+      textIndex.pages,
     ],
   );
 

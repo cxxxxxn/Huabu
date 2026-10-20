@@ -104,7 +104,13 @@ vi.mock('./PDFPageWithOverlay', () => ({
     captureEnabled: boolean;
   }) => {
     mocks.page(props);
-    return <div data-page={props.pageIndex} />;
+    return (
+      <div data-page={props.pageIndex}>
+        <p data-preview-search-content>
+          {mocks.indexPages.get(props.pageIndex)?.text}
+        </p>
+      </div>
+    );
   },
 }));
 
@@ -117,6 +123,9 @@ let container: HTMLDivElement;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.spyOn(Range.prototype, 'getBoundingClientRect').mockReturnValue(
+    new DOMRect(10, 100, 80, 20),
+  );
   mocks.indexPages = new Map();
   usePreviewSearchStore.getState().open('pdf-1');
   usePreviewSearchStore.getState().setQuery('existing search');
@@ -187,7 +196,7 @@ function load() {
 describe('embedded PDF reader', () => {
   it.each(['alpha', 'missing'])(
     'waits for the new query adapter after an already indexed %s search',
-    (previousQuery) => {
+    async (previousQuery) => {
       mocks.indexPages = new Map([
         [0, { pageIndex: 0, text: 'alpha alpha alpha' }],
         [1, { pageIndex: 1, text: 'beta' }],
@@ -211,6 +220,11 @@ describe('embedded PDF reader', () => {
         .spyOn(HTMLElement.prototype, 'scrollIntoView')
         .mockImplementation(() => {});
       act(() => usePreviewSearchStore.getState().reveal('pdf-1', 'beta', 0));
+      await act(async () => {
+        await vi.waitFor(() =>
+          expect(usePreviewSearchStore.getState().navigationRequest).toBeNull(),
+        );
+      });
       expect(scroll).toHaveBeenCalledTimes(1);
       expect(
         (scroll.mock.instances[0] as HTMLElement).dataset.pdfPageShell,
@@ -257,7 +271,7 @@ describe('embedded PDF reader', () => {
     },
   );
 
-  it('retains a cold PDF handoff until the document and adapter are ready', () => {
+  it('retains a cold PDF handoff until the document, adapter, and text-layer range are ready', async () => {
     usePreviewSearchStore.getState().reveal('pdf-1', 'needle', 3);
     act(() =>
       root.render(
@@ -285,6 +299,11 @@ describe('embedded PDF reader', () => {
       ]),
     );
     load();
+    await act(async () => {
+      await vi.waitFor(() =>
+        expect(usePreviewSearchStore.getState().navigationRequest).toBeNull(),
+      );
+    });
     expect(usePreviewSearchStore.getState().navigationRequest).toBeNull();
     expect(container.textContent).toContain('4/4');
   });

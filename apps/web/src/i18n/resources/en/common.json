@@ -534,8 +534,8 @@
     "noMatches": "No matches",
     "searchingNoteContents": "Searching note contents…",
     "resultsTruncated": "The result set only contains a subset of all matches. Be more specific in your search to narrow down the results.",
-    "conversationMatchNotVisible": "Match not visible in the conversation — scroll manually to find it.",
-    "previewMatchNotVisible": "Match not visible in this preview — use Find to locate it manually.",
+    "conversationMatchNotVisible": "Cannot precisely locate this match in the conversation. It may only exist in source text, or the content may have changed.",
+    "previewMatchNotVisible": "Cannot precisely locate this match in the preview. It may only exist in source text, or the content may have changed.",
     "fields": {
       "label": "Title",
       "summary": "Summary",

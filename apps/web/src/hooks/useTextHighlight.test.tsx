@@ -5,6 +5,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
+import { findProjectedRange } from './searchDom';
 import { useTextHighlight } from './useTextHighlight';
 
 let root: Root;
@@ -17,15 +18,18 @@ function Surface({
   element,
   query,
   activeMatchIndex,
+  getActiveRange,
 }: {
   element: HTMLElement | null;
   query: string;
   activeMatchIndex?: number;
+  getActiveRange?: () => Range | null;
 }) {
   const { matchCount } = useTextHighlight({
     container: element,
     query,
     activeMatchIndex,
+    getActiveRange,
   });
   return <output>{matchCount}</output>;
 }
@@ -58,6 +62,33 @@ afterEach(() => {
   preview.remove();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+it('refreshes an indexed phrase highlight when its text-layer nodes are replaced', async () => {
+  preview.innerHTML = '<span>needle</span><span>phrase</span>';
+  const getActiveRange = () =>
+    findProjectedRange(preview, 'needle phrase', 0, 13);
+  act(() =>
+    root.render(
+      <Surface
+        element={preview}
+        query="needle phrase"
+        getActiveRange={getActiveRange}
+      />,
+    ),
+  );
+  expect(highlights.get('huabu-search')?.size).toBe(1);
+  const previousRange = Array.from(highlights.get('huabu-search') ?? [])[0];
+  preview.innerHTML = '<span>needle</span><span>phrase</span>';
+  await act(async () => {
+    await vi.waitFor(() => {
+      const range = Array.from(highlights.get('huabu-search') ?? [])[0];
+      expect(range).not.toBe(previousRange);
+      expect(range?.startContainer).toBe(preview.firstElementChild?.firstChild);
+      expect(range?.toString()).toBe('needlephrase');
+    });
+  });
+  expect(highlights.get('huabu-search')?.size).toBe(1);
 });
 
 it('merges independent canvas and preview highlights and removes only the closing surface', () => {

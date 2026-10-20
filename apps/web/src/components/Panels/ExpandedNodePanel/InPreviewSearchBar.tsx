@@ -25,16 +25,16 @@
  */
 
 import { ChevronDown, ChevronUp, X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { usePreviewSearchAdapter } from './PreviewSearchAdapterContext';
 import { formatShortcutById } from '../../../config/shortcuts';
 import {
   findNthRange,
-  countMatches,
   scheduleScrollToMatch,
   scrollRangeIntoView,
+  getRangeMatchIndex,
 } from '../../../hooks/searchDom';
 import { useTextHighlight } from '../../../hooks/useTextHighlight';
 import { usePreviewSearchStore } from '../../../store/previewSearchStore';
@@ -61,12 +61,23 @@ export const InPreviewSearchBar = ({
   const close = usePreviewSearchStore((s) => s.close);
   const focusInput = usePreviewSearchStore((s) => s.focusInput);
   const navigationRequest = usePreviewSearchStore((s) => s.navigationRequest);
+  const rendererOwner = usePreviewSearchStore((s) => s.rendererOwner);
+  const [rendererId] = useState(() => Symbol('preview-search-renderer'));
   const inputRef = useRef<HTMLInputElement>(null);
   const [activeMatchIdx, setActiveMatchIdx] = useState(0);
+  const [selectedRange, setSelectedRange] = useState<{
+    query: string;
+    range: Range;
+  } | null>(null);
   const registeredAdapter = usePreviewSearchAdapter();
   const searchAdapter =
     registeredAdapter?.query === query ? registeredAdapter : null;
-  const isActive = isOpen && ownerNodeId === nodeId;
+  const isActive =
+    isOpen && ownerNodeId === nodeId && rendererOwner === rendererId;
+  const getActiveRange = useCallback(
+    () => searchAdapter?.getMatchRange?.(activeMatchIdx) ?? null,
+    [searchAdapter, activeMatchIdx],
+  );
 
   useEffect(() => {
     if (isActive && focusInput) {
@@ -75,15 +86,12 @@ export const InPreviewSearchBar = ({
     }
   }, [isActive, focusInput]);
 
-  // Preview search is a per-node session. When the owning node changes or
-  // the panel unmounts, reset the shared store so reopening the same node
-  // does not resurrect a stale query and steal focus on mount.
   useEffect(() => {
-    return () => {
-      const state = usePreviewSearchStore.getState();
-      if (state.nodeId === nodeId) state.close();
-    };
-  }, [nodeId]);
+    if (!nodeId) return;
+    return usePreviewSearchStore
+      .getState()
+      .registerRenderer(nodeId, rendererId);
+  }, [nodeId, rendererId]);
 
   // Track whether the user has already navigated at least once. The
   // inline highlight visually implies the first match is "current", so
@@ -105,6 +113,8 @@ export const InPreviewSearchBar = ({
     container: isActive ? scopeEl : null,
     query,
     activeMatchIndex: activeMatchIdx,
+    activeRange: selectedRange?.query === query ? selectedRange.range : null,
+    getActiveRange,
   });
   const waitingForAdapter = requiresAdapter && !searchAdapter;
   const matchCount = waitingForAdapter
@@ -116,6 +126,7 @@ export const InPreviewSearchBar = ({
   useEffect(() => {
     setActiveMatchIdx(0);
     setHasNavigated(false);
+    setSelectedRange(null);
   }, [query]);
 
   useEffect(() => {
@@ -132,24 +143,61 @@ export const InPreviewSearchBar = ({
       usePreviewSearchStore.getState().consumeNavigation(nonce);
     if (searchAdapter) {
       if (!searchAdapter.canNavigate || searchAdapter.isSearching) return;
-      if (occurrenceIndex < 0 || occurrenceIndex >= searchAdapter.matchCount) {
-        toast(t('search.previewMatchNotVisible'), {
-          tone: 'info',
-          duration: 4000,
-        });
-      } else {
-        searchAdapter.navigateToMatch(occurrenceIndex);
-        setActiveMatchIdx(occurrenceIndex);
-        setHasNavigated(true);
-      }
-      consume();
-      return;
+      let cancelled = false;
+      let cancelNavigation: (() => void) | void;
+      const finish = (visible: boolean, index: number, range?: Range): void => {
+        if (
+          cancelled ||
+          usePreviewSearchStore.getState().navigationRequest?.nonce !== nonce
+        )
+          return;
+        if (visible) {
+          setActiveMatchIdx(index);
+          setHasNavigated(true);
+          setSelectedRange(range ? { query, range } : null);
+        } else {
+          toast(t('search.previewMatchNotVisible'), {
+            tone: 'info',
+            duration: 4000,
+          });
+        }
+        consume();
+      };
+      const navigate = (index: number | null): void => {
+        if (cancelled) return;
+        if (index === null || index < 0 || index >= searchAdapter.matchCount)
+          finish(false, 0);
+        else
+          cancelNavigation = searchAdapter.navigateToMatch(
+            index,
+            (visible, range) => finish(visible, index, range),
+          );
+      };
+      if (navigationRequest.source) {
+        if (!searchAdapter.resolveSourceMatch) navigate(null);
+        else
+          void searchAdapter
+            .resolveSourceMatch(navigationRequest.source)
+            .then(navigate)
+            .catch((error: unknown) => {
+              console.error(
+                '[search] Cannot resolve indexed source match',
+                error,
+              );
+              finish(false, 0);
+            });
+      } else navigate(occurrenceIndex);
+      return () => {
+        cancelled = true;
+        cancelNavigation?.();
+      };
     }
     return scheduleScrollToMatch(() => scopeEl, query, occurrenceIndex, {
+      source: navigationRequest.source,
       fallbackToFirst: false,
-      onMatch: () => {
-        const count = countMatches(scopeEl, query);
-        setActiveMatchIdx(occurrenceIndex < count ? occurrenceIndex : 0);
+      onMatch: (range) => {
+        setSelectedRange({ query, range });
+        setActiveMatchIdx(getRangeMatchIndex(scopeEl, query, range) ?? 0);
         setHasNavigated(true);
         consume();
       },
@@ -180,14 +228,27 @@ export const InPreviewSearchBar = ({
     )
       return;
     const normalised = ((idx % matchCount) + matchCount) % matchCount;
-    setActiveMatchIdx(normalised);
-    setHasNavigated(true);
+    if (navigationRequest)
+      usePreviewSearchStore
+        .getState()
+        .consumeNavigation(navigationRequest.nonce);
+    const finish = (visible: boolean, range?: Range): void => {
+      if (visible) {
+        setActiveMatchIdx(normalised);
+        setHasNavigated(true);
+        setSelectedRange(range ? { query, range } : null);
+      } else
+        toast(t('search.previewMatchNotVisible'), {
+          tone: 'info',
+          duration: 4000,
+        });
+    };
     if (searchAdapter) {
-      searchAdapter.navigateToMatch(normalised);
+      searchAdapter.navigateToMatch(normalised, finish);
       return;
     }
     const range = findNthRange(scopeEl, query, normalised);
-    if (range) scrollRangeIntoView(range);
+    finish(!!range && scrollRangeIntoView(range), range ?? undefined);
   };
 
   if (!isActive) return null;

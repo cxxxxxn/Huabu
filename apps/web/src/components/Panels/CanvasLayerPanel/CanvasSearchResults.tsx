@@ -144,7 +144,7 @@ export const CanvasSearchResults = (): React.JSX.Element => {
   // hydrated from history).
   useTextHighlight({
     container: [canvasRoot, chatThreadEl],
-    query,
+    query: query.trim(),
     maxRanges: 800,
   });
 
@@ -299,6 +299,8 @@ export const CanvasSearchResults = (): React.JSX.Element => {
 
   const jumpToResult = useCallback(
     (row: SearchResultRow) => {
+      if (!useSearchStore.getState().results.includes(row)) return;
+      const navigationQuery = query.trim();
       cancelNavigationRef.current?.();
       cancelNavigationRef.current = null;
       const { nodeId, nodeType } = row.match;
@@ -345,9 +347,14 @@ export const CanvasSearchResults = (): React.JSX.Element => {
                   element.dataset.chatThreadId === threadId &&
                   !element.closest('[data-preview-active="false"]'),
               ) ?? null,
-            query,
+            navigationQuery,
             row.match.occurrenceIndex,
             {
+              source:
+                row.match.field === 'conversation'
+                  ? row.match.source
+                  : undefined,
+              requireSource: row.match.field === 'conversation',
               getMatchRoot:
                 row.match.field === 'content'
                   ? (root) => {
@@ -394,7 +401,12 @@ export const CanvasSearchResults = (): React.JSX.Element => {
         if (row.match.field === 'content') {
           usePreviewSearchStore
             .getState()
-            .reveal(nodeId, query, row.match.occurrenceIndex);
+            .reveal(
+              nodeId,
+              navigationQuery,
+              row.match.occurrenceIndex,
+              row.match.source,
+            );
         }
       } else if (nodeType === 'question') {
         openConversationForNode(nodeId);

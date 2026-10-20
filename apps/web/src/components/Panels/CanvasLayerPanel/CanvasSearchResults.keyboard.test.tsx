@@ -294,9 +294,13 @@ describe('Canvas search localization', () => {
     {
       language: 'en',
       message:
-        'Match not visible in the conversation — scroll manually to find it.',
+        'Cannot precisely locate this match in the conversation. It may only exist in source text, or the content may have changed.',
     },
-    { language: 'zh-CN', message: '对话中未显示匹配内容，请手动滚动查找。' },
+    {
+      language: 'zh-CN',
+      message:
+        '无法在当前对话中精确定位此匹配；它可能仅存在于源码中，或内容已更新。',
+    },
   ])(
     'localizes conversation match timeout feedback in $language',
     async ({ language, message }) => {
@@ -336,6 +340,52 @@ afterEach(() => {
 });
 
 describe('Canvas search field groups and preview navigation', () => {
+  it('does not activate a previous-query row during the next query debounce', () => {
+    vi.useFakeTimers();
+    try {
+      const previousRow = getRow(1);
+      act(() => useSearchStore.getState().setQuery('replacement'));
+      expect(
+        container?.querySelector('[data-search-row-index="1"]'),
+      ).toBeNull();
+      act(() => previousRow.click());
+      expect(openPreviewNode).not.toHaveBeenCalled();
+      expect(usePreviewSearchStore.getState().navigationRequest).toBeNull();
+    } finally {
+      act(() => useSearchStore.getState().close());
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([' test', 'test ', ' test '])(
+    'uses the server-normalized query for content and conversation handoffs (%j)',
+    (query) => {
+      act(() => useSearchStore.setState({ query }));
+      act(() => getRow(1).click());
+      const previewQuery = usePreviewSearchStore.getState().query;
+      canvasState.nodes.push({ id: 'first', data: { threadId: 'thread' } });
+      act(() =>
+        useSearchStore.setState({
+          results: [
+            {
+              ...results[0],
+              match: {
+                ...results[0].match,
+                field: 'conversation',
+                nodeType: 'question',
+              },
+            },
+          ],
+        }),
+      );
+      act(() => getRow(1).click());
+      expect({
+        previewQuery,
+        conversationQuery: scheduleScrollToMatch.mock.lastCall?.[1],
+      }).toEqual({ previewQuery: 'test', conversationQuery: 'test' });
+    },
+  );
+
   it('opens Question prompt-content matches in their conversation rather than a document preview', () => {
     canvasState.nodes.push({ id: 'first', data: { threadId: 'thread' } });
     act(() =>

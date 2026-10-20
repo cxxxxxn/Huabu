@@ -49,6 +49,8 @@ interface UseTextHighlightOptions {
   maxRanges?: number;
   /** Keep the navigated occurrence painted even when it lies beyond the cap. */
   activeMatchIndex?: number;
+  activeRange?: Range | null;
+  getActiveRange?: () => Range | null;
 }
 
 export interface UseTextHighlightResult {
@@ -89,6 +91,8 @@ export function useTextHighlight({
   query,
   maxRanges = 500,
   activeMatchIndex,
+  activeRange: selectedRange,
+  getActiveRange,
 }: UseTextHighlightOptions): UseTextHighlightResult {
   const [matchCount, setMatchCount] = useState(0);
 
@@ -142,12 +146,23 @@ export function useTextHighlight({
     const apply = (): void => {
       const ranges: Range[] = [];
       let count = 0;
-      let activeRange: Range | null = null;
+      const candidate = getActiveRange?.() ?? selectedRange;
+      let activeRange =
+        candidate &&
+        !candidate.collapsed &&
+        liveContainers.some(
+          (container) =>
+            container.contains(candidate.startContainer) &&
+            container.contains(candidate.endContainer),
+        )
+          ? candidate
+          : null;
       for (const c of liveContainers) {
         const containerCount = countMatches(c, query);
         if (
           HighlightCtor &&
           highlights &&
+          !activeRange &&
           outlyingMatchIndex !== null &&
           outlyingMatchIndex >= count &&
           outlyingMatchIndex < count + containerCount
@@ -162,8 +177,19 @@ export function useTextHighlight({
         // renders just yields zero ranges.
         ranges.push(...findRanges(c, query, remaining));
       }
-      if (activeRange && ranges.length > 0)
-        ranges[ranges.length - 1] = activeRange;
+      if (
+        activeRange &&
+        !ranges.some(
+          (range) =>
+            range.startContainer === activeRange.startContainer &&
+            range.startOffset === activeRange.startOffset &&
+            range.endContainer === activeRange.endContainer &&
+            range.endOffset === activeRange.endOffset,
+        )
+      ) {
+        if (ranges.length < maxRanges) ranges.push(activeRange);
+        else if (ranges.length) ranges[ranges.length - 1] = activeRange;
+      }
       // Only update state when the count actually changes — avoids
       // a render storm during pdf.js's per-page text-layer mounts.
       setMatchCount((prev) => (prev === count ? prev : count));
@@ -211,7 +237,14 @@ export function useTextHighlight({
     // it into a primitive identity string, so the effect only re-runs
     // when an actual element comes/goes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [depKey, query, maxRanges, outlyingMatchIndex]);
+  }, [
+    depKey,
+    query,
+    maxRanges,
+    outlyingMatchIndex,
+    selectedRange,
+    getActiveRange,
+  ]);
 
   return { matchCount };
 }

@@ -141,7 +141,7 @@ export {
   type FrameResponsiveMetrics,
   type FrameResponsiveTier,
 } from './frame/design.js';
-export { stripMarkdown } from './utils/markdown.js';
+export { stripMarkdown, markdownSearchTarget } from './utils/markdown.js';
 export { structuredFrameResizeScale } from './frame/resize.js';
 export { normalizeMathDelimiters } from './provenance/normalizeMathDelimiters.js';
 export {

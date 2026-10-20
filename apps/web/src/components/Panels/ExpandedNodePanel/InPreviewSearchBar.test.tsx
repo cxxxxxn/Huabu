@@ -24,11 +24,15 @@ beforeEach(() => {
   document.body.appendChild(container);
   root = createRoot(container);
   usePreviewSearchStore.getState().close();
+  vi.spyOn(Range.prototype, 'getBoundingClientRect').mockReturnValue(
+    new DOMRect(10, 100, 80, 20),
+  );
 });
 
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  vi.restoreAllMocks();
 });
 
 describe('InPreviewSearchBar preview-search lifecycle', () => {
@@ -82,9 +86,11 @@ describe('InPreviewSearchBar preview-search lifecycle', () => {
       '<p data-preview-search-content>second needle</p>',
     );
     await act(async () => {
-      await vi.waitFor(() => expect(scroll).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() =>
+        expect(usePreviewSearchStore.getState().navigationRequest).toBeNull(),
+      );
     });
-    expect(scroll.mock.instances[0]).toBe(scope.lastElementChild);
+    expect(container.textContent).toContain('2/2');
     expect(usePreviewSearchStore.getState().navigationRequest).toBeNull();
     expect(document.activeElement).toBe(focus);
     scroll.mockRestore();
@@ -130,14 +136,14 @@ describe('InPreviewSearchBar preview-search lifecycle', () => {
     expect(container.querySelector('input')?.value).toBe('needle');
   });
 
-  it('resets the shared store when unmounted so a stale query cannot resurface', () => {
+  it('resets the shared store when unmounted so a stale query cannot resurface', async () => {
     usePreviewSearchStore.getState().open('pdf-1');
     usePreviewSearchStore.getState().setQuery('needle');
     act(() =>
       root.render(<InPreviewSearchBar scopeEl={null} nodeId="pdf-1" />),
     );
 
-    act(() => root.unmount());
+    await act(async () => root.unmount());
 
     expect(usePreviewSearchStore.getState()).toMatchObject({
       nodeId: null,
@@ -146,14 +152,14 @@ describe('InPreviewSearchBar preview-search lifecycle', () => {
     });
   });
 
-  it('resets the shared store when the owning node changes', () => {
+  it('resets the shared store when the owning node changes', async () => {
     usePreviewSearchStore.getState().open('pdf-1');
     usePreviewSearchStore.getState().setQuery('needle');
     act(() =>
       root.render(<InPreviewSearchBar scopeEl={null} nodeId="pdf-1" />),
     );
 
-    act(() =>
+    await act(async () =>
       root.render(<InPreviewSearchBar scopeEl={null} nodeId="pdf-2" />),
     );
 
