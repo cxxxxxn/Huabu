@@ -16,6 +16,9 @@
  *     pulls node bodies on demand over the RFS
  *     (`GET ${HUABU_RFS_URL}/download/<file>`), documented in the
  *     canvas-access guide it fetches from `${HUABU_RFS_URL}/skill`.
+ *   - Slash-command turns are forwarded as one verbatim command input without
+ *     ambient Huabu context because additional ACP prompt blocks cause some
+ *     agents to treat the command as an ordinary model turn.
  *
  * Why deterministic instead of a preprocessor sub-agent:
  *   - An earlier design ran a dedicated `acp-preprocessor` LLM that
@@ -36,10 +39,7 @@
  */
 
 import { renderTurn } from '../conversation/prompt/build-prompt.js';
-import {
-  ACP_PROFILE,
-  ACP_SLASH_PROFILE,
-} from '../conversation/prompt/profile.js';
+import { ACP_PROFILE } from '../conversation/prompt/profile.js';
 
 import type { ChatEnvelope } from '../conversation/envelope.js';
 import type { AgentInput } from '@agenetes/protocol';
@@ -48,8 +48,8 @@ import type { FastifyBaseLogger } from 'fastify';
 // ─── Constants ────────────────────────────────────────────────────────────
 
 /**
- * Pattern for the slash-command lead-with-task path. Matches `/<name>` followed by
- * whitespace OR end of string. The leading character class is ASCII
+ * Pattern for the context-free slash-command path. Matches `/<name>` followed
+ * by whitespace OR end of string. The leading character class is ASCII
  * letters only so URLs / Windows paths pasted mid-thought don't trip
  * it. Exported for tests.
  */
@@ -85,26 +85,16 @@ export async function renderExternalAgentInputs(
   if (isSlashCommand) {
     logger.debug(
       { agentAlias, command: rawText.trim().split(/\s+/)[0] },
-      '[acp/preprocessor] slash command detected — leading verbatim, context appended',
+      '[acp/preprocessor] slash command detected — forwarding verbatim without ambient context',
     );
+    return [{ type: 'command', text: rawText, context: [] }];
   }
 
-  const parts = await renderTurn(
-    envelope,
-    isSlashCommand ? ACP_SLASH_PROFILE : ACP_PROFILE,
-    { canvasId: input.canvasId ?? null },
-  );
+  const parts = await renderTurn(envelope, ACP_PROFILE, {
+    canvasId: input.canvasId ?? null,
+  });
   if (parts.length === 0) return [];
 
-  if (isSlashCommand) {
-    return [
-      {
-        type: 'command',
-        text: rawText,
-        context: parts.slice(1),
-      },
-    ];
-  }
   if (parts.length === 1 && parts[0]?.type === 'text') {
     return [{ type: 'text', text: parts[0].text }];
   }

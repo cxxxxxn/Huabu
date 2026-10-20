@@ -27,26 +27,16 @@ export interface RenderProfile {
   toolset: 'internal' | 'reachback';
   /** Inline selection pixels as `<selected_nodes_visuals>` (+ sketch hint). */
   includeSelectionVisuals: boolean;
-  /** Put the user task FIRST (slash-command turns) instead of last. */
-  leadWithTask: boolean;
 }
 
 /** Built-in agent: read-by-path, selection pixels + sketch hint, task last. */
 export const INTERNAL_PROFILE: RenderProfile = {
   toolset: 'internal',
   includeSelectionVisuals: true,
-  leadWithTask: false,
 };
 
 /** External/ACP agent: read-by-path (over RFS), selection pixels, task last. */
 export const ACP_PROFILE: RenderProfile = {
   toolset: 'reachback',
   includeSelectionVisuals: true,
-  leadWithTask: false,
-};
-
-/** ACP slash-command turn: command must lead so the agent recognises it. */
-export const ACP_SLASH_PROFILE: RenderProfile = {
-  ...ACP_PROFILE,
-  leadWithTask: true,
 };

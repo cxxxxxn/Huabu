@@ -39,6 +39,7 @@ function makeEnvelope(opts: {
   selection?: { id: string; type: CanvasNodeType; label?: string }[];
   neighbourhood?: NodeNeighbourhoodContext;
   attachments?: ChatAttachment[];
+  selectionImages?: ChatAttachment[];
 }): ChatEnvelope {
   return {
     user: { text: opts.text, attachments: opts.attachments ?? [] },
@@ -49,7 +50,7 @@ function makeEnvelope(opts: {
           buildAgentNodeRef({ id: n.id, type: n.type, label: n.label }),
         ),
         selectedIds: (opts.selection ?? []).map((n) => n.id),
-        imageAttachments: [],
+        imageAttachments: opts.selectionImages ?? [],
         snapshotAttachments: [],
       },
       ...(opts.neighbourhood
@@ -108,12 +109,14 @@ describe('renderExternalAgentInputs', () => {
         .filter((part) => part.type === 'text')
         .map((part) => part.text)
         .join('\n');
-      expect(serialized).toContain('<quote>/not-a-command</quote>');
-      expect(serialized).toContain('<comment>Review this.</comment>');
       if (text === '/review') {
-        expect(inputs[0]).toMatchObject({ type: 'command', text: '/review' });
-        expect(serialized.startsWith('/review\n')).toBe(true);
+        expect(inputs).toEqual([
+          { type: 'command', text: '/review', context: [] },
+        ]);
+        expect(serialized).toBe('/review');
       } else {
+        expect(serialized).toContain('<quote>/not-a-command</quote>');
+        expect(serialized).toContain('<comment>Review this.</comment>');
         expect(inputs[0]?.type).not.toBe('command');
       }
     },
@@ -253,19 +256,66 @@ describe('canonical ACP rendering', () => {
       {
         type: 'command',
         text: '/compact now',
-        context: [{ type: 'text' }],
+        context: [],
       },
     ]);
   });
 
-  it('forwards slash commands verbatim', async () => {
-    const result = await renderExternalForAssertions({
-      envelope: makeEnvelope({ text: '/compact please' }),
+  it('forwards slash commands verbatim without ambient Huabu context', async () => {
+    const envelope = makeEnvelope({
+      text: '/compact please',
+      selection: [{ id: 'n1', type: 'note', label: 'Selected note' }],
+      neighbourhood: {
+        layers: [
+          {
+            groups: [
+              {
+                dx: 0,
+                dy: -100,
+                arrangement: 'single node',
+                _minEdgeDist: 5,
+                nodes: [buildAgentNodePreview({ id: 'nearby', type: 'note' })],
+              },
+            ],
+          },
+        ],
+        relevantEdges: [],
+      },
+      attachments: [
+        {
+          type: 'text',
+          source: 'upload',
+          label: 'excerpt',
+          content: 'ambient attachment',
+        },
+      ],
+      selectionImages: [
+        {
+          type: 'image',
+          source: 'selection',
+          label: 'selected image',
+          url: 'selected-image.png',
+        },
+      ],
+    });
+    envelope.user.quotedComments = [
+      {
+        quote: 'ambient quote',
+        contextBefore: '',
+        contextAfter: '',
+        comment: 'ambient comment',
+      },
+    ];
+
+    const inputs = await renderExternalAgentInputs({
+      envelope,
       agentAlias: 'claude',
       logger,
     });
 
-    expect(result.serialized).toBe('/compact please');
+    expect(inputs).toEqual([
+      { type: 'command', text: '/compact please', context: [] },
+    ]);
   });
 
   it('builds selectedNodes from the envelope selection refs', async () => {
@@ -341,7 +391,7 @@ describe('canonical ACP rendering', () => {
     expect(result.serialized).not.toContain('<canvas_neighbourhood>');
   });
 
-  it('appends neighbourhood context after the slash command', async () => {
+  it('omits neighbourhood context from slash commands', async () => {
     const result = await renderExternalForAssertions({
       envelope: makeEnvelope({
         text: '/compact now',
@@ -366,8 +416,8 @@ describe('canonical ACP rendering', () => {
       logger,
     });
 
-    expect(result.serialized.startsWith('/compact now')).toBe(true);
-    expect(result.serialized).toContain('<canvas_neighbourhood>');
+    expect(result.serialized).toBe('/compact now');
+    expect(result.serialized).not.toContain('<canvas_neighbourhood>');
   });
 
   it('forwards off-canvas text uploads into the prompt attachments', async () => {

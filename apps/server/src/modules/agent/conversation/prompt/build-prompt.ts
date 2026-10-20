@@ -320,16 +320,10 @@ export async function renderTurn(
   if (quotedCommentsSection) {
     parts.push({ type: 'text', text: quotedCommentsSection });
   }
-  // Slash-command turns lead with the BARE task (no <user_request>
-  // wrapper) so ACP still recognises `/cmd`; everyone else wraps + trails.
-  if (profile.leadWithTask) {
-    parts.unshift({ type: 'text', text: userText });
-  } else {
-    parts.push({
-      type: 'text',
-      text: `<user_request>\n${userText}\n</user_request>`,
-    });
-  }
+  parts.push({
+    type: 'text',
+    text: `<user_request>\n${userText}\n</user_request>`,
+  });
   return parts;
 }
 

@@ -15,7 +15,7 @@ import {
   INK_INTENT_DIRECTIVE,
   EXTERNAL_INK_INTENT_DIRECTIVE,
 } from './ink-intent.js';
-import { ACP_PROFILE, ACP_SLASH_PROFILE, INTERNAL_PROFILE } from './profile.js';
+import { ACP_PROFILE, INTERNAL_PROFILE } from './profile.js';
 import { InkVisualPreparationError } from './required-ink-visuals.js';
 import * as artifactUtils from '../../../artifact/utils.js';
 import * as snapshots from '../../../canvas/snapshot-nodes.js';
@@ -481,21 +481,18 @@ describe('Ink-intent rendering', () => {
     },
   );
 
-  it.each([ACP_PROFILE, ACP_SLASH_PROFILE])(
-    'renders required Ink images for external profiles: %j',
-    async (profile) => {
-      const parts = await renderTurn(inkEnvelope(), profile, OPTIONS);
-      expect(parts).toContainEqual({
-        type: 'text',
-        text: EXTERNAL_INK_INTENT_DIRECTIVE,
-      });
-      expect(parts).toContainEqual({
-        type: 'image',
-        data: IMAGE_BYTES,
-        mimeType: 'image/png',
-      });
-    },
-  );
+  it('renders required Ink images for the external profile', async () => {
+    const parts = await renderTurn(inkEnvelope(), ACP_PROFILE, OPTIONS);
+    expect(parts).toContainEqual({
+      type: 'text',
+      text: EXTERNAL_INK_INTENT_DIRECTIVE,
+    });
+    expect(parts).toContainEqual({
+      type: 'image',
+      data: IMAGE_BYTES,
+      mimeType: 'image/png',
+    });
+  });
 
   it('rejects Ink when selection visuals are disabled', async () => {
     await expect(
