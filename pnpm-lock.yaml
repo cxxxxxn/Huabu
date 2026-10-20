@@ -386,6 +386,9 @@ importers:
       '@milkdown/utils':
         specifier: ^7.21.1
         version: 7.21.2
+      '@noble/hashes':
+        specifier: ^1.8.0
+        version: 1.8.0
       '@xyflow/react':
         specifier: ^12.10.0
         version: 12.11.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)

@@ -26,7 +26,12 @@ export function* literalTextMatches(
     if (index < 0) return;
     const start = offsets?.[index] ?? index;
     const end = offsets?.[index + needle.length] ?? index + needle.length;
-    if (text.slice(start, end).toLowerCase() === needle) yield { start, end };
+    if (
+      !offsets ||
+      ((index === 0 || offsets[index - 1] !== start) &&
+        offsets[index + needle.length - 1] !== end)
+    )
+      yield { start, end };
     from = index + needle.length;
   }
 }

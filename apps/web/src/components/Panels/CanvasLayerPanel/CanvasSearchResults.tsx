@@ -68,6 +68,8 @@ const ROW_HEIGHT = 28;
 export const CanvasSearchResults = (): React.JSX.Element => {
   const { t } = useTranslation();
   const query = useSearchStore((s) => s.query);
+  const normalizedQuery = query.trim();
+  const nodeTypes = useSearchStore((s) => s.nodeTypes);
   const results = useSearchStore((s) => s.results);
   const isStreaming = useSearchStore((s) => s.isStreaming);
   const contentPhase = useSearchStore((s) => s.contentPhase);
@@ -91,7 +93,10 @@ export const CanvasSearchResults = (): React.JSX.Element => {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
   const cancelNavigationRef = useRef<(() => void) | null>(null);
-  const [activeIdx, setActiveIdx] = useState(0);
+  const [activeSelection, setActiveSelection] = useState<{
+    key: string;
+    nodeId: string;
+  } | null>(null);
   const [canvasRoot, setCanvasRoot] = useState<HTMLElement | null>(null);
   const [chatThreadEl, setChatThreadEl] = useState<HTMLElement | null>(null);
 
@@ -111,30 +116,6 @@ export const CanvasSearchResults = (): React.JSX.Element => {
     );
   }, [scope]);
 
-  // Resolve the chat-thread scroll root whenever a question node's
-  // conversation is open. Only resolved while its preview tab
-  // is set so we never paint search highlights over the unrelated
-  // canvas chat; cleared otherwise. Re-runs on `activeIdx` so the
-  // element is re-read after the thread swaps to a different node.
-  useEffect(() => {
-    if (!expandedNodeId) {
-      setChatThreadEl(null);
-      return;
-    }
-    const threadId = useCanvasStore
-      .getState()
-      .nodes.find((node) => node.id === expandedNodeId)?.data.threadId;
-    setChatThreadEl(
-      Array.from(
-        document.querySelectorAll<HTMLElement>('[data-chat-thread-root]'),
-      ).find(
-        (element) =>
-          element.dataset.chatThreadId === threadId &&
-          !element.closest('[data-preview-active="false"]'),
-      ) ?? null,
-    );
-  }, [expandedNodeId, activeIdx]);
-
   // Paint the same `::highlight(huabu-search)` ranges over node labels
   // and Milkdown bodies visible on the canvas and, for conversation
   // matches, over the open question-node chat thread. Expanded previews
@@ -150,8 +131,8 @@ export const CanvasSearchResults = (): React.JSX.Element => {
 
   // Reset selection when results identity changes (new query / scope).
   useEffect(() => {
-    setActiveIdx(0);
-  }, [results]);
+    setActiveSelection(null);
+  }, [normalizedQuery, scope, nodeTypes]);
 
   // ──────────────────────────────────────────────────────────────────
   // Per-node grouping (VS Code-style).
@@ -232,18 +213,48 @@ export const CanvasSearchResults = (): React.JSX.Element => {
     return out;
   }, [nodeGroups, collapsedNodeIds]);
 
-  // Clamp activeIdx whenever `visibleRows` shrinks (user collapsed a
-  // group, streaming reset the list, etc.) so it can never dangle past
-  // the end and silently disable Enter / live-follow.
+  const selectedIndex = visibleRows.findIndex(
+    (row) => visibleRowKey(row) === activeSelection?.key,
+  );
+  const activeIdx = Math.max(
+    0,
+    selectedIndex >= 0
+      ? selectedIndex
+      : visibleRows.findIndex(
+          (row) =>
+            row.kind === 'header' &&
+            row.group.nodeId === activeSelection?.nodeId,
+        ),
+  );
+  const setActiveIdx = useCallback(
+    (index: number) => {
+      const row = visibleRows[index];
+      setActiveSelection(
+        row ? { key: visibleRowKey(row), nodeId: row.group.nodeId } : null,
+      );
+    },
+    [visibleRows],
+  );
+
+  // Re-read the addressed thread after its row or preview tab changes.
   useEffect(() => {
-    if (visibleRows.length === 0) {
-      if (activeIdx !== 0) setActiveIdx(0);
+    if (!expandedNodeId) {
+      setChatThreadEl(null);
       return;
     }
-    if (activeIdx >= visibleRows.length) {
-      setActiveIdx(visibleRows.length - 1);
-    }
-  }, [visibleRows, activeIdx]);
+    const threadId = useCanvasStore
+      .getState()
+      .nodes.find((node) => node.id === expandedNodeId)?.data.threadId;
+    setChatThreadEl(
+      Array.from(
+        document.querySelectorAll<HTMLElement>('[data-chat-thread-root]'),
+      ).find(
+        (element) =>
+          element.dataset.chatThreadId === threadId &&
+          !element.closest('[data-preview-active="false"]'),
+      ) ?? null,
+    );
+  }, [expandedNodeId, activeIdx]);
 
   const focusNodeOnCanvas = useCallback(
     (nodeId: string) => {
@@ -453,13 +464,13 @@ export const CanvasSearchResults = (): React.JSX.Element => {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         e.stopPropagation();
-        setActiveIdx((i) => Math.min(visibleRows.length - 1, i + 1));
+        setActiveIdx(Math.min(visibleRows.length - 1, activeIdx + 1));
         return;
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault();
         e.stopPropagation();
-        setActiveIdx((i) => Math.max(0, i - 1));
+        setActiveIdx(Math.max(0, activeIdx - 1));
         return;
       }
       if (e.key === 'ArrowLeft') {
@@ -491,7 +502,7 @@ export const CanvasSearchResults = (): React.JSX.Element => {
         if (collapsedNodeIds.has(v.group.nodeId)) {
           toggleNodeCollapse(v.group.nodeId);
         } else if (v.group.rows.length > 0) {
-          setActiveIdx((i) => Math.min(visibleRows.length - 1, i + 1));
+          setActiveIdx(Math.min(visibleRows.length - 1, activeIdx + 1));
         }
         return;
       }
@@ -504,6 +515,7 @@ export const CanvasSearchResults = (): React.JSX.Element => {
     collapsedNodeIds,
     toggleNodeCollapse,
     jumpToResult,
+    setActiveIdx,
   ]);
 
   // Keep the active row scrolled into view via Virtuoso's imperative
@@ -575,9 +587,7 @@ export const CanvasSearchResults = (): React.JSX.Element => {
           // SidebarPanel content) doesn't fight with Virtuoso's own.
           className="min-h-0 flex-1"
           data={visibleRows}
-          computeItemKey={(_, v) =>
-            v.kind === 'header' ? `h:${v.group.nodeId}` : `m:${v.row.key}`
-          }
+          computeItemKey={(_, v) => visibleRowKey(v)}
           increaseViewportBy={200}
           itemContent={(index, v) =>
             v.kind === 'header' ? (
@@ -647,6 +657,10 @@ type VisibleRow =
       row: SearchResultRow;
       firstInField: boolean;
     };
+
+function visibleRowKey(row: VisibleRow): string {
+  return row.kind === 'header' ? `h:${row.group.nodeId}` : `m:${row.row.key}`;
+}
 
 interface NodeHeaderItemProps {
   index: number;

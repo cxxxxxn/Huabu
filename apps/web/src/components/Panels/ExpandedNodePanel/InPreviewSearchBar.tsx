@@ -130,6 +130,22 @@ export const InPreviewSearchBar = ({
   }, [query]);
 
   useEffect(() => {
+    if (!isActive || !navigationRequest || (!waitingForAdapter && !isSearching))
+      return;
+    const { nonce } = navigationRequest;
+    const timer = setTimeout(() => {
+      if (usePreviewSearchStore.getState().navigationRequest?.nonce !== nonce)
+        return;
+      toast(t('search.previewMatchNotVisible'), {
+        tone: 'info',
+        duration: 4000,
+      });
+      usePreviewSearchStore.getState().consumeNavigation(nonce);
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [isActive, navigationRequest, waitingForAdapter, isSearching, t]);
+
+  useEffect(() => {
     if (
       !isActive ||
       !navigationRequest ||
@@ -142,12 +158,18 @@ export const InPreviewSearchBar = ({
     const consume = () =>
       usePreviewSearchStore.getState().consumeNavigation(nonce);
     if (searchAdapter) {
-      if (!searchAdapter.canNavigate || searchAdapter.isSearching) return;
+      if (!searchAdapter.isCurrent()) return;
+      if (
+        !searchAdapter.failed &&
+        (!searchAdapter.canNavigate || searchAdapter.isSearching)
+      )
+        return;
       let cancelled = false;
       let cancelNavigation: (() => void) | void;
       const finish = (visible: boolean, index: number, range?: Range): void => {
         if (
           cancelled ||
+          !searchAdapter.isCurrent() ||
           usePreviewSearchStore.getState().navigationRequest?.nonce !== nonce
         )
           return;
@@ -164,7 +186,7 @@ export const InPreviewSearchBar = ({
         consume();
       };
       const navigate = (index: number | null): void => {
-        if (cancelled) return;
+        if (cancelled || !searchAdapter.isCurrent()) return;
         if (index === null || index < 0 || index >= searchAdapter.matchCount)
           finish(false, 0);
         else
@@ -173,7 +195,8 @@ export const InPreviewSearchBar = ({
             (visible, range) => finish(visible, index, range),
           );
       };
-      if (navigationRequest.source) {
+      if (searchAdapter.failed) finish(false, 0);
+      else if (navigationRequest.source) {
         if (!searchAdapter.resolveSourceMatch) navigate(null);
         else
           void searchAdapter

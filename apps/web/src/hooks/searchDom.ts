@@ -25,9 +25,8 @@ import type { CanvasSearchSource } from '@huabu/shared';
  * inside `root`'s text nodes and return it as a `Range`, or `null`
  * if there aren't that many matches.
  *
- * Walks in document order. When the preview declares one or more
- * `[data-preview-search-content]` roots, only those document surfaces are
- * searched; otherwise the whole root is used as a compatibility fallback.
+ * Walks in document order. Each `[data-search-renderer]` scopes its own
+ * searchable document without excluding sibling content in a larger root.
  * Hidden content and explicitly excluded chrome are always skipped.
  */
 export function findNthRange(
@@ -103,17 +102,15 @@ export function getRangeMatchIndex(
 
 function searchableTextNodes(root: HTMLElement): Node[] {
   const nodes: Node[] = [];
-  for (const searchRoot of getSearchRoots(root)) {
-    const walker = document.createTreeWalker(searchRoot, NodeFilter.SHOW_ALL);
-    let current = walker.nextNode();
-    while (current) {
-      if (
-        current.nodeType === Node.TEXT_NODE &&
-        isSearchableTextNode(current, searchRoot)
-      )
-        nodes.push(current);
-      current = walker.nextNode();
-    }
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ALL);
+  let current = walker.nextNode();
+  while (current) {
+    if (
+      current.nodeType === Node.TEXT_NODE &&
+      isSearchableTextNode(current, root)
+    )
+      nodes.push(current);
+    current = walker.nextNode();
   }
   return nodes;
 }
@@ -161,55 +158,45 @@ function* walkTextMatches(
 ): Generator<{ node: Node; offset: number; endNode: Node; endOffset: number }> {
   const needle = query.toLowerCase();
   if (!needle) return;
-  for (const searchRoot of getSearchRoots(root)) {
-    const nodes = searchableTextNodes(searchRoot);
-    let text = '';
-    let previousBlock: Element | null | undefined;
-    const spans = nodes.map((node) => {
-      const block = node.parentElement?.closest(
-        'p,div,li,pre,td,th,h1,h2,h3,h4,h5,h6',
-      );
-      if (previousBlock !== undefined && block !== previousBlock) text += '\0';
-      previousBlock = block;
-      const start = text.length;
-      text += node.textContent ?? '';
-      return { node, start, end: text.length };
-    });
-    let spanIndex = 0;
-    for (const { start: index, end: matchEnd } of literalTextMatches(
-      text,
-      needle,
-    )) {
-      while (spanIndex < spans.length && (spans[spanIndex]?.end ?? 0) <= index)
-        spanIndex++;
-      const start = spans[spanIndex];
-      let endIndex = spanIndex;
-      while (endIndex < spans.length && (spans[endIndex]?.end ?? 0) < matchEnd)
-        endIndex++;
-      const end = spans[endIndex];
-      if (start && end)
-        yield {
-          node: start.node,
-          offset: index - start.start,
-          endNode: end.node,
-          endOffset: matchEnd - end.start,
-        };
-    }
+  const nodes = searchableTextNodes(root);
+  let text = '';
+  let previousBlock: Element | null | undefined;
+  const spans = nodes.map((node) => {
+    const block = node.parentElement?.closest(
+      'p,div,li,pre,td,th,h1,h2,h3,h4,h5,h6',
+    );
+    if (previousBlock !== undefined && block !== previousBlock) text += '\0';
+    previousBlock = block;
+    const start = text.length;
+    text += node.textContent ?? '';
+    return { node, start, end: text.length };
+  });
+  let spanIndex = 0;
+  for (const { start: index, end: matchEnd } of literalTextMatches(
+    text,
+    needle,
+  )) {
+    while (spanIndex < spans.length && (spans[spanIndex]?.end ?? 0) <= index)
+      spanIndex++;
+    const start = spans[spanIndex];
+    let endIndex = spanIndex;
+    while (endIndex < spans.length && (spans[endIndex]?.end ?? 0) < matchEnd)
+      endIndex++;
+    const end = spans[endIndex];
+    if (start && end)
+      yield {
+        node: start.node,
+        offset: index - start.start,
+        endNode: end.node,
+        endOffset: matchEnd - end.start,
+      };
   }
 }
 
-function getSearchRoots(root: HTMLElement): HTMLElement[] {
-  const candidates = Array.from(
-    root.querySelectorAll<HTMLElement>('[data-preview-search-content]'),
-  );
-  if (root.matches('[data-preview-search-content]')) candidates.unshift(root);
-  const documentRoots = candidates.filter(
-    (candidate) => !candidate.querySelector('[data-preview-search-content]'),
-  );
-  return documentRoots.length > 0 ? documentRoots : [root];
-}
-
 function isSearchableTextNode(node: Node, boundary: HTMLElement): boolean {
+  const renderer = node.parentElement?.closest('[data-search-renderer]');
+  const content = node.parentElement?.closest('[data-preview-search-content]');
+  if (renderer && (!content || !renderer.contains(content))) return false;
   let element = node.parentElement;
   while (element) {
     const tag = element.tagName;

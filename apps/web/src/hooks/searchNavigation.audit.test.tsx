@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+import { createHash } from 'node:crypto';
+
 import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -143,6 +145,37 @@ describe('source-to-rendered addressing', () => {
       new DOMRect(10, 100, 80, 20),
     );
   };
+
+  it.each(['', 'abc', '中文 \u0130 ΟΣ 😀\n'])(
+    'hashes %j without crypto.subtle using the server digest',
+    async (text) => {
+      vi.stubGlobal('crypto', {});
+      expect(await hashSearchSource(text)).toBe(
+        createHash('sha256').update(text).digest('hex'),
+      );
+    },
+  );
+
+  it('registers and reveals contextual Unicode matches on ordinary HTTP', async () => {
+    vi.stubGlobal('crypto', {});
+    geometry();
+    const text = '\u0130 ΟΣ';
+    scope.textContent = text;
+    const unregister = registerSearchSource(scope, text, 'text');
+    const onMatch = vi.fn();
+    const cancel = scheduleScrollToMatch(() => scope, 'ς', 0, {
+      source: {
+        hash: createHash('sha256').update(text).digest('hex'),
+        offset: 3,
+        length: 1,
+      },
+      onMatch,
+    });
+    await vi.waitFor(() => expect(onMatch).toHaveBeenCalledTimes(1));
+    expect(onMatch.mock.calls[0]?.[0].toString()).toBe('Σ');
+    cancel();
+    unregister();
+  });
 
   it('waits for an editor-model readiness signal even when its text DOM already exists', async () => {
     geometry();

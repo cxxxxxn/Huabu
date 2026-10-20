@@ -111,7 +111,8 @@ export const PDFPreview = ({
   const isPreviewSearchOpen = usePreviewSearchStore((s) =>
     embedded ? false : s.isOpen,
   );
-  const [loadError, setLoadError] = useState(false);
+  const [failedSource, setFailedSource] = useState<string | null>(null);
+  const loadError = failedSource === src;
   const [loadAttempt, setLoadAttempt] = useState(0);
   const {
     document: pdfDocument,
@@ -141,7 +142,7 @@ export const PDFPreview = ({
   });
   // Reset loading state when the PDF source changes.
   useEffect(() => {
-    setLoadError(false);
+    setFailedSource(null);
     setForcedPageIndex(null);
     setVisiblePageIndexes(new Set([0]));
     setRetainedPageIndexes(new Set([0]));
@@ -466,8 +467,10 @@ export const PDFPreview = ({
         ? {
             query: searchQuery,
             matchCount: searchMatches.length,
-            isSearching: !docLoaded || textIndex.isIndexing,
-            canNavigate: docLoaded && !textIndex.isIndexing,
+            isSearching:
+              !loadError && !!src && (!docLoaded || textIndex.isIndexing),
+            canNavigate: !loadError && docLoaded && !textIndex.isIndexing,
+            failed: loadError || !src,
             navigateToMatch: navigateToSearchMatch,
             getMatchRange: getSearchMatchRange,
             resolveSourceMatch: async (
@@ -500,6 +503,8 @@ export const PDFPreview = ({
       searchMatches.length,
       textIndex.isIndexing,
       docLoaded,
+      loadError,
+      src,
       data.content,
       textIndex.pages,
     ],
@@ -741,8 +746,8 @@ export const PDFPreview = ({
               file={resolvedSrc}
               options={PDF_DOCUMENT_OPTIONS}
               onLoadSuccess={onDocumentLoadSuccess}
-              onLoadError={() => setLoadError(true)}
-              onSourceError={() => setLoadError(true)}
+              onLoadError={() => setFailedSource(src)}
+              onSourceError={() => setFailedSource(src)}
               loading=""
               error={
                 <div className="text-danger p-4 text-xs">
@@ -751,7 +756,7 @@ export const PDFPreview = ({
                     variant="ghost"
                     size="sm"
                     onClick={() => {
-                      setLoadError(false);
+                      setFailedSource(null);
                       setLoadAttempt((attempt) => attempt + 1);
                     }}
                   >

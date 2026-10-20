@@ -79,12 +79,14 @@ vi.mock('react-virtuoso', () => ({
     ref,
     data,
     itemContent,
+    computeItemKey,
   }: {
     ref: Ref<{
       scrollIntoView: (location: { index: number; done?: () => void }) => void;
     }>;
     data: unknown[];
     itemContent: (index: number, item: unknown) => ReactNode;
+    computeItemKey: (index: number, item: unknown) => string;
   }) => {
     const [target, setTarget] = useState(0);
     const pendingDone = useRef<(() => void) | undefined>(undefined);
@@ -108,7 +110,9 @@ vi.mock('react-virtuoso', () => ({
         {data.map(
           (item, index) =>
             (!virtualization.enabled || index === target || index === 0) && (
-              <div key={index}>{itemContent(index, item)}</div>
+              <div key={computeItemKey(index, item)}>
+                {itemContent(index, item)}
+              </div>
             ),
         )}
       </div>
@@ -195,6 +199,36 @@ beforeEach(async () => {
 });
 
 describe('virtualized result focus ownership', () => {
+  it.each(['append', 'regroup'] as const)(
+    'retains the focused result by stable key during streaming (%s)',
+    (change) => {
+      act(() => getRow(3).focus());
+      const focused = document.activeElement;
+      const row: SearchResultRow = {
+        ...results[0],
+        key: 'first:summary:0',
+        tier: 'meta',
+        match: { ...results[0].match, field: 'summary' },
+      };
+      act(() =>
+        useSearchStore.setState({
+          isStreaming: true,
+          results: change === 'append' ? [...results, row] : [row, ...results],
+        }),
+      );
+      const index = 4;
+      expect(document.activeElement).toBe(getRow(index));
+      expect(document.activeElement?.textContent).toContain('test content');
+      expect(document.activeElement).not.toBe(getRow(0));
+      expect(document.activeElement).toBe(focused);
+      press(getRow(index), 'Enter');
+      expect(openPreviewNode).toHaveBeenLastCalledWith(
+        'second',
+        expect.objectContaining({ focusEditor: false }),
+      );
+    },
+  );
+
   it.each([false, true])(
     'restores an unmounted result without overriding outside focus (%s)',
     (moveOutside) => {

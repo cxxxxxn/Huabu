@@ -454,6 +454,7 @@ export function MilkdownPreview(
   return (
     <div
       ref={containerRef}
+      data-search-renderer
       data-link-follow-held={
         linkActivation === 'modifier' ? String(followModifierHeld) : undefined
       }

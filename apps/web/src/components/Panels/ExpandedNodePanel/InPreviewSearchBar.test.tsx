@@ -125,6 +125,26 @@ describe('InPreviewSearchBar preview-search lifecycle', () => {
     expect(container.querySelector('button')?.disabled).toBe(true);
   });
 
+  it('bounds the wait for a missing indexed adapter', () => {
+    vi.useFakeTimers();
+    try {
+      usePreviewSearchStore.getState().reveal('pdf-1', 'needle', 0);
+      act(() =>
+        root.render(
+          <InPreviewSearchBar
+            scopeEl={container}
+            nodeId="pdf-1"
+            requiresAdapter
+          />,
+        ),
+      );
+      act(() => vi.advanceTimersByTime(8000));
+      expect(usePreviewSearchStore.getState().navigationRequest).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('is active while its node owns preview search', () => {
     usePreviewSearchStore.getState().open('pdf-1');
     usePreviewSearchStore.getState().setQuery('needle');

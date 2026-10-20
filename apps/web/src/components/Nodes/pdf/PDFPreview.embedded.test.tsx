@@ -18,6 +18,7 @@ interface DocumentProps {
   children: ReactNode;
   error: ReactNode;
   onLoadError: () => void;
+  onSourceError: () => void;
   onLoadSuccess: (document: { numPages: number }) => void;
 }
 
@@ -194,6 +195,69 @@ function load() {
 }
 
 describe('embedded PDF reader', () => {
+  it('does not let a failed previous source settle a replacement handoff', async () => {
+    const renderSource = (src: string) =>
+      root.render(
+        <PreviewSearchAdapterProvider>
+          <InPreviewSearchBar
+            scopeEl={container}
+            nodeId="pdf-1"
+            requiresAdapter
+          />
+          <PDFPreview id="pdf-1" data={{ src }} />
+        </PreviewSearchAdapterProvider>,
+      );
+    usePreviewSearchStore.getState().reveal('pdf-1', 'needle', 0);
+    act(() => renderSource('old.pdf'));
+    const oldLoadError = mocks.document.mock.lastCall?.[0].onLoadError;
+    act(() => oldLoadError?.());
+    expect(usePreviewSearchStore.getState().navigationRequest).toBeNull();
+    mocks.toast.mockClear();
+    mocks.indexPages = new Map([[0, { pageIndex: 0, text: 'needle' }]]);
+    act(() => {
+      usePreviewSearchStore.getState().reveal('pdf-1', 'needle', 0);
+      renderSource('replacement.pdf');
+    });
+    act(() => oldLoadError?.());
+    expect(usePreviewSearchStore.getState().navigationRequest).not.toBeNull();
+    expect(mocks.toast).not.toHaveBeenCalled();
+    load();
+    await act(async () => {
+      await vi.waitFor(() =>
+        expect(usePreviewSearchStore.getState().navigationRequest).toBeNull(),
+      );
+    });
+    expect(container.textContent).toContain('1/1');
+    expect(mocks.toast).not.toHaveBeenCalled();
+  });
+
+  it.each(['onLoadError', 'onSourceError'] as const)(
+    'settles a failed cold PDF handoff on %s',
+    async (callback) => {
+      usePreviewSearchStore.getState().reveal('pdf-1', 'needle', 0);
+      act(() =>
+        root.render(
+          <PreviewSearchAdapterProvider>
+            <InPreviewSearchBar
+              scopeEl={container}
+              nodeId="pdf-1"
+              requiresAdapter
+            />
+            <PDFPreview id="pdf-1" data={{ src: 'document.pdf' }} />
+          </PreviewSearchAdapterProvider>,
+        ),
+      );
+      expect(usePreviewSearchStore.getState().navigationRequest).not.toBeNull();
+      act(() => mocks.document.mock.lastCall?.[0][callback]());
+      expect(usePreviewSearchStore.getState().navigationRequest).toBeNull();
+      expect(mocks.toast).toHaveBeenCalledExactlyOnceWith(
+        'search.previewMatchNotVisible',
+        { tone: 'info', duration: 4000 },
+      );
+      expect(container.textContent).not.toContain('…');
+    },
+  );
+
   it.each(['alpha', 'missing'])(
     'waits for the new query adapter after an already indexed %s search',
     async (previousQuery) => {

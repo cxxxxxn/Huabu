@@ -3,6 +3,7 @@
 
 import { useEffect } from 'react';
 
+import { literalTextMatches } from '@huabu/shared';
 import { markdownSearchTarget } from '@huabu/shared/canvas-engine';
 
 import type { CanvasSearchSource } from '@huabu/shared';
@@ -17,13 +18,13 @@ interface SearchSource {
 const sources = new WeakMap<HTMLElement, SearchSource>();
 
 export async function hashSearchSource(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    'SHA-256',
-    new TextEncoder().encode(text),
+  const bytes = new TextEncoder().encode(text);
+  const digest = globalThis.crypto?.subtle
+    ? new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', bytes))
+    : (await import('@noble/hashes/sha256')).sha256(bytes);
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join(
+    '',
   );
-  return Array.from(new Uint8Array(digest), (byte) =>
-    byte.toString(16).padStart(2, '0'),
-  ).join('');
 }
 
 export function registerSearchSource(
@@ -92,10 +93,14 @@ export function resolveSourceRange(
   const source = candidate && sources.get(candidate);
   if (!candidate || !source) return { range: null, unavailable: false };
   const length = address.length ?? query.length;
-  if (
-    source.text.slice(address.offset, address.offset + length).toLowerCase() !==
-    query.toLowerCase()
-  ) {
+  let matchesAddress = false;
+  for (const match of literalTextMatches(source.text, query)) {
+    if (match.start < address.offset) continue;
+    matchesAddress =
+      match.start === address.offset && match.end === address.offset + length;
+    break;
+  }
+  if (!matchesAddress) {
     return { range: null, unavailable: true };
   }
   const target =

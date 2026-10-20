@@ -157,6 +157,7 @@ describe('preview DOM search boundaries', () => {
         <span aria-hidden="true">excluded task</span>
       </div>
     `);
+    root.setAttribute('data-search-renderer', '');
 
     expect(findRanges(root, 'task')).toHaveLength(0);
     expect(findRanges(root, 'report')).toHaveLength(1);
@@ -168,9 +169,27 @@ describe('preview DOM search boundaries', () => {
       <div>Task List</div>
       <div data-preview-search-content>first task and second task</div>
     `);
+    root.setAttribute('data-search-renderer', '');
 
     expect(findRanges(root, 'task')).toHaveLength(2);
     expect(findNthRange(root, 'task', 1)?.toString()).toBe('task');
+    root.remove();
+  });
+
+  it.each([
+    '<h2>needle label</h2><div data-search-renderer><div>needle menu</div><p data-preview-search-content>needle note</p></div><p>needle text</p>',
+    '<p>needle prompt</p><div data-search-renderer><div>needle menu</div><p data-preview-search-content>needle assistant</p></div><blockquote>needle quote</blockquote>',
+  ])('preserves sibling Canvas and conversation surfaces: %s', (html) => {
+    const root = rootWith(html);
+    const ranges = findRanges(root, 'needle');
+    expect(ranges).toHaveLength(3);
+    expect(
+      ranges.map((range) => range.startContainer.parentElement?.textContent),
+    ).not.toContain('needle menu');
+    expect(
+      findNthRange(root, 'needle', 2)?.startContainer.parentElement
+        ?.textContent,
+    ).toMatch(/needle (text|quote)/);
     root.remove();
   });
 

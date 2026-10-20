@@ -305,7 +305,7 @@ export function MilkdownEditor(props: MilkdownEditorProps): React.JSX.Element {
 
   return (
     <>
-      <div ref={rootRef} className={className} />
+      <div ref={rootRef} className={className} data-search-renderer />
       {editable && popoverInstance ? (
         <MilkdownLinkPopover instance={popoverInstance} rootRef={rootRef} />
       ) : null}
