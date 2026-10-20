@@ -1473,7 +1473,7 @@ const CanvasContent: React.FC<CanvasProps> = ({
             createPortal(
               <div
                 data-canvas-main-toolbar
-                className="react-flow__panel nodrag nopan pointer-events-auto absolute !bottom-6 !m-0 max-w-[calc(100%-24px)] -translate-x-1/2"
+                className="react-flow__panel nodrag nopan pointer-events-auto absolute !bottom-[14px] !m-0 max-w-[calc(100%-24px)] -translate-x-1/2"
                 style={mainToolbarPosition}
                 onPointerDown={(event) => event.stopPropagation()}
                 onDoubleClick={(event) => event.stopPropagation()}
@@ -1489,7 +1489,7 @@ const CanvasContent: React.FC<CanvasProps> = ({
           ) : (
             <Panel
               position="bottom-center"
-              className="mb-6"
+              className="mb-[14px]!"
               style={mainToolbarPosition}
             >
               <NodeToolbar activeTool={tool} onToolChange={setTool} />

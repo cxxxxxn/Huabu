@@ -398,7 +398,7 @@ describe('runAgent output delta', () => {
 });
 
 describe('runAgent Ink model requirements', () => {
-  it('overlays reporting for Ask Ink only without granting persistent write tools', async () => {
+  it('keeps low-level reporting overlays separate from read-only tool grants (admission is service-owned)', async () => {
     const canvasId = 'ink-models';
     const threadId = 'ask-ink-report-overlay';
     resolveModelForRoleAsync.mockResolvedValue({

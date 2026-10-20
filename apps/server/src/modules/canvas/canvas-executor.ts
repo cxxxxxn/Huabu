@@ -1388,6 +1388,7 @@ export async function applyDeltasOnServerAlreadyLocked(input: {
                   current,
                   patch: {
                     ...node.data,
+                    agentMode: node.data.agentMode,
                     agentBinding: node.data.agentBinding ?? {
                       kind: 'internal',
                     },
