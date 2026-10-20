@@ -216,6 +216,9 @@ export default function resolveAddNodes(
         nodes: created.map((item) => item.node),
       },
     ],
+    revealNodeIds: created
+      .filter((_, index) => !intent.inputs[index].placementPoint)
+      .map((item) => item.traceNode.id),
     ...(created.length === 1 &&
     requestsEditing &&
     (created[0].traceNode.type === 'note' ||

@@ -537,7 +537,11 @@ export const acpAgentletStatusSchema = agentletStatusSchema;
 /** @deprecated Use {@link acpAgentletStatusSchema} instead. */
 export const acpDaemonStatusSchema = acpAgentletStatusSchema;
 
-export const connectionTokenSourceSchema = z.enum(['environment', 'generated']);
+export const connectionTokenSourceSchema = z.enum([
+  'environment',
+  'generated',
+  'managed',
+]);
 export type ConnectionTokenSource = z.infer<typeof connectionTokenSourceSchema>;
 
 export const connectionShellSchema = z.enum(['posix', 'powershell']);

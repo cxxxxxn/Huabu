@@ -116,6 +116,7 @@ import { SnapGuidesOverlay } from './SnapGuidesOverlay.tsx';
 import { StrokeSelectionRegion } from './StrokeSelectionRegion.tsx';
 import { StructuredDropOverlay } from './StructuredDropOverlay.tsx';
 import { useInitialCanvasViewport } from './useInitialCanvasViewport.ts';
+import { useRevealCreatedNodes } from './useRevealCreatedNodes';
 import { MAX_ZOOM, MIN_ZOOM } from '../../../config/canvas.ts';
 import useCanvasStore from '../../../store/canvasStore.ts';
 import { useConnectPortStore } from '../../../store/connectPortStore.ts';
@@ -462,6 +463,7 @@ const CanvasContent: React.FC<CanvasProps> = ({
     fitInitialViewport,
     isPending: isInitialViewportPending,
   } = useInitialCanvasViewport();
+  useRevealCreatedNodes(isInitialViewportPending);
 
   const isNotMouse = useIsNotMouse();
   const inputMode = useEffectiveInputMode();

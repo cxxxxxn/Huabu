@@ -136,6 +136,7 @@ import {
   resumeHeightCommits,
   suspendHeightCommits,
 } from '../components/Nodes/shared/height/commitSuspension';
+import { getCanvasVisibleArea } from '../components/Panels/CanvasLayerPanel/focusNodesOnCanvas';
 import { copyCanvasClipboard } from '../utils/io/clipboard';
 import { nodesToPlainText } from '../utils/io/nodeToPlainText';
 
@@ -480,6 +481,9 @@ type RFState = {
 
   pendingInlineEditNodeId: string | null;
   consumeInlineEditRequest: (nodeId: string) => void;
+
+  pendingRevealNodeIds: string[];
+  consumeRevealRequest: (nodeIds: string[]) => void;
 
   collapsedFrameIds: Set<string>;
   toggleFrameCollapse: (frameId: string) => void;
@@ -1497,6 +1501,12 @@ const useCanvasStore = create<RFState>()(
       set({ pendingInlineEditNodeId: null });
     },
 
+    pendingRevealNodeIds: [],
+    consumeRevealRequest: (nodeIds) => {
+      if (get().pendingRevealNodeIds !== nodeIds) return;
+      set({ pendingRevealNodeIds: [] });
+    },
+
     collapsedFrameIds: new Set<string>(),
     toggleFrameCollapse: (frameId) => {
       const { collapsedFrameIds } = get();
@@ -2008,19 +2018,19 @@ const useCanvasStore = create<RFState>()(
 
     /** Resolve a web-only UiIntent and execute the resulting commands. */
     dispatchUiIntent: (intent) => {
-      const { rfInstance, canvasWrapper } = get();
-      // Compute the viewport centre in flow coordinates so resolvers can
-      // anchor "no placement point" additions to the visible area. The
-      // shared engine no longer ships a layout fallback, so resolvers
-      // default to `(0, 0)` when neither a placement point nor a viewport
-      // centre is available (initial boot before React Flow registers).
-      let viewportCenter: Point | undefined;
+      const { rfInstance, canvasWrapper, viewport } = get();
+      // Fullscreen Preview unmounts Canvas; retain a nearby placement until
+      // the queued reveal can run against the restored, unobscured viewport.
+      let viewportCenter: Point | undefined = viewport
+        ? viewportCentreOf(viewport)
+        : undefined;
       if (rfInstance && canvasWrapper) {
         const rect = canvasWrapper.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) {
+        const area = getCanvasVisibleArea(canvasWrapper);
+        if (area.width > 0 && area.height > 0) {
           viewportCenter = rfInstance.screenToFlowPosition({
-            x: rect.left + rect.width / 2,
-            y: rect.top + rect.height / 2,
+            x: rect.left + area.x + area.width / 2,
+            y: rect.top + area.y + area.height / 2,
           });
         }
       }
@@ -2048,6 +2058,16 @@ const useCanvasStore = create<RFState>()(
               }
             : undefined,
         );
+      }
+      if (execution.revealNodeIds?.length) {
+        const existingIds = new Set(uiState.nodes.map((node) => node.id));
+        const liveIds = new Set(get().nodes.map((node) => node.id));
+        const createdIds = execution.revealNodeIds.filter(
+          (id) => !existingIds.has(id) && liveIds.has(id),
+        );
+        if (createdIds.length > 0) {
+          set({ pendingRevealNodeIds: createdIds });
+        }
       }
       if (editNodeId !== undefined && !editTargetAlreadyExists) {
         const node = get().nodes.find(({ id }) => id === editNodeId);
@@ -2166,6 +2186,7 @@ const useCanvasStore = create<RFState>()(
         await drainPendingSaves();
       set({
         isLoading: true,
+        pendingRevealNodeIds: [],
         canvasNotFound: false,
         versionConflict: false,
         versionConflictServerVersion: null,
@@ -2376,6 +2397,7 @@ const useCanvasStore = create<RFState>()(
       // or, for older canvases without one, runs a one-shot fitView.
       set({
         pendingInlineEditNodeId: null,
+        pendingRevealNodeIds: [],
         collapsedFrameIds: new Set(),
         canvasNotFound: false,
         viewport: null,
