@@ -16,6 +16,7 @@ import {
 import { isVideoControlTarget } from '@/components/Nodes/video/videoInteraction';
 import { EDIT_EDGE_LABEL_EVENT } from '@/components/Panels/Canvas/edges/LabelledEdge';
 import { fitCanvasContent } from '@/components/Panels/CanvasLayerPanel/focusNodesOnCanvas';
+import { requestCreateChildSpace } from '@/components/Space/createChildSpaceAction';
 import { matchesShortcut } from '@/config/shortcuts';
 
 import {
@@ -319,6 +320,15 @@ export function useCanvasShortcuts(
       if (e.target instanceof Element && isVideoControlTarget(e.target)) return;
       const mod = e.metaKey || e.ctrlKey;
       const editable = isEditableTarget(e.target);
+      if (
+        !editable &&
+        !e.isComposing &&
+        matchesShortcut(e, 'layer.collectSpace')
+      ) {
+        e.preventDefault();
+        if (!e.repeat) requestCreateChildSpace();
+        return;
+      }
 
       if (!editable && !e.isComposing && rfInstanceRef.current) {
         if (matchesShortcut(e, 'view.resetZoom')) {

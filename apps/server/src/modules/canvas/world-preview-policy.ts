@@ -35,6 +35,23 @@ export class WorldPreviewMutationError extends Error {
   }
 }
 
+/** Formal entries are removed only by explicit Space lifecycle operations. */
+export async function assertChildSpaceEntriesAllowed(
+  canvasId: string,
+  nodes: readonly unknown[],
+): Promise<void> {
+  const byId = new Map(storedNodes(nodes).map((node) => [node.id, node]));
+  for (const child of await getStructuredStore().spaces().list()) {
+    if (child.parentSpaceId !== canvasId || !child.parentEntryNodeId) continue;
+    const entry = byId.get(child.parentEntryNodeId);
+    if (!entry || previewTarget(entry) !== child.canvasId) {
+      throw new WorldPreviewMutationError(
+        'A child Space entry cannot be removed or retargeted. Use Delete Space (with confirmation) or Change parent.',
+      );
+    }
+  }
+}
+
 function previewTarget(node: StoredNode): string | null {
   return node.type === 'spacePreview' &&
     typeof node.data?.targetCanvasId === 'string' &&

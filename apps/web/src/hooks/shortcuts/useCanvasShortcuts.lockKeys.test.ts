@@ -45,6 +45,7 @@ import {
   type CanvasShortcutRefs,
 } from './useCanvasShortcuts';
 import { OPEN_SPACE_SHORTCUT_EVENT } from '../../components/Nodes/spacePreview/spaceShortcutEvents';
+import { REQUEST_CREATE_CHILD_SPACE } from '../../components/Space/createChildSpaceAction';
 import { getCombo } from '../../config/shortcuts';
 
 // react-dom's `act` needs this flag set in a test environment.
@@ -97,6 +98,72 @@ describe('useCanvasShortcuts catalog key lock', () => {
     act(() => root.unmount());
     container.remove();
     vi.clearAllMocks();
+  });
+
+  it('collects the selected nodes with Mod+Alt+S, including macOS Option key text', () => {
+    canvasActions.nodes = [{ id: 'selected', selected: true }, { id: 'other' }];
+    const collect = vi.fn();
+    window.addEventListener(REQUEST_CREATE_CHILD_SPACE, collect);
+    try {
+      dispatchCombo('layer.collectSpace');
+      expect(collect).toHaveBeenCalledOnce();
+      expect(collect.mock.calls[0]?.[0].detail.nodeIds).toEqual(['selected']);
+      act(() =>
+        window.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 'ß',
+            code: 'KeyS',
+            metaKey: true,
+            altKey: true,
+            bubbles: true,
+          }),
+        ),
+      );
+      expect(collect).toHaveBeenCalledTimes(2);
+      expect(canvasActions.frameSelectedNodes).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(REQUEST_CREATE_CHILD_SPACE, collect);
+    }
+  });
+
+  it('does not collect empty selections, typing, composition, or repeated keydowns', () => {
+    const collect = vi.fn();
+    window.addEventListener(REQUEST_CREATE_CHILD_SPACE, collect);
+    const input = document.createElement('input');
+    container.appendChild(input);
+    try {
+      dispatchCombo('layer.collectSpace');
+      canvasActions.nodes = [{ id: 'selected', selected: true }];
+      act(() => {
+        input.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 's',
+            metaKey: true,
+            altKey: true,
+            bubbles: true,
+          }),
+        );
+        window.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 's',
+            metaKey: true,
+            altKey: true,
+            isComposing: true,
+          }),
+        );
+        window.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 's',
+            metaKey: true,
+            altKey: true,
+            repeat: true,
+          }),
+        );
+      });
+      expect(collect).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(REQUEST_CREATE_CHILD_SPACE, collect);
+    }
   });
 
   it('fires the matching store action for each catalog combo it owns', () => {

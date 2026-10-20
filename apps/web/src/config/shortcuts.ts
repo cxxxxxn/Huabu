@@ -260,9 +260,9 @@ export const SHORTCUTS: ShortcutDef[] = [
     section: SECTION.toolbar,
   },
   {
-    id: 'mode.audio',
+    id: 'mode.childSpace',
     combo: { key: '5' },
-    descriptionKey: 'shortcuts.items.audioMode',
+    descriptionKey: 'spaceHierarchy.createChild',
     section: SECTION.toolbar,
   },
   {
@@ -283,6 +283,12 @@ export const SHORTCUTS: ShortcutDef[] = [
     id: 'layer.bringFront',
     combo: { key: [']', '】'] },
     descriptionKey: 'shortcuts.items.bringFront',
+    section: SECTION.layeringGrouping,
+  },
+  {
+    id: 'layer.collectSpace',
+    combo: { mod: true, alt: true, key: 's', code: 'KeyS' },
+    descriptionKey: 'spaceHierarchy.collectAction',
     section: SECTION.layeringGrouping,
   },
   {

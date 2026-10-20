@@ -861,9 +861,7 @@ function Specimen({ type: initialType }: { type: CanvasNodeType }) {
           }))}
           onClose={() => setDialog(null)}
           onSubmit={(destination) => {
-            setFeedback(
-              `样例目标：${destination.kind === 'new' ? destination.title : destination.canvasId}`,
-            );
+            setFeedback(`样例目标：${destination}`);
             setDialog(null);
           }}
         />

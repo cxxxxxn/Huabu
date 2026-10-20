@@ -154,7 +154,7 @@ const createNodes: CommandDefinition<Cmd> = {
         data: {
           ...inputData,
           ...(nodeType === 'spacePreview' && {
-            widthMode: inputData.widthMode === 'fixed' ? 'fixed' : 'auto',
+            widthMode: 'fixed',
           }),
           ...(Object.keys(styleWithAccent).length > 0
             ? { style: styleWithAccent }

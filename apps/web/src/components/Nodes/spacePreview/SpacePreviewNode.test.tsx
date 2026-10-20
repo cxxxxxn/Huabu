@@ -12,6 +12,10 @@ import type { Node } from '@xyflow/react';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
+  spaceSummaries: {} as Record<
+    string,
+    { parentSpaceId: string; parentEntryNodeId: string }
+  >,
   target: {
     title: 'Research',
     nodeCount: undefined as number | undefined,
@@ -21,6 +25,7 @@ const mocks = vi.hoisted(() => ({
     retry: vi.fn(),
   },
   state: {
+    canvasId: 'source',
     nodes: [] as Node[],
     _setStateNoAutosave: vi.fn(),
   },
@@ -33,16 +38,30 @@ vi.mock('./useSpaceShortcutTarget', () => ({
   useSpaceShortcutTarget: () => mocks.target,
 }));
 vi.mock('@/store/canvasStore', () => ({
-  default: { getState: () => mocks.state },
+  default: Object.assign(
+    (selector: (state: typeof mocks.state) => unknown) => selector(mocks.state),
+    { getState: () => mocks.state },
+  ),
+}));
+vi.mock('@/store/workspaceStore', () => ({
+  useWorkspaceStore: (
+    selector: (state: {
+      spaceSummaries: typeof mocks.spaceSummaries;
+      workspaceId: string;
+      worldCanvasId: string;
+    }) => unknown,
+  ) =>
+    selector({
+      spaceSummaries: mocks.spaceSummaries,
+      workspaceId: 'workspace',
+      worldCanvasId: 'world',
+    }),
 }));
 vi.mock('@xyflow/react', () => ({
   useStore: (selector: (state: { nodeLookup: Map<string, Node> }) => unknown) =>
     selector({
       nodeLookup: new Map(mocks.state.nodes.map((node) => [node.id, node])),
     }),
-}));
-vi.mock('@/utils/node/textMeasure', () => ({
-  measureTextContent: (text: string) => ({ width: text.length * 16 }),
 }));
 vi.mock('@/components/Common/Tooltip', () => ({
   Tooltip: ({ children }: { children: ReactNode }) => children,
@@ -70,6 +89,8 @@ let host: HTMLDivElement;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.spaceSummaries = {};
+  mocks.state.canvasId = 'source';
   mocks.target.title = 'Research';
   mocks.target.nodeCount = undefined;
   mocks.target.updatedAt = undefined;
@@ -138,8 +159,34 @@ function open() {
       ?.click(),
   );
 }
+
+it('leaves canonical entry deletion to the shared More menu instead of adding a toolbar button', () => {
+  mocks.spaceSummaries = {
+    target: { parentSpaceId: 'source', parentEntryNodeId: 'shortcut' },
+  };
+  render();
+  expect(
+    host.querySelector('button[aria-label="canvasList.deleteCanvas"]'),
+  ).toBeNull();
+  expect(host.querySelectorAll('button')).toHaveLength(1);
+  expect(
+    host.querySelector('button[aria-label="spacePreview.openSpace"]'),
+  ).not.toBeNull();
+});
 describe('Space Shortcut production node', () => {
+  it('omits the large Space icon without changing card width', () => {
+    mocks.target.title = 'Medium Space Name';
+    render();
+    expect(
+      host.querySelector('[data-space-shortcut] .lucide-layers-2'),
+    ).toBeNull();
+    expect(mocks.state.nodes[0].style?.width).toBe(360);
+  });
+
   it('shows known summaries without treating unknown counts as zero', () => {
+    mocks.spaceSummaries = {
+      target: { parentSpaceId: 'source', parentEntryNodeId: 'shortcut' },
+    };
     render();
     expect(host.querySelector('[data-space-shortcut-summary]')).toBeNull();
     mocks.target.nodeCount = 0;
@@ -150,13 +197,39 @@ describe('Space Shortcut production node', () => {
     expect(host.querySelector('[data-space-shortcut-summary]')).toBeNull();
   });
 
-  it('uses bounded derived width without an authored geometry command', () => {
+  it('marks ordinary shortcuts after the name, not in the summary or on owned entries', () => {
     render();
-    expect(mocks.state.nodes[0].style?.width).toBe(240);
+    const marker = host.querySelector(
+      '[data-space-shortcut] .lucide-arrow-up-right',
+    );
+    expect(marker?.getAttribute('aria-label')).toBe(
+      'spacePreview.shortcutLabel',
+    );
+    expect(marker?.getAttribute('width')).toBe('1em');
+    expect(marker?.previousElementSibling?.textContent).toBe('Research');
+    expect(host.querySelector('[data-space-shortcut-summary]')).toBeNull();
+    mocks.spaceSummaries = {
+      target: { parentSpaceId: 'source', parentEntryNodeId: 'shortcut' },
+    };
+    render();
+    expect(
+      host.querySelector('[data-space-shortcut] .lucide-arrow-up-right'),
+    ).toBeNull();
+    mocks.spaceSummaries = {};
+    mocks.state.canvasId = 'world';
+    render();
+    expect(
+      host.querySelector('[data-space-shortcut] .lucide-arrow-up-right'),
+    ).toBeNull();
+  });
+
+  it('preserves saved width even for legacy automatic cards after a rename', () => {
+    render();
+    expect(mocks.state.nodes[0].style?.width).toBe(360);
     mocks.target.title = 'A very long target title that cannot fit on one line';
     render();
-    expect(mocks.state.nodes[0].style?.width).toBe(480);
-    expect(mocks.state.nodes[0].data.widthMode).toBe('auto');
+    expect(mocks.state.nodes[0].style?.width).toBe(360);
+    expect(mocks.state._setStateNoAutosave).not.toHaveBeenCalled();
   });
 
   it('keeps custom width across target renames', () => {
@@ -168,11 +241,11 @@ describe('Space Shortcut production node', () => {
     expect(host.textContent).toContain('Renamed Space');
   });
 
-  it('recomputes stale automatic geometry after history restore but does not fight a drag', () => {
+  it('preserves geometry restored by history and does not fight a drag', () => {
     render();
     mocks.state.nodes[0] = { ...mocks.state.nodes[0], style: { width: 400 } };
     render();
-    expect(mocks.state.nodes[0].style?.width).toBe(240);
+    expect(mocks.state.nodes[0].style?.width).toBe(400);
     mocks.state.nodes[0] = {
       ...mocks.state.nodes[0],
       style: { width: 320 },
@@ -186,6 +259,20 @@ describe('Space Shortcut production node', () => {
   });
 
   it('shares navigation across double click, Enter, and toolbar', () => {
+    render();
+    open();
+    expect(mocks.navigate.mock.calls).toEqual(
+      Array.from({ length: 3 }, () => [
+        '/canvas/target',
+        { state: { returnToSpace: 'source', workspaceId: 'workspace' } },
+      ]),
+    );
+  });
+
+  it('keeps canonical entry navigation free of return-history state', () => {
+    mocks.spaceSummaries = {
+      target: { parentSpaceId: 'source', parentEntryNodeId: 'shortcut' },
+    };
     render();
     open();
     expect(mocks.navigate.mock.calls).toEqual(

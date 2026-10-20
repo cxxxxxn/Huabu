@@ -92,8 +92,13 @@ import {
   setSnapStructuredSuppressed,
   writeDragDecision,
 } from '@/handler/snap/snapSession';
+import {
+  isVisibleWorldNode,
+  REQUEST_DELETE_SPACE,
+} from '@/utils/spaceHierarchy';
 
 import { canvasHistoryManager } from './canvasHistoryManager';
+import { useWorkspaceStore } from './workspaceStore';
 import {
   getCanvas,
   postCanvasExecute,
@@ -2018,6 +2023,48 @@ const useCanvasStore = create<RFState>()(
 
     /** Resolve a web-only UiIntent and execute the resulting commands. */
     dispatchUiIntent: (intent) => {
+      if (intent.type === 'DELETE_NODES') {
+        const state = get();
+        const summaries = useWorkspaceStore.getState().spaceSummaries;
+        const affected = new Set(intent.nodeIds);
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const node of state.nodes) {
+            if (
+              node.parentId &&
+              affected.has(node.parentId) &&
+              !affected.has(node.id)
+            ) {
+              affected.add(node.id);
+              changed = true;
+            }
+          }
+        }
+        const owned = Object.entries(summaries).filter(
+          ([, summary]) =>
+            summary?.parentSpaceId === state.canvasId &&
+            summary.parentEntryNodeId &&
+            affected.has(summary.parentEntryNodeId),
+        );
+        if (owned.length) {
+          const [childId, child] = owned[0]!;
+          if (
+            owned.length === 1 &&
+            intent.nodeIds.length === 1 &&
+            intent.nodeIds[0] === child?.parentEntryNodeId
+          ) {
+            window.dispatchEvent(
+              new CustomEvent(REQUEST_DELETE_SPACE, { detail: childId }),
+            );
+          } else {
+            toast(t('spaceHierarchy.deleteEntrySeparately'), {
+              tone: 'warning',
+            });
+          }
+          return;
+        }
+      }
       const { rfInstance, canvasWrapper, viewport } = get();
       // Fullscreen Preview unmounts Canvas; retain a nearby placement until
       // the queued reveal can run against the restored, unobscured viewport.
@@ -3941,6 +3988,23 @@ const useCanvasStore = create<RFState>()(
     },
 
     selectNodes: (ids, multiSelect = false) => {
+      const state = get();
+      const workspace = useWorkspaceStore.getState();
+      if (state.canvasId === workspace.worldCanvasId) {
+        const visible = new Set(
+          state.nodes
+            .filter((node) =>
+              isVisibleWorldNode(
+                node,
+                state.canvasId,
+                workspace.worldCanvasId,
+                workspace.spaceSummaries,
+              ),
+            )
+            .map((node) => node.id),
+        );
+        ids = ids.filter((id) => visible.has(id));
+      }
       get().dispatchUiIntent({
         type: 'SELECT_NODES',
         nodeIds: ids,

@@ -12,6 +12,7 @@ import { usePanelStore } from '../../store/panelStore';
 import { createEmptyWorkspace } from '../../store/previewWorkspace/model';
 import { usePreviewWorkspaceStore } from '../../store/previewWorkspace/store';
 
+import type { CanvasSummary } from '@huabu/shared';
 import type { Node } from '@xyflow/react';
 
 (
@@ -20,12 +21,15 @@ import type { Node } from '@xyflow/react';
 
 const mocks = vi.hoisted(() => ({
   revealNodesOnCanvas: vi.fn(),
+  fitNodesOnCanvas: vi.fn(),
   openPreviewNode: vi.fn(() => 'tab-1'),
   toast: vi.fn(),
   requestChatOpen: vi.fn(),
   connect: vi.fn(),
   disconnect: vi.fn(),
   refreshSpaceTitles: vi.fn(async () => undefined),
+  worldCanvasId: null as string | null,
+  spaceSummaries: {} as Record<string, Pick<CanvasSummary, 'parentSpaceId'>>,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -41,6 +45,7 @@ vi.mock('../../components/Nodes/previews', () => ({
 }));
 vi.mock('../../components/Panels/CanvasLayerPanel/focusNodesOnCanvas', () => ({
   revealNodesOnCanvas: mocks.revealNodesOnCanvas,
+  fitNodesOnCanvas: mocks.fitNodesOnCanvas,
 }));
 vi.mock('../../components/Panels/CanvasLayerPanel', () => ({
   CanvasLayerPanel: () => null,
@@ -86,12 +91,14 @@ vi.mock('../../store/toolStore', () => ({
 vi.mock('../../store/workspaceStore', () => ({
   useWorkspaceStore: (
     selector: (state: {
-      worldCanvasId: null;
+      worldCanvasId: string | null;
+      spaceSummaries: typeof mocks.spaceSummaries;
       refreshSpaceTitles: () => Promise<void>;
     }) => unknown,
   ) =>
     selector({
-      worldCanvasId: null,
+      worldCanvasId: mocks.worldCanvasId,
+      spaceSummaries: mocks.spaceSummaries,
       refreshSpaceTitles: mocks.refreshSpaceTitles,
     }),
 }));
@@ -113,6 +120,7 @@ async function renderAt(
   path: string,
   canvasNode: Node,
   rfInstance: object | null = {},
+  state: unknown = null,
 ) {
   const selectNodes = vi.fn();
   const loadCanvas = vi.fn(async () => undefined);
@@ -134,7 +142,15 @@ async function renderAt(
 
   const router = createMemoryRouter(
     [{ path: '/canvas/:canvasId', element: <CanvasPage /> }],
-    { initialEntries: [path] },
+    {
+      initialEntries: [
+        {
+          pathname: path.split('?')[0],
+          search: path.includes('?') ? `?${path.split('?')[1]}` : '',
+          state,
+        },
+      ],
+    },
   );
   await act(async () => root.render(<RouterProvider router={router} />));
   return { router, selectNodes };
@@ -145,10 +161,13 @@ beforeEach(() => {
   document.body.appendChild(container);
   root = createRoot(container);
   mocks.revealNodesOnCanvas.mockClear();
+  mocks.fitNodesOnCanvas.mockClear();
   mocks.openPreviewNode.mockClear();
   mocks.toast.mockClear();
   mocks.requestChatOpen.mockClear();
   mocks.refreshSpaceTitles.mockClear();
+  mocks.worldCanvasId = null;
+  mocks.spaceSummaries = {};
   usePanelStore.setState({ isPreviewFullscreen: false });
 });
 
@@ -158,6 +177,7 @@ afterEach(() => {
   useCanvasStore.setState({
     canvasId: '',
     nodes: [],
+    edges: [],
     rfInstance: null,
     canvasWrapper: null,
     isLoading: false,
@@ -169,6 +189,71 @@ afterEach(() => {
 });
 
 describe('CanvasPage node deep-link navigation', () => {
+  it('clears hidden World selections in fullscreen Preview without changing geometry or saving', async () => {
+    mocks.worldCanvasId = CANVAS_ID;
+    mocks.spaceSummaries = { child: { parentSpaceId: null } };
+    const entry = {
+      ...node('spacePreview', { targetCanvasId: 'child' }),
+      selected: true,
+    };
+    const { router } = await renderAt(`/canvas/${CANVAS_ID}`, entry, null);
+    await act(async () => {
+      usePanelStore.setState({ isPreviewFullscreen: true });
+      useCanvasStore.getState()._setStateNoAutosave({
+        edges: [
+          { id: 'edge-1', source: 'node-1', target: 'node-1', selected: true },
+        ],
+      });
+    });
+    const before = useCanvasStore.getState();
+    mocks.spaceSummaries = { child: { parentSpaceId: 'parent' } };
+    await act(async () => {
+      await router.navigate(`/canvas/${CANVAS_ID}`);
+    });
+    const after = useCanvasStore.getState();
+    expect(after.nodes[0]).toEqual({ ...entry, selected: false });
+    expect(after.edges[0]).toEqual({ ...before.edges[0], selected: false });
+    expect(after.pendingSave).toBe(before.pendingSave);
+    expect(after.version).toBe(before.version);
+    expect(mocks.fitNodesOnCanvas).not.toHaveBeenCalled();
+  });
+  it('waits for the destination, focuses moved IDs once, and preserves return history', async () => {
+    const { router, selectNodes } = await renderAt(
+      `/canvas/${CANVAS_ID}`,
+      node('note'),
+      null,
+      {
+        focusNodeIds: ['node-1'],
+        returnToSpace: 'source',
+        workspaceId: undefined,
+      },
+    );
+    expect(selectNodes).not.toHaveBeenCalled();
+    const wrapper = useCanvasStore.getState().canvasWrapper;
+    if (!wrapper) throw new Error('Missing Canvas wrapper');
+    const focus = vi.spyOn(wrapper, 'focus');
+    await act(async () => {
+      useCanvasStore.setState({ rfInstance: {} as never });
+    });
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(selectNodes).toHaveBeenCalledWith(['node-1'], false);
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(mocks.fitNodesOnCanvas).toHaveBeenCalledWith(
+      useCanvasStore.getState().rfInstance,
+      ['node-1'],
+      0.15,
+      1,
+    );
+    expect(mocks.openPreviewNode).not.toHaveBeenCalled();
+    expect(router.state.location.state).toEqual({
+      returnToSpace: 'source',
+      workspaceId: undefined,
+    });
+    await act(async () => useCanvasStore.setState({ version: 23 }));
+    expect(mocks.fitNodesOnCanvas).toHaveBeenCalledOnce();
+  });
   it('refreshes shared Space metadata on ordinary canvas entry, focus, and workspace changes', async () => {
     await renderAt(`/canvas/${CANVAS_ID}`, node('note'));
     expect(mocks.refreshSpaceTitles).toHaveBeenCalledTimes(1);

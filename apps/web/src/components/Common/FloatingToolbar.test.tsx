@@ -204,6 +204,32 @@ describe('FloatingToolbar.NumberInput', () => {
 
 describe('FloatingToolbar.SizePicker', () => {
   it.each([true, false])(
+    'supports a width-only auto toggle when active=%s',
+    (active) => {
+      const onToggle = vi.fn();
+      const container = render(
+        <FloatingToolbar.SizePicker
+          width={320}
+          height={null}
+          showHeight={false}
+          minSize={240}
+          onApply={vi.fn()}
+          autoSize={{ dimensions: 'width', active, onToggle }}
+        />,
+      );
+      expect(container.querySelector('input[name="node-height"]')).toBeNull();
+      expect(container.querySelector('input[name="node-width"]') === null).toBe(
+        active,
+      );
+      expect(
+        container.querySelector('button')?.getAttribute('aria-label'),
+      ).toBe(active ? 'Switch to fixed width' : 'Fit width to content');
+      expect(container.querySelectorAll('button')).toHaveLength(1);
+      act(() => container.querySelector('button')?.click());
+      expect(onToggle).toHaveBeenCalledOnce();
+    },
+  );
+  it.each([true, false])(
     'separates the both-axis toggle from individual input capsules when active=%s',
     (active) => {
       const container = render(

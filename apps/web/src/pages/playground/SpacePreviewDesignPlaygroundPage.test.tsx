@@ -15,11 +15,10 @@ import SpacePreviewDesignPlaygroundPage from './SpacePreviewDesignPlaygroundPage
 
 vi.mock('react-i18next', () => {
   const labels: Record<string, string> = {
+    'spacePreview.shortcutLabel': 'Shortcut',
     'toolbar.size.width': '宽度（画布单位）',
-    'spacePreview.autoWidth': '自动',
-    'spacePreview.fixedWidth': '自定义',
-    'spacePreview.applyWidth': '应用宽度',
-    'spacePreview.widthError': '请输入不小于 240 的有限整数宽度。',
+    'toolbar.size.switchFixedWidth': '切换为固定宽度',
+    'toolbar.size.fitWidth': '适应内容宽度',
   };
   return {
     useTranslation: () => ({
@@ -83,6 +82,11 @@ async function setWidthInput(value: string) {
     setter.call(input, value);
     input.dispatchEvent(new Event('input', { bubbles: true }));
   });
+  await act(async () => {
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+    );
+  });
 }
 
 function shell(specimen = 'reference') {
@@ -129,38 +133,30 @@ describe('Space shortcut design playground', () => {
     expect(container.querySelectorAll('.sp-design-shortcut')).toHaveLength(2);
     expect(container.querySelector('img')).toBeNull();
     expect(container.querySelector('[role="application"]')).toBeNull();
-    expect(container.querySelectorAll('.sp-design-type-marker')).toHaveLength(
-      2,
-    );
-    expect(card().querySelector('.sp-design-type-marker')).not.toBeNull();
+    expect(card().querySelector('.lucide-layers-2')).toBeNull();
+    expect(card().querySelector('.lucide-arrow-up-right')).not.toBeNull();
     expect(card().getAttribute('aria-pressed')).toBe('false');
     expect(card('reference').getAttribute('aria-pressed')).toBe('true');
-    expect(
-      card().querySelector('button, a, .lucide-arrow-up-right'),
-    ).toBeNull();
+    expect(card().querySelector('button, a')).toBeNull();
     expect(container.querySelector('button[aria-label="尺寸"]')).toBeNull();
     expect(
       container.querySelector('button[aria-label="宽度设置"]'),
     ).not.toBeNull();
-    expect(shell().dataset.widthMode).toBe('auto');
-    expect(shell().style.width).toBe('max-content');
+    expect(shell().style.width).toBe('360px');
     expect(container.textContent).not.toContain('重试快照');
     expect(container.querySelectorAll('.nt-toolbar')).toHaveLength(1);
     expect(entryButton().disabled).toBe(false);
   });
 
-  it('pins only the edited reference, preserves width on rename, and restores automatic sizing', async () => {
+  it('edits only one reference and preserves width on rename without an automatic toggle', async () => {
     await choose('宽度设置');
+    expect(document.querySelector('[aria-label="切换为固定宽度"]')).toBeNull();
+    expect(document.querySelector('[aria-label="适应内容宽度"]')).toBeNull();
     await setWidthInput('320');
-    await choose('应用宽度');
-    expect(shell().dataset.widthMode).toBe('manual');
     expect(shell().style.width).toBe('320px');
-    expect(shell('primary').dataset.widthMode).toBe('auto');
+    expect(shell('primary').style.width).toBe('360px');
     await choose('测试长标题');
     expect(shell().style.width).toBe('320px');
-    await choose('自动');
-    expect(shell().dataset.widthMode).toBe('auto');
-    expect(shell().style.width).toBe('max-content');
     expect(document.querySelector('input[aria-label*="高度"]')).toBeNull();
   });
 
@@ -177,31 +173,30 @@ describe('Space shortcut design playground', () => {
       card().querySelector('.sp-design-copy .sp-design-title'),
     ).not.toBeNull();
     await choose('测试短标题');
-    expect(shell().dataset.widthMode).toBe('auto');
-    expect(shell().style.width).toBe('max-content');
+    expect(shell().style.width).toBe('360px');
     expect(summaries[0].textContent).toBe('24 nodes · Updated 2 days ago');
     await choose('空间失效');
     expect(container.querySelector('[data-space-shortcut-summary]')).toBeNull();
-    expect(shell().style.width).toBe('max-content');
+    expect(shell().style.width).toBe('360px');
     await choose('正常');
     expect(
       container.querySelectorAll('[data-space-shortcut-summary]'),
     ).toHaveLength(2);
   });
 
-  it('validates width boundaries explicitly without mutating the node', async () => {
+  it('uses the shared picker clamping, rounding and invalid-draft restoration', async () => {
     await choose('宽度设置');
-    for (const value of ['', '239', '300.5', 'invalid', 'Infinity', '1e309']) {
+    await setWidthInput('320');
+    for (const value of ['', 'invalid', 'Infinity', '1e309']) {
       await setWidthInput(value);
-      await choose('应用宽度');
-      expect(document.querySelector('[role="alert"]')?.textContent).toContain(
-        '不小于 240',
-      );
-      expect(shell().dataset.widthMode).toBe('auto');
+      expect(shell().style.width).toBe('320px');
     }
+    await setWidthInput('239');
+    expect(shell().style.width).toBe('240px');
+    await setWidthInput('300.5');
+    expect(shell().style.width).toBe('301px');
     for (const value of ['240', '720', '721', '1200', '2400']) {
       await setWidthInput(value);
-      await choose('应用宽度');
       expect(shell().style.width).toBe(`${value}px`);
       expect(document.querySelector('[role="alert"]')).toBeNull();
     }
@@ -227,7 +222,6 @@ describe('Space shortcut design playground', () => {
       ),
     );
     expect(shell().style.width).toBe('736px');
-    expect(shell().dataset.widthMode).toBe('manual');
     expect(card('reference').style.fontSize).toBe('28px');
   });
 
@@ -235,7 +229,6 @@ describe('Space shortcut design playground', () => {
     await choose('空间失效');
     await choose('宽度设置');
     await setWidthInput('360');
-    await choose('应用宽度');
     expect(shell().style.width).toBe('360px');
     expect(entryButton().disabled).toBe(true);
     expect(container.querySelectorAll('.sp-design-width-grip')).toHaveLength(2);
@@ -243,10 +236,10 @@ describe('Space shortcut design playground', () => {
       '最多两行',
     );
     expect(container.querySelector('.sp-design-rules')?.textContent).toContain(
-      '宽度模式持久化',
+      '宽度持久化',
     );
     await choose('重置样例');
-    expect(shell().dataset.widthMode).toBe('auto');
+    expect(shell().style.width).toBe('360px');
   });
 
   it('uses production boundary, radius, spacing, and typography values', () => {
@@ -255,7 +248,6 @@ describe('Space shortcut design playground', () => {
     expect(card().style.borderWidth).toBe(`${boundary.borderWidth}px`);
     expect(card().style.borderColor).toBe(boundary.borderColor);
     expect(card().style.padding).toBe(`${NODE_CONTENT_SPACING.padding}px`);
-    expect(card().style.gap).toBe(`${NODE_CONTENT_SPACING.imageTextGap}px`);
     expect(card().style.fontSize).toBe(`${typography.size}px`);
     expect(card().style.fontWeight).toBe(`${typography.weight}`);
     expect(card().style.lineHeight).toBe(`${typography.lineHeight}`);
@@ -264,24 +256,20 @@ describe('Space shortcut design playground', () => {
       typography.size * typography.lineHeight +
       4 +
       NODE_TYPOGRAPHY.metadata.size * NODE_TYPOGRAPHY.metadata.lineHeight;
-    const icon = card().querySelector<SVGElement>('.sp-design-type-marker svg');
-    expect(parseFloat(icon?.style.marginTop ?? '')).toBeCloseTo(
-      (typography.size * typography.lineHeight - typography.size) / 2,
-    );
     expect(card().parentElement?.style.borderRadius).toBe(
       `${nodeMetricsForSize(420, height).radius}px`,
     );
   });
 
-  it('keeps the non-interactive type marker visible after deselection and preserves marker gestures', async () => {
+  it('keeps the title visible after deselection and preserves title gestures', async () => {
     await act(async () =>
       card('reference').dispatchEvent(
         new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
       ),
     );
     expect(container.querySelector('.nt-toolbar')).toBeNull();
-    const marker = card().querySelector('.sp-design-type-marker');
-    if (!marker) throw new Error('Missing space type marker');
+    const marker = card().querySelector('.sp-design-title');
+    if (!marker) throw new Error('Missing Space title');
     expect(marker.querySelector('button')).toBeNull();
     await act(async () =>
       marker.dispatchEvent(new MouseEvent('click', { bubbles: true })),

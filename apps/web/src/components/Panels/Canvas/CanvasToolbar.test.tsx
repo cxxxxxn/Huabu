@@ -9,15 +9,20 @@ import { NodeToolbar } from './CanvasToolbar';
 
 import type * as ReactI18next from 'react-i18next';
 
-const { listCanvases } = vi.hoisted(() => ({ listCanvases: vi.fn() }));
+const { listCanvases, addNodes, translate } = vi.hoisted(() => ({
+  listCanvases: vi.fn(),
+  addNodes: vi.fn(),
+  translate: (key: string) => key,
+}));
 const toolState = vi.hoisted(() => ({
   pendingNodeType: null as string | null,
+  setPendingNodeType: vi.fn(),
 }));
 const inputState = vi.hoisted(() => ({ isNotMouse: false }));
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof ReactI18next>()),
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: translate }),
 }));
 
 vi.mock('@/api/artifact', () => ({
@@ -29,8 +34,6 @@ vi.mock('@/api/artifact', () => ({
 }));
 
 vi.mock('@/api/canvas', () => ({ listCanvases }));
-
-vi.mock('@/config/shortcuts', () => ({ matchesShortcut: () => false }));
 
 vi.mock('@/hooks/useInputMode', () => ({
   useIsNotMouse: () => inputState.isNotMouse,
@@ -46,7 +49,7 @@ vi.mock('@/store/toolStore', () => ({
   ) =>
     selector({
       pendingNodeType: toolState.pendingNodeType,
-      setPendingNodeType: vi.fn(),
+      setPendingNodeType: toolState.setPendingNodeType,
       setSketchDraft: vi.fn(),
     }),
 }));
@@ -69,7 +72,7 @@ vi.mock('../../../store/canvasStore.ts', () => ({
     }) => unknown,
   ) =>
     selector({
-      addNodes: vi.fn(),
+      addNodes,
       undo: vi.fn(),
       redo: vi.fn(),
       canUndo: false,
@@ -88,6 +91,7 @@ vi.mock('../../Nodes/sketch/SketchSettingsPanel.tsx', () => ({
 
 let root: Root | undefined;
 let container: HTMLDivElement | undefined;
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 afterEach(() => {
   act(() => root?.unmount());
@@ -95,11 +99,46 @@ afterEach(() => {
   root = undefined;
   container = undefined;
   listCanvases.mockReset();
+  addNodes.mockClear();
   toolState.pendingNodeType = null;
+  toolState.setPendingNodeType.mockClear();
   inputState.isNotMouse = false;
 });
 
 describe('NodeToolbar', () => {
+  it('arms child Space placement from the primary toolbar button or shortcut 5', async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () =>
+      root?.render(<NodeToolbar activeTool="select" onToolChange={vi.fn()} />),
+    );
+    const create = container?.querySelector<HTMLButtonElement>(
+      'button[aria-label="spaceHierarchy.createChild (5)"]',
+    );
+    expect(create).not.toBeNull();
+    await act(async () => create?.click());
+    expect(toolState.setPendingNodeType).toHaveBeenCalledWith('childSpace');
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(listCanvases).not.toHaveBeenCalled();
+    toolState.setPendingNodeType.mockClear();
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: '5', bubbles: true }),
+      );
+    });
+    expect(toolState.setPendingNodeType).toHaveBeenCalledWith('childSpace');
+    toolState.pendingNodeType = 'childSpace';
+    await act(async () =>
+      root?.render(<NodeToolbar activeTool="select" onToolChange={vi.fn()} />),
+    );
+    await act(async () =>
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: '5', bubbles: true }),
+      ),
+    );
+    expect(toolState.setPendingNodeType).toHaveBeenLastCalledWith(null);
+  });
   it('uses roomier primary buttons without enlarging icons or compact dropdowns', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -114,6 +153,7 @@ describe('NodeToolbar', () => {
       'toolbar.nodes.text',
       'toolbar.nodes.frame',
       'toolbar.nodes.sketch',
+      'spaceHierarchy.createChild',
     ]) {
       const button = container.querySelector<HTMLButtonElement>(
         `button[aria-label^="${label}"]`,
@@ -268,7 +308,15 @@ describe('NodeToolbar', () => {
   );
 
   it('places Add Space Preview in the content dropdown', async () => {
-    listCanvases.mockResolvedValue({ canvases: [] });
+    listCanvases.mockResolvedValue({
+      canvases: [
+        { canvasId: 'space-a', title: 'Source' },
+        { canvasId: 'space-b', title: 'Folder' },
+        { canvasId: 'space-c', title: 'Nested', parentSpaceId: 'space-b' },
+        { canvasId: 'space-d', title: 'Own child', parentSpaceId: 'space-a' },
+        { canvasId: 'world', title: 'World' },
+      ],
+    });
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -309,5 +357,42 @@ describe('NodeToolbar', () => {
     await act(async () => previewAction?.click());
 
     expect(listCanvases).toHaveBeenCalledOnce();
+    const button = (label: string) =>
+      document.querySelector<HTMLButtonElement>(
+        `button[aria-label="${label}"]`,
+      );
+    expect(button('Source')?.disabled).toBe(true);
+    expect(button('Own child')?.disabled).toBe(false);
+    expect(button('World')).toBeNull();
+    expect(button('Nested')).toBeNull();
+    await act(async () =>
+      button('Folder')
+        ?.closest('li')
+        ?.querySelector<HTMLButtonElement>('button[aria-expanded]')
+        ?.click(),
+    );
+    expect(button('Nested')).not.toBeNull();
+    expect(addNodes).not.toHaveBeenCalled();
+    const search = document.querySelector<HTMLInputElement>(
+      'input[name="space-destination-search"]',
+    );
+    if (!search) throw new Error('Missing Space search');
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        'value',
+      )?.set?.call(search, 'Nested');
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(button('Nested')?.textContent).toContain('Folder');
+    await act(async () => button('Nested')?.click());
+    expect(addNodes).toHaveBeenCalledExactlyOnceWith([
+      {
+        nodeType: 'spacePreview',
+        data: { targetCanvasId: 'space-c', origin: { type: 'user-created' } },
+      },
+    ]);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.activeElement).toBe(menuTrigger);
   });
 });

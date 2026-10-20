@@ -232,10 +232,6 @@
 .sp-design-rules p {
   color: var(--fg-muted);
 }
-.sp-design-type-marker {
-  display: inline-flex;
-  flex-shrink: 0;
-}
 .sp-design-unavailable {
   margin: 12px 0 0;
   color: var(--warning);

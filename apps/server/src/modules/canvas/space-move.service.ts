@@ -29,6 +29,7 @@ import {
   type ExecuteOnServerOutput,
 } from './canvas-executor.js';
 import { publishCanvasUpdate } from './canvas-sync.js';
+import { hierarchyAncestors } from './space-hierarchy.js';
 import {
   buildSpaceMovePlan,
   SpaceMovePlanError,
@@ -49,9 +50,11 @@ import {
 import { agentThreadResolver } from '../agent/agent-thread-resolver.js';
 import { agentThreadService } from '../agent/agent-thread.service.js';
 import { acquireAgentTurn } from '../agent/turn-lease.js';
+import { withSpaceHierarchyLock } from '../storage/hierarchy-coordinator.js';
 import {
   createSpace,
   deleteSpace,
+  getStructuredStore,
   isWorldCanvasId,
   space,
 } from '../storage/index.js';
@@ -91,6 +94,8 @@ const MOVE_MESSAGES: Record<MoveSelectionErrorCode, string> = {
   MOVE_DESTINATION_MISSING: 'Destination Space was not found',
   MOVE_DESTINATION_SAME_AS_SOURCE:
     'Source and destination Spaces must be different',
+  MOVE_HIERARCHY_CYCLE:
+    'A child Space cannot be moved into itself or its descendants',
   MOVE_DESTINATION_CREATE_FAILED: 'The destination Space could not be created',
   MOVE_DESTINATION_CLEANUP_FAILED:
     'Destination cleanup failed. Reload both Spaces before retrying',
@@ -271,6 +276,21 @@ export async function moveCanvasSelection(
   sourceCanvasId: string,
   input: MoveSelectionBody,
 ): Promise<MoveSelectionResponse> {
+  return withSpaceHierarchyLock(() =>
+    moveCanvasSelectionUnlocked(sourceCanvasId, {
+      ...input,
+      createSourcePreview:
+        input.createSourcePreview ||
+        (input.destination.kind === 'new' &&
+          input.destination.asChild === true),
+    }),
+  );
+}
+
+async function moveCanvasSelectionUnlocked(
+  sourceCanvasId: string,
+  input: MoveSelectionBody,
+): Promise<MoveSelectionResponse> {
   const destinationCanvasId =
     input.destination.kind === 'existing'
       ? input.destination.canvasId
@@ -297,8 +317,18 @@ export async function moveCanvasSelection(
       }
       createdDestination = true;
     }
+    const repository = getStructuredStore().spaces();
+    const members = await repository.list();
+    const sourceChildren = members.filter(
+      (item) => item.parentSpaceId === sourceCanvasId,
+    );
     return await withCanvasMutexes(
-      [sourceCanvasId, destinationCanvasId],
+      // Disk parent updates read and rewrite the child's Space record.
+      [
+        sourceCanvasId,
+        destinationCanvasId,
+        ...sourceChildren.map((item) => item.canvasId),
+      ],
       async () => {
         phase = 'validation';
         const sourceHandle = space(sourceCanvasId);
@@ -347,6 +377,33 @@ export async function moveCanvasSelection(
             throw new SpaceMoveError(code, 409, { cause: error });
           }
           throw error;
+        }
+
+        const ownedChildren = sourceChildren.filter(
+          (child) =>
+            child.parentEntryNodeId &&
+            plan.movedIds.has(child.parentEntryNodeId),
+        );
+        if (ownedChildren.length > 0) {
+          const destinationAncestors = new Set(
+            hierarchyAncestors(members, destinationCanvasId).map(
+              (item) => item.canvasId,
+            ),
+          );
+          for (const child of ownedChildren) {
+            const entry = hydratedSource.find(
+              (node) => node.id === child.parentEntryNodeId,
+            );
+            if (
+              entry?.type !== 'spacePreview' ||
+              entry.data.targetCanvasId !== child.canvasId
+            ) {
+              throw new SpaceMoveError('MOVE_NODE_NOT_MOVABLE');
+            }
+            if (destinationAncestors.has(child.canvasId)) {
+              throw new SpaceMoveError('MOVE_HIERARCHY_CYCLE');
+            }
+          }
         }
 
         const taskSnapshot = await sourceHandle.tasks.read();
@@ -454,6 +511,34 @@ export async function moveCanvasSelection(
           });
           const completedThreads: typeof threadMoves = [];
           let sourceWrite: ExecuteOnServerOutput | undefined;
+          const parentChanges: Array<{
+            canvasId: string;
+            parentSpaceId: string | null;
+            parentEntryNodeId: string | null;
+          }> = [];
+          const changeParent = async (
+            canvasId: string,
+            parentSpaceId: string,
+            parentEntryNodeId: string,
+          ) => {
+            const previous = members.find((item) => item.canvasId === canvasId);
+            if (!previous) throw new SpaceMoveError('MOVE_SOURCE_STALE');
+            // Record before writing: a failed write can have an uncertain outcome.
+            parentChanges.push({
+              canvasId,
+              parentSpaceId: previous.parentSpaceId ?? null,
+              parentEntryNodeId: previous.parentEntryNodeId ?? null,
+            });
+            if (
+              !(await repository.setParent({
+                canvasId,
+                parentSpaceId,
+                parentEntryNodeId,
+              }))
+            ) {
+              throw new SpaceMoveError('MOVE_FAILED');
+            }
+          };
           try {
             if (
               destinationWrite.results.some((result) => !result.applied) ||
@@ -496,6 +581,23 @@ export async function moveCanvasSelection(
             });
             if (sourceWrite.results.some((result) => !result.applied)) {
               throw new SpaceMoveError('MOVE_SOURCE_STALE');
+            }
+            phase = 'hierarchy';
+            if (input.destination.kind === 'new' && input.destination.asChild) {
+              if (!plan.sourcePreviewNodeId)
+                throw new SpaceMoveError('MOVE_FAILED');
+              await changeParent(
+                destinationCanvasId,
+                sourceCanvasId,
+                plan.sourcePreviewNodeId,
+              );
+            }
+            for (const child of ownedChildren) {
+              const entryId =
+                child.parentEntryNodeId &&
+                plan.nodeIdMap.get(child.parentEntryNodeId);
+              if (!entryId) throw new SpaceMoveError('MOVE_SOURCE_STALE');
+              await changeParent(child.canvasId, destinationCanvasId, entryId);
             }
             phase = 'publication';
             publishExecution(destinationWrite);
@@ -560,6 +662,12 @@ export async function moveCanvasSelection(
               throw failure;
             }
             try {
+              compensation = 'hierarchy';
+              for (const previous of parentChanges.reverse()) {
+                if (!(await repository.setParent(previous))) {
+                  throw new SpaceMoveError('MOVE_COMPENSATION_FAILED', 500);
+                }
+              }
               compensation = 'threads';
               for (const move of completedThreads.reverse()) {
                 await agenetes.rehome(

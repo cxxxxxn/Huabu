@@ -5,6 +5,8 @@ import { findSketchStrokesInPolygon } from '@/components/Nodes/sketch/sketchHitT
 import { nodesInSelection } from '@/components/Panels/Canvas/areaSelection';
 import useCanvasStore from '@/store/canvasStore';
 import { useGesturePreviewStore } from '@/store/gesturePreviewStore';
+import { useWorkspaceStore } from '@/store/workspaceStore';
+import { isVisibleWorldNode } from '@/utils/spaceHierarchy';
 
 import type { SelectionArea } from '@/utils/selectionGeometry';
 
@@ -58,9 +60,18 @@ export function createAreaSelectionSession(strokeLevel = false) {
       if (!sameCanvas()) return;
       changed = true;
       const state = useCanvasStore.getState();
+      const workspace = useWorkspaceStore.getState();
+      const visibleNodes = state.nodes.filter((node) =>
+        isVisibleWorldNode(
+          node,
+          state.canvasId,
+          workspace.worldCanvasId,
+          workspace.spaceSummaries,
+        ),
+      );
       const candidates = strokeLevel
-        ? state.nodes.filter((node) => node.type !== 'sketch')
-        : state.nodes;
+        ? visibleNodes.filter((node) => node.type !== 'sketch')
+        : visibleNodes;
       // Keep ancestors in the geometry resolver, even when their Sketch ink is selected separately.
       const hits = area ? nodesInSelection(state.nodes, area) : [];
       const eligible = new Set(candidates.map((node) => node.id));

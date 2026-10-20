@@ -463,8 +463,8 @@ describe('World preview reconciliation', () => {
         position: node.position,
       })),
     ).toEqual([
-      { target: 'canvas-a', position: { x: 560, y: 0 } },
-      { target: 'canvas-b', position: { x: 1120, y: 0 } },
+      { target: 'canvas-a', position: { x: 440, y: 0 } },
+      { target: 'canvas-b', position: { x: 880, y: 0 } },
     ]);
     const first = await space('canvas-world').read();
     await reconcileWorldPreviews();

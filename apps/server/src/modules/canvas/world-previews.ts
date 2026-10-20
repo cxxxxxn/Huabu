@@ -16,7 +16,7 @@ import { executeOnServer } from './canvas-executor.js';
 import { getStructuredStore, space } from '../storage/index.js';
 
 const PREVIEW_SIZE = getNodeDefaultSize('spacePreview');
-const PREVIEW_WIDTH = SPACE_SHORTCUT_SIZE.autoMaxWidth;
+const PREVIEW_WIDTH = SPACE_SHORTCUT_SIZE.defaultWidth;
 const PREVIEW_HEIGHT = SPACE_SHORTCUT_SIZE.autoMaxHeight;
 const PREVIEW_GAP = 80;
 const PREVIEW_COLUMNS = 4;
@@ -155,10 +155,10 @@ async function planWorldPreviewReconciliation(): Promise<WorldPreviewReconciliat
     return {
       x: position.x,
       y: position.y,
-      width:
-        node.type === 'spacePreview' && node.data?.widthMode === 'auto'
-          ? PREVIEW_WIDTH
-          : dimension(node.style?.width, 200),
+      width: dimension(
+        node.style?.width,
+        node.type === 'spacePreview' ? PREVIEW_WIDTH : 200,
+      ),
       height:
         node.type === 'spacePreview'
           ? PREVIEW_HEIGHT

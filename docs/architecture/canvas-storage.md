@@ -1,6 +1,6 @@
 # Canvas Storage Architecture
 
-> Last updated: 2026-10-19
+> Last updated: 2026-10-20
 
 ## 1. Overview
 
@@ -15,6 +15,8 @@ Conversation persistence binds captured Agenetes namespaces to the immutable Wor
 The recent-conversation GET includes its Space existence check inside that same leased, mutex-protected read and uses the captured Space handle for both validation and index access. Resolving a pending acceptance repairs the index once, removing the marker for either a proven accepted turn or a rejected append; later reads no longer scan that thread's history. Repair-write failure is logged while ordinary reads return the already verified pointer and leave the pending index retryable. Rehome cleanup requires successful repair before deleting canonical history, so the only durable proof of acceptance cannot disappear while the pointer is still pending.
 
 ## 2. Disk Layout
+
+Space ownership is logical metadata, not directory nesting. Ordinary Space records optionally store `parentSpaceId` and `parentEntryNodeId`; missing/null fields mean top-level. SQLite and PostgreSQL add `parent_space_id` / `parent_entry_node_id` and a Workspace/parent index in migration v2. The collection's trusted `setParent` primitive persists both fields, while the canvas hierarchy service owns existence, cycle, and canonical-entry checks under its Workspace-leased process lock. Ordinary structural writes preserve stored hierarchy instead of accepting it from clients. Disk summaries capture hierarchy in the existing directory-index scan without extra record reads or write-back. Imported single-Space bundles clear ownership and remain top-level; they do not recursively import children. See [Space ownership and lifecycle](./space-preview.md#space-ownership-and-lifecycle) for API, navigation, deletion, and concurrency guarantees.
 
 ```
 <HUABU_DATA_DIR>/

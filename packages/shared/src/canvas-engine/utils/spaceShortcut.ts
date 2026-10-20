@@ -5,7 +5,6 @@ import type { Node } from '@xyflow/react';
 
 export const SPACE_SHORTCUT_SIZE = {
   minWidth: 240,
-  autoMaxWidth: 480,
   defaultWidth: 360,
   defaultHeight: 102,
   autoMaxHeight: 138,
@@ -22,7 +21,7 @@ export function normalizeSpaceShortcut(node: Node): Node {
     typeof node.style?.width === 'number' && Number.isFinite(node.style.width)
       ? clampSpaceShortcutWidth(node.style.width)
       : SPACE_SHORTCUT_SIZE.defaultWidth;
-  const widthMode = node.data.widthMode === 'auto' ? 'auto' : 'fixed';
+  const widthMode = 'fixed';
   if (
     node.style?.width === width &&
     node.style.height === undefined &&

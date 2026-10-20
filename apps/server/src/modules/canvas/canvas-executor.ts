@@ -69,6 +69,7 @@ import { publishCanvasUpdate } from './canvas-sync.js';
 import { importForeignNodeSources } from './import-node-src.js';
 import {
   assertWorldPreviewMutationsAllowed,
+  assertChildSpaceEntriesAllowed,
   assertWorldPreviewResultAllowed,
   assertWorldPreviewTopologyAllowed,
   assertCurrentCanvasCommands,
@@ -998,6 +999,8 @@ async function executePreparedOnServerAlreadyLocked(
       ? assertWorldPreviewResultAllowed
       : assertWorldPreviewTopologyAllowed;
   assertResultAllowed(canvasId, prestateNodes, finalNodes, liveCanvasIds);
+  if (originator.source !== 'system')
+    await assertChildSpaceEntriesAllowed(canvasId, finalNodes);
 
   const deltas = diffCanvasState(
     { nodes: prestateNodes, edges: prestateEdges },
@@ -1483,6 +1486,8 @@ export async function applyDeltasOnServerAlreadyLocked(input: {
         ? assertWorldPreviewResultAllowed
         : assertWorldPreviewTopologyAllowed;
     assertResultAllowed(canvasId, prestateNodes, finalNodes, liveCanvasIds);
+    if (originator.source !== 'system')
+      await assertChildSpaceEntriesAllowed(canvasId, finalNodes);
 
     // Recompute the authoritative diff so the log row and broadcast
     // reflect exactly what landed (tolerates already-applied / missing

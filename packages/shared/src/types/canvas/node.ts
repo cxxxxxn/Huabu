@@ -671,7 +671,7 @@ export interface FrameNodeData extends BaseNodeData {
 export interface SpacePreviewNodeData extends BaseNodeData {
   type: 'spacePreview';
   targetCanvasId: string;
-  /** Missing on legacy previews, which retain a bounded fixed width. */
+  /** Legacy compatibility field; all widths are fixed, including old 'auto' values. */
   widthMode?: 'auto' | 'fixed';
 }
 

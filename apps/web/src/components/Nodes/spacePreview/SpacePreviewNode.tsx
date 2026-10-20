@@ -2,8 +2,8 @@
 // Licensed under the MIT license.
 
 import { useStore } from '@xyflow/react';
-import { AlertTriangle, ArrowUpRight, RefreshCw } from 'lucide-react';
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
+import { ArrowUpRight, RefreshCw } from 'lucide-react';
+import { memo, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
@@ -15,10 +15,9 @@ import { NODE_BORDER_WIDTH } from '@/components/Nodes/design/nodeBoundary';
 import { NODE_CONTENT_SPACING } from '@/components/Nodes/design/nodeSpacing';
 import { NODE_TYPOGRAPHY } from '@/components/Nodes/design/nodeTypography';
 import { NodeWrapper } from '@/components/Nodes/NodeWrapper';
-import { getNodeIcon } from '@/config/nodeIcons';
 import useCanvasStore from '@/store/canvasStore';
+import { useWorkspaceStore } from '@/store/workspaceStore';
 import { FONT_FAMILY_CSS } from '@/utils/node/nodeFontConfig';
-import { measureTextContent } from '@/utils/node/textMeasure';
 
 import {
   OPEN_SPACE_SHORTCUT_EVENT,
@@ -31,61 +30,40 @@ import type { SpacePreviewNodeData } from '@/components/Nodes/types';
 import type { Node, NodeProps } from '@xyflow/react';
 
 export type SpacePreviewNodeType = Node<SpacePreviewNodeData, 'spacePreview'>;
-const SpaceIcon = getNodeIcon('spacePreview');
 const typography = NODE_TYPOGRAPHY.cardTitle;
-const chromeWidth =
-  2 * (NODE_BORDER_WIDTH + NODE_CONTENT_SPACING.padding) +
-  typography.size +
-  NODE_CONTENT_SPACING.imageTextGap;
 
 export const SpacePreviewNode = memo(
   ({ id, data, selected }: NodeProps<SpacePreviewNodeType>) => {
     const { t } = useTranslation();
     const navigate = useNavigate();
     const target = useSpaceShortcutTarget(data.targetCanvasId);
-    const widthMode = data.widthMode ?? 'fixed';
-    const automaticWidth = useMemo(() => {
-      const measured = measureTextContent(target.title, {
-        fontFamily: FONT_FAMILY_CSS.default,
-        fontWeight: String(typography.weight),
-        fontStyle: 'normal',
-        lineHeight: typography.lineHeight,
-        fontSize: typography.size,
-        maxWidth: 100_000,
-      });
-      return Math.min(
-        SPACE_SHORTCUT_SIZE.autoMaxWidth,
-        Math.max(SPACE_SHORTCUT_SIZE.minWidth, measured.width + chromeWidth),
-      );
-    }, [target.title]);
+    const canvasId = useCanvasStore((state) => state.canvasId);
+    const workspaceId = useWorkspaceStore((state) => state.workspaceId);
+    const worldId = useWorkspaceStore((state) => state.worldCanvasId);
+    const isChildEntry = useWorkspaceStore(
+      (state) =>
+        state.spaceSummaries[data.targetCanvasId]?.parentSpaceId === canvasId &&
+        state.spaceSummaries[data.targetCanvasId]?.parentEntryNodeId === id,
+    );
     const liveWidth = useStore(
       (state) => state.nodeLookup.get(id)?.style?.width,
     );
-    const resizing = useStore((state) => !!state.nodeLookup.get(id)?.resizing);
-    useLayoutEffect(() => {
-      if (widthMode !== 'auto' || resizing) return;
-      const state = useCanvasStore.getState();
-      const node = state.nodes.find((entry) => entry.id === id);
-      if (!node || node.resizing || node.style?.width === automaticWidth)
-        return;
-      // Derived width is a renderer measurement, not a user edit or an undo step.
-      state._setStateNoAutosave({
-        nodes: state.nodes.map((entry) =>
-          entry.id === id
-            ? {
-                ...entry,
-                style: { ...entry.style, width: automaticWidth },
-                measured: { ...entry.measured, width: automaticWidth },
-              }
-            : entry,
-        ),
-      });
-    }, [id, automaticWidth, widthMode, liveWidth, resizing]);
     const canOpen = target.status === 'ready';
     const openTarget = useCallback(() => {
-      if (canOpen)
-        navigate(`/canvas/${encodeURIComponent(data.targetCanvasId)}`);
-    }, [canOpen, data.targetCanvasId, navigate]);
+      if (canOpen) {
+        const path = `/canvas/${encodeURIComponent(data.targetCanvasId)}`;
+        if (isChildEntry) navigate(path);
+        else
+          navigate(path, { state: { returnToSpace: canvasId, workspaceId } });
+      }
+    }, [
+      canOpen,
+      data.targetCanvasId,
+      navigate,
+      isChildEntry,
+      canvasId,
+      workspaceId,
+    ]);
     useEffect(() => {
       if (!selected) return;
       const open = (event: Event) => {
@@ -108,7 +86,11 @@ export const SpacePreviewNode = memo(
           ? t('spacePreview.missingTarget')
           : target.status === 'error' || target.error !== null
             ? (target.error ?? t('spacePreview.targetsUnavailable'))
-            : t('spacePreview.shortcut');
+            : t(
+                isChildEntry
+                  ? 'spaceHierarchy.childEntry'
+                  : 'spacePreview.shortcut',
+              );
 
     return (
       <NodeWrapper
@@ -154,45 +136,55 @@ export const SpacePreviewNode = memo(
                 ? liveWidth - 2 * NODE_BORDER_WIDTH
                 : undefined,
             padding: NODE_CONTENT_SPACING.padding,
-            gap: NODE_CONTENT_SPACING.imageTextGap,
             fontFamily: FONT_FAMILY_CSS.default,
             fontSize: typography.size,
             fontWeight: typography.weight,
             lineHeight: typography.lineHeight,
           }}
         >
-          <Tooltip content={statusText}>
-            <span
-              style={{
-                marginTop: (typography.size * (typography.lineHeight - 1)) / 2,
-              }}
-              className={
-                failed ? 'text-warning shrink-0' : 'text-fg-muted shrink-0'
-              }
-            >
-              {failed ? (
-                <AlertTriangle size={typography.size} aria-hidden />
-              ) : (
-                <SpaceIcon size={typography.size} aria-hidden />
-              )}
-            </span>
-          </Tooltip>
           <div className="flex min-w-0 flex-1 flex-col gap-1">
-            <span className="line-clamp-2 wrap-anywhere" title={target.title}>
-              {target.title}
-            </span>
+            <div className="flex items-start gap-1">
+              <span
+                className="line-clamp-2 min-w-0 wrap-anywhere"
+                title={target.title}
+              >
+                {target.title}
+              </span>
+              {!isChildEntry &&
+              canvasId !== worldId &&
+              target.status === 'ready' ? (
+                <Tooltip
+                  content={t('spacePreview.shortcutLabel')}
+                  wrapperClassName="inline-flex h-[1lh] shrink-0 items-center"
+                >
+                  <ArrowUpRight
+                    size="1em"
+                    style={{ width: '1em', height: '1em' }}
+                    aria-label={t('spacePreview.shortcutLabel')}
+                  />
+                </Tooltip>
+              ) : null}
+            </div>
             {target.status === 'ready' ? (
               <SpaceShortcutSummary
                 nodeCount={target.nodeCount}
                 updatedAt={target.updatedAt}
               />
             ) : null}
+            {target.status !== 'ready' || target.error !== null ? (
+              <span
+                className={failed ? 'text-warning' : 'text-fg-muted'}
+                style={{
+                  fontSize: NODE_TYPOGRAPHY.metadata.size,
+                  lineHeight: NODE_TYPOGRAPHY.metadata.lineHeight,
+                  fontWeight: 400,
+                }}
+                role="status"
+              >
+                {statusText}
+              </span>
+            ) : null}
           </div>
-          {target.status !== 'ready' || target.error !== null ? (
-            <span className="sr-only" role="status">
-              {statusText}
-            </span>
-          ) : null}
         </div>
       </NodeWrapper>
     );

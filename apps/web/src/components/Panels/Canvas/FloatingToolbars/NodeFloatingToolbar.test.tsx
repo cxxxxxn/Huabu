@@ -53,6 +53,7 @@ vi.mock('@xyflow/react', () => ({
   }),
 }));
 vi.mock('react-i18next', () => ({
+  initReactI18next: { type: '3rdParty', init: vi.fn() },
   useTranslation: () => ({
     t: (key: string) => (key === 'node.dragToMove' ? 'Drag to move' : key),
   }),
@@ -190,6 +191,36 @@ describe('NodeFloatingToolbar type-icon drag surface', () => {
     expect(trigger?.isConnected).toBe(true);
     expect(document.querySelector('.node-toolbar-overflow')).toBeNull();
   });
+
+  it.each(['video', 'spacePreview'] as const)(
+    'keeps single %s collection and movement in More',
+    (type) => {
+      render({
+        type,
+        data:
+          type === 'spacePreview'
+            ? { type, targetCanvasId: 'target' }
+            : { type, src: 'video.webm' },
+      });
+      expect(
+        container.querySelector('[aria-label^="spaceHierarchy.collectAction"]'),
+      ).toBeNull();
+      expect(document.body.textContent).not.toContain(
+        'spaceHierarchy.collectAction',
+      );
+      openPanel('toolbar.more');
+      const item = Array.from(
+        document.querySelectorAll('[role="menuitem"]'),
+      ).find((element) =>
+        element.textContent?.includes('spaceHierarchy.collectAction'),
+      );
+      expect(item).toBeDefined();
+      expect(item?.querySelector('.lucide-layers-2')).not.toBeNull();
+      expect(
+        document.querySelector('.node-toolbar-overflow')?.textContent,
+      ).toContain('moveSelection.action');
+    },
+  );
 
   it.each([
     { nested: false, detail: 1 },
@@ -365,7 +396,7 @@ describe('NodeFloatingToolbar type-icon drag surface', () => {
     ['audio', 'mic'],
     ['office', 'file-type-corner'],
     ['frame', 'frame'],
-    ['spacePreview', 'panels-top-left'],
+    ['spacePreview', 'layers-2'],
     ['question', 'message-circle-question-mark'],
     ['sketch', 'pencil'],
   ] as const)(

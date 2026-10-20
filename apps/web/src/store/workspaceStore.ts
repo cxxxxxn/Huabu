@@ -22,7 +22,10 @@ import { i18n } from '../i18n';
 
 import type { CanvasSummary } from '@huabu/shared';
 
-type SpaceSummary = Pick<CanvasSummary, 'nodeCount' | 'updatedAt'>;
+type SpaceSummary = Pick<
+  CanvasSummary,
+  'nodeCount' | 'updatedAt' | 'parentSpaceId' | 'parentEntryNodeId'
+>;
 
 const WORLD_ENABLED_KEY = 'huabu:world-enabled';
 
@@ -227,10 +230,18 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
           spaceSummaries: Object.fromEntries(
             canvases
               .filter((canvas) => !request.invalidated.has(canvas.canvasId))
-              .map(({ canvasId, nodeCount, updatedAt }) => [
-                canvasId,
-                { nodeCount, updatedAt },
-              ]),
+              .map(
+                ({
+                  canvasId,
+                  nodeCount,
+                  updatedAt,
+                  parentSpaceId,
+                  parentEntryNodeId,
+                }) => [
+                  canvasId,
+                  { nodeCount, updatedAt, parentSpaceId, parentEntryNodeId },
+                ],
+              ),
           ),
           spaceTitlesStatus: 'ready',
           spaceTitlesError: null,
