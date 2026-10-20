@@ -530,10 +530,20 @@ export class AgentThreadService {
       if (
         !signal.aborted &&
         envelope?.user.inputKind === 'ink-intent' &&
-        binding.kind === 'internal' &&
-        (effectiveMode !== 'operate' || agentTarget?.agentMode === 'ask')
+        binding.kind === 'internal'
       ) {
-        throw new InkAgentModeError();
+        const liveTarget = agentTarget
+          ? await this.dependencies.resolveAgentNode(
+              agentTarget.canvasId,
+              agentTarget.threadId,
+            )
+          : null;
+        if (
+          effectiveMode !== 'operate' ||
+          liveTarget?.agentMode === 'ask' ||
+          (agentTarget && liveTarget?.nodeId !== agentTarget.nodeId)
+        )
+          throw new InkAgentModeError();
       }
       if (signal.aborted) {
         await settle('done');

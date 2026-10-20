@@ -285,7 +285,12 @@ export const StrokeSelectionToolbar = () => {
     [agentProfiles, selectableProfileIds],
   );
   const defaultBinding = recentProfileId ? getDefaultAgentBinding() : null;
-  const conversations = useMemo<InkAgentConversationOption[]>(() => {
+  const conversations = useMemo<
+    (InkAgentConversationOption & {
+      threadId?: string;
+      inkCompatible: boolean;
+    })[]
+  >(() => {
     void chatState;
     void pendingForks;
     if (!hasSelection) return [];
@@ -298,6 +303,8 @@ export const StrokeSelectionToolbar = () => {
           : { binding: { kind: 'internal' } as const, mode: 'ask' as const };
         return {
           nodeId: node.id,
+          threadId: target?.threadId,
+          inkCompatible: !target || canReceiveInk({ binding, mode }),
           title:
             typeof node.data.label === 'string' && node.data.label.trim()
               ? node.data.label
@@ -331,11 +338,9 @@ export const StrokeSelectionToolbar = () => {
     selectionSession,
     conversations: conversations.map((conversation) => ({
       nodeId: conversation.nodeId,
-      threadId: resolveInkQuestionTarget(
-        nodes.find((node) => node.id === conversation.nodeId),
-      )?.threadId,
+      threadId: conversation.threadId,
       available: !conversation.disabledReason,
-      inkCompatible: canReceiveInk(conversation),
+      inkCompatible: conversation.inkCompatible,
     })),
   });
   const selectedTargetId =
@@ -396,7 +401,9 @@ export const StrokeSelectionToolbar = () => {
     destination.kind === 'continue' &&
     startedDestination?.nodeId === destination.nodeId &&
     startedDestination.threadId === destination.threadId;
-  const compatibleConversations = conversations.filter(canReceiveInk);
+  const compatibleConversations = conversations.filter(
+    (conversation) => conversation.inkCompatible,
+  );
   const pickerConversations = isOwnSubmission
     ? compatibleConversations.map((conversation) =>
         conversation.nodeId === startedDestination.nodeId &&

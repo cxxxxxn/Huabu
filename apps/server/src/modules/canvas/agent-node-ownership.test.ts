@@ -14,6 +14,7 @@ import { applyDeltasOnServer, executeOnServer } from './canvas-executor.js';
 import { subscribeCanvasUpdates } from './canvas-sync.js';
 import canvasRoutes from './canvas.route.js';
 import { agenetes } from '../agent/agenetes/drivers.js';
+import { acquireAgentTurn } from '../agent/turn-lease.js';
 import { createSpace, space } from '../storage/index.js';
 import {
   forEachProductProfile,
@@ -150,6 +151,75 @@ forEachProductProfile((profile, label) => {
       expect(rejected.json().code).toBe('execution_record_missing');
       expect((await current()).position).toEqual({ x: 40, y: 60 });
       expect((await currentCanvas()).version).toBe(response.json().version);
+    });
+
+    it('rejects mode changes through PUT and undo while admission is held', async () => {
+      await executeOnServer({
+        canvasId,
+        originator: { source: 'ui' },
+        commands: [
+          {
+            type: 'MERGE_NODE_DATA',
+            patches: [
+              { nodeId: 'node-agent', patch: { agentMode: 'operate' } },
+            ],
+          },
+        ],
+      });
+      const before = await current();
+      const version = (await currentCanvas()).version;
+      const release = acquireAgentTurn('thread-agent');
+      expect(release).not.toBeNull();
+      try {
+        const response = await app.inject({
+          method: 'PUT',
+          url: `/canvas/${canvasId}`,
+          payload: {
+            version,
+            state: {
+              nodes: [
+                { id: node.id, type: 'question', data: { agentMode: 'ask' } },
+              ],
+              edges: [],
+            },
+          },
+        });
+        expect(response.statusCode).toBe(409);
+        expect(response.json().code).toBe('agent_draft_busy');
+        const { agentMode: _mode, ...withoutMode } = before.data;
+        await expect(
+          applyDeltasOnServer({
+            canvasId,
+            originator: { source: 'ui' },
+            deltas: [
+              {
+                type: 'REPLACE_NODE',
+                prev: before,
+                next: { ...before, data: withoutMode },
+              },
+            ],
+          }),
+        ).rejects.toMatchObject({ code: 'agent_draft_busy' });
+        expect((await current()).data.agentMode).toBe('operate');
+        expect((await currentCanvas()).version).toBe(version);
+      } finally {
+        release?.();
+      }
+      const response = await app.inject({
+        method: 'PUT',
+        url: `/canvas/${canvasId}`,
+        payload: {
+          version,
+          state: {
+            nodes: [
+              { id: node.id, type: 'question', data: { agentMode: 'ask' } },
+            ],
+            edges: [],
+          },
+        },
+      });
+      expect(response.statusCode).toBe(200);
+      expect((await current()).data.agentMode).toBe('ask');
     });
 
     it('initializes a legacy Question once without creating an execution record', async () => {

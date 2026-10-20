@@ -60,6 +60,8 @@ For an Ink-initiated turn, the Agent must deliver an actual Canvas response with
 | `responseSummary`         | reserved  | Teaser field; not yet written by the runner                                                                                               |
 | `pendingInkIntentLabel`   | ✅        | Marks only a newly created Ink Question whose placeholder may be replaced by the first reported interpretation summary                    |
 
+Mode edits acquire the same nonblocking turn lease as prompt admission and retain it through the Canvas write. A mode change during preparation or execution is rejected as `agent_draft_busy`; unchanged mode echoes and display edits remain allowed. Unlike binding identity and launch overrides, Ask/Operate mode remains editable after binding whenever the conversation is idle.
+
 Not persisted: the server invocation phase and cancellation controller, plus the browser's stream controller and request feedback. The complete Node is a read model, not a writable snapshot: ordinary Canvas PUT, commands, and undo omit or preserve the server-owned fields and cannot replace the thread association.
 Question nodes are content nodes: preprocessing delegates their `content` to `ConversationTitleService.initializeQuestion()` rather than running a separate `generate_label` stage. The profile has no `persist_source`, so Questions do **not** enter the knowledge base. They remain visible to agents (`type: 'question'` in `get_space_outline`). See [node-preprocessing.md](./node-preprocessing.md) for the profile and option gates.
 
