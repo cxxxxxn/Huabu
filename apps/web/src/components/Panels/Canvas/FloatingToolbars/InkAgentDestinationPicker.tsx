@@ -360,6 +360,7 @@ export function InkAgentDestinationPicker({
               }
               currentMode={mode}
               profiles={profiles}
+              builtInModes={['operate']}
               busy={disabled}
               onSelect={(choice) => {
                 if (disabled) return;

@@ -81,7 +81,7 @@ test('Ink submission spinner stays centered throughout rotation and respects red
   await expect(send).toHaveAttribute('aria-label', 'Sending ink request');
 });
 
-test('Ink supports read-only Chat in new and recent destinations alongside external bindings', async ({
+test('Ink excludes built-in Chat from new and recent destinations while retaining external bindings', async ({
   page,
 }) => {
   await page.route(
@@ -114,19 +114,21 @@ test('Ink supports read-only Chat in new and recent destinations alongside exter
     ]);
   });
   const trigger = page.locator('.ink-agent-destination-trigger');
-  await expect(trigger).toContainText('Conversation 1');
+  await expect(trigger).toContainText('Conversation 2');
   const send = page.locator('.ink-context-toolbar .canvas-context-submit');
   await expect(send).toBeEnabled();
   await trigger.tap();
   const menu = page.getByRole('menu');
   await expect(
     menu.getByRole('menuitem', { name: /Conversation 1/ }),
-  ).toBeEnabled();
+  ).toHaveCount(0);
   await expect(
     menu.getByRole('menuitem', { name: /Conversation 2/ }),
   ).toBeEnabled();
   const newGroup = menu.getByRole('group', { name: 'New conversation' });
-  await expect(newGroup.getByRole('menuitem', { name: /^Chat/ })).toBeEnabled();
+  await expect(newGroup.getByRole('menuitem', { name: /^Chat/ })).toHaveCount(
+    0,
+  );
   await expect(
     newGroup.getByRole('menuitem', { name: /^Agent/ }),
   ).toBeEnabled();

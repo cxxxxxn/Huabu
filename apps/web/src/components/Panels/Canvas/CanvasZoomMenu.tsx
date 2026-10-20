@@ -68,7 +68,7 @@ export function CanvasZoomMenu() {
   return (
     <Panel
       position="bottom-left"
-      className="react-flow__controls bg-surface mx-4! my-6!"
+      className="react-flow__controls bg-surface mx-4! mt-6! mb-[14px]!"
     >
       <DropdownMenu
         floating

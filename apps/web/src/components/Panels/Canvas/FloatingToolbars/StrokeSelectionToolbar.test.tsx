@@ -361,7 +361,7 @@ afterEach(() => {
 });
 
 describe('StrokeSelectionToolbar Ink submission', () => {
-  it('previews and confirms a cached read-only recent conversation without changing its mode', async () => {
+  it('ignores a cached read-only recent conversation without changing its mode', async () => {
     mocks.dispatch.mockResolvedValueOnce({ status: 'completed' });
     addQuestion({ agentMode: 'ask' });
     mocks.recentConversation.mockResolvedValue({
@@ -374,33 +374,36 @@ describe('StrokeSelectionToolbar Ink submission', () => {
         sketchStrokeSelection: { 'sketch-1': ['stroke-1'] },
       });
     });
-    expect(document.querySelector('[data-picker-target]')?.textContent).toBe(
-      'question-1',
-    );
+    expect(
+      document.querySelector('[data-picker-target]')?.textContent,
+    ).not.toBe('question-1');
+    expect(document.querySelector('[data-continue="question-1"]')).toBeNull();
     expect(sendButton().disabled).toBe(false);
     await act(async () => sendButton().click());
     expect(mocks.prepare).toHaveBeenCalledWith(
-      expect.objectContaining({ inputKind: 'ink-intent', mode: 'ask' }),
+      expect.objectContaining({
+        inputKind: 'ink-intent',
+        session: expect.not.objectContaining({ threadId: 'thread-existing' }),
+      }),
     );
+    expect(
+      useCanvasStore.getState().nodes.find((node) => node.id === 'question-1')
+        ?.data.agentMode,
+    ).toBe('ask');
   });
 
-  it('creates a new read-only conversation when Chat is explicitly chosen', async () => {
-    mocks.dispatch.mockResolvedValueOnce({ status: 'completed' });
+  it('rejects a stale explicit Chat choice before creating a conversation', async () => {
     await renderToolbar();
     await act(async () =>
       document.querySelector<HTMLButtonElement>('[data-new-chat]')?.click(),
     );
     await act(async () => sendButton().click());
-    expect(mocks.createQuestion).toHaveBeenCalledWith(
-      expect.objectContaining({ binding: { kind: 'internal' }, mode: 'ask' }),
-    );
-    expect(mocks.prepare).toHaveBeenCalledWith(
-      expect.objectContaining({ inputKind: 'ink-intent', mode: 'ask' }),
-    );
-    expect(toast).not.toHaveBeenCalled();
+    expect(mocks.createQuestion).not.toHaveBeenCalled();
+    expect(mocks.prepare).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalled();
   });
 
-  it('keeps the snapshotted conversation mode when the live node changes before dispatch', async () => {
+  it('blocks dispatch when the conversation switches to Chat during preparation', async () => {
     addQuestion();
     let callbacks: AgentTurnCallbacks | undefined;
     const completion = deferredResult();
@@ -421,13 +424,13 @@ describe('StrokeSelectionToolbar Ink submission', () => {
         ),
       });
     });
-    expect(callbacks?.canDispatch?.()).toBe(true);
+    expect(callbacks?.canDispatch?.()).toBe(false);
     await act(async () => completion.resolve({ status: 'rejected' }));
     expect(useGesturePreviewStore.getState().sketchStrokeSelection).toEqual({
       'sketch-1': ['stroke-1'],
     });
-    mocks.dispatch.mockResolvedValueOnce({ status: 'completed' });
-    await act(async () => sendButton().click());
+    expect(sendButton().disabled).toBe(true);
+    expect(mocks.prepare).toHaveBeenCalledOnce();
     expect(mocks.prepare).toHaveBeenLastCalledWith(
       expect.objectContaining({ inputKind: 'ink-intent', mode: 'operate' }),
     );
@@ -1864,8 +1867,7 @@ describe('StrokeSelectionToolbar Ink submission', () => {
     expect(mocks.createQuestion).not.toHaveBeenCalled();
   });
 
-  it('continues an internal Question in its persisted ask mode', async () => {
-    mocks.dispatch.mockResolvedValueOnce({ status: 'completed' });
+  it('excludes an internal Ask conversation from continuation', async () => {
     useCanvasStore.getState()._setStateNoAutosave({
       nodes: [
         {
@@ -1888,27 +1890,10 @@ describe('StrokeSelectionToolbar Ink submission', () => {
       ],
     });
     await mountToolbar();
-    const button = sendButton();
-
-    await selectConversation();
-    await act(async () => button.click());
-
+    expect(document.querySelector('[data-continue="question-1"]')).toBeNull();
     expect(mocks.createQuestion).not.toHaveBeenCalled();
-    expect(mocks.prepare).toHaveBeenCalledWith(
-      expect.objectContaining({
-        inputKind: 'ink-intent',
-        mode: 'ask',
-        session: expect.objectContaining({
-          threadId: 'thread-1',
-          conversationView: expect.objectContaining({
-            conversationOwner: expect.objectContaining({
-              nodeId: 'question-1',
-            }),
-          }),
-        }),
-      }),
-    );
-    expect(mocks.dispatch).toHaveBeenCalledTimes(1);
+    expect(mocks.prepare).not.toHaveBeenCalled();
+    expect(mocks.dispatch).not.toHaveBeenCalled();
     expect(mocks.listProfiles).not.toHaveBeenCalled();
   });
 

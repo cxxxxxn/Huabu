@@ -79,6 +79,7 @@ import {
 } from './InkAgentDestinationPicker';
 import {
   deriveInkSubmissionCandidate,
+  canReceiveInk,
   groundingOperandsFromContext,
   inkLassoIdentity,
   inkSelectionIdentity,
@@ -304,14 +305,15 @@ export const StrokeSelectionToolbar = () => {
           binding,
           mode,
           fallbackIcon: node.data.agentIcon as AgentIcon | undefined,
-          disabledReason: !target
-            ? {
-                kind: 'unavailable',
-                message: t('toolbar.inkAgentPicker.unavailable'),
-              }
-            : isInkTargetBusy(node.id)
-              ? { kind: 'busy', message: t('toolbar.inkAgentPicker.busy') }
-              : undefined,
+          disabledReason:
+            !target || !canReceiveInk({ binding, mode })
+              ? {
+                  kind: 'unavailable',
+                  message: t('toolbar.inkAgentPicker.unavailable'),
+                }
+              : isInkTargetBusy(node.id)
+                ? { kind: 'busy', message: t('toolbar.inkAgentPicker.busy') }
+                : undefined,
         };
       });
   }, [nodes, chatState, pendingForks, hasSelection, t]);
@@ -333,6 +335,7 @@ export const StrokeSelectionToolbar = () => {
         nodes.find((node) => node.id === conversation.nodeId),
       )?.threadId,
       available: !conversation.disabledReason,
+      inkCompatible: canReceiveInk(conversation),
     })),
   });
   const selectedTargetId =
@@ -393,14 +396,15 @@ export const StrokeSelectionToolbar = () => {
     destination.kind === 'continue' &&
     startedDestination?.nodeId === destination.nodeId &&
     startedDestination.threadId === destination.threadId;
+  const compatibleConversations = conversations.filter(canReceiveInk);
   const pickerConversations = isOwnSubmission
-    ? conversations.map((conversation) =>
+    ? compatibleConversations.map((conversation) =>
         conversation.nodeId === startedDestination.nodeId &&
         conversation.disabledReason?.kind === 'busy'
           ? { ...conversation, disabledReason: undefined }
           : conversation,
       )
-    : conversations;
+    : compatibleConversations;
   const pickerIssue =
     isOwnSubmission && unavailableReason?.kind === 'busy'
       ? undefined
@@ -628,6 +632,9 @@ export const StrokeSelectionToolbar = () => {
             };
           }
           if (freshCandidate.target) {
+            if (!canReceiveInk(inkTargetAgent(freshCandidate.target))) {
+              throw new Error(t('toolbar.inkAgentPicker.unavailable'));
+            }
             if (isInkTargetBusy(freshCandidate.target.nodeId)) {
               throw new Error(t('toolbar.inkAgentPicker.busy'));
             }
@@ -676,6 +683,9 @@ export const StrokeSelectionToolbar = () => {
                 : binding.kind === 'internal'
                   ? 'operate'
                   : 'ask';
+            if (!canReceiveInk({ binding, mode })) {
+              throw new Error(t('toolbar.inkAgentPicker.unavailable'));
+            }
             const created = createQuestionNode({
               addNode,
               placementPoint,
@@ -763,6 +773,17 @@ export const StrokeSelectionToolbar = () => {
           if (!isCurrentAttempt()) {
             dispatchInvalidReason = t('toolbar.inkAgentPicker.changed');
             return false;
+          }
+          const owner = attempt.session.conversationView?.conversationOwner;
+          const currentCanvas = useCanvasStore.getState();
+          if (owner && currentCanvas.canvasId === owner.canvasId) {
+            const target = resolveInkQuestionTarget(
+              currentCanvas.nodes.find((node) => node.id === owner.nodeId),
+            );
+            if (target && !canReceiveInk(inkTargetAgent(target))) {
+              dispatchInvalidReason = t('toolbar.inkAgentPicker.unavailable');
+              return false;
+            }
           }
           return true;
         },
