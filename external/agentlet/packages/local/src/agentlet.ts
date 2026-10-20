@@ -469,7 +469,7 @@ export class Agentlet {
         }, this.logger)
       } catch (err) {
         this.logger.error('session_bootstrap_failed', { message: err instanceof Error ? err.message : String(err) })
-        agent.terminate()
+        await this.stopAgentProcess(agent)
         if (this.controlWs === spawnSocket) this.sendDaemonResponse(requestId, undefined, {
           code: -32000,
           message: `Session bootstrap failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -543,10 +543,10 @@ export class Agentlet {
         idleSuspending: false,
       }
 
-      agent.on('exit', (code, signal) => {
+      agent.on('exit', async (code, signal) => {
         this.logger.info('agent_exited', { sessionId, code, signal })
         const wasStopping = managed.status === 'stopping'
-        managed.status = 'stopped'
+        managed.status = 'stopping'
         // Drop the early-message buffer listener if the agent exits before
         // handshake_ok (idempotent if already detached).
         detachEarlyBuffer()
@@ -568,6 +568,18 @@ export class Agentlet {
           }
           managed.ws.send(exitNotification)
         }
+
+        if (wasStopping || managed.idleSuspending || this.shutdownInProgress) return
+        try {
+          await this.stopAgentProcess(agent)
+        } catch (error) {
+          this.logger.error('agent_exit_cleanup_failed', {
+            sessionId,
+            message: error instanceof Error ? error.message : String(error),
+          })
+          return
+        }
+        managed.status = 'stopped'
 
         // Suppress autoRestart if this exit was caused by idle suspension
         if (
@@ -645,8 +657,12 @@ export class Agentlet {
       agentWs.on('handshake_error', (err) => {
         this.logger.error('agent_handshake_failed', { sessionId, code: err.code, message: err.message })
         detachEarlyBuffer()
-        agent.terminate()
-        this.agents.delete(sessionId)
+        void this.stopManagedAgent(managed).catch((error: unknown) => {
+          this.logger.error('agent_cleanup_failed', {
+            sessionId,
+            message: error instanceof Error ? error.message : String(error),
+          })
+        })
       })
 
       agentWs.on('close', () => {
@@ -793,15 +809,7 @@ export class Agentlet {
     }
 
     // Gracefully stop the agent process
-    managed.agent.closeStdin()
-    await this.waitForAgentExit(managed.agent, 5000)
-    if (managed.agent.running) {
-      managed.agent.terminate()
-      await this.waitForAgentExit(managed.agent, 2000)
-    }
-    if (managed.agent.running) {
-      managed.agent.kill()
-    }
+    await this.stopAgentProcess(managed.agent)
 
     // Send goodbye and close the agent's WS
     if (managed.ws?.connected) {
@@ -868,15 +876,15 @@ export class Agentlet {
     this.startDaemonReconnection()
   }
 
-  private async stopAgentProcess(agent: AgentProcess): Promise<void> {
+  private async stopAgentProcess(agent: AgentProcess, gracefulTimeout = 5000): Promise<void> {
     agent.closeStdin()
-    await this.waitForAgentExit(agent, 5000)
+    await this.waitForAgentExit(agent, gracefulTimeout)
     if (agent.running) {
-      agent.terminate()
+      await agent.terminate()
       await this.waitForAgentExit(agent, 2000)
     }
     if (agent.running) {
-      agent.kill()
+      await agent.kill()
       await this.waitForAgentExit(agent, 2000)
     }
     if (agent.running) {
@@ -914,11 +922,7 @@ export class Agentlet {
       this.logger.info('stopping_agent', { sessionId })
       managed.status = 'stopping'
       managed.relay?.stop()
-      managed.agent.closeStdin()
-      await this.waitForAgentExit(managed.agent, 3000)
-      if (managed.agent.running) managed.agent.terminate()
-      await this.waitForAgentExit(managed.agent, 2000)
-      if (managed.agent.running) managed.agent.kill()
+      await this.stopAgentProcess(managed.agent, 3000)
       managed.ws?.close()
     }
     this.agents.clear()
@@ -937,18 +941,11 @@ export class Agentlet {
     process.exit(exitCode)
   }
 
-  private waitForAgentExit(agent: AgentProcess, ms: number): Promise<void> {
-    return new Promise((resolve) => {
-      if (!agent.running) {
-        resolve()
-        return
-      }
-      const timer = setTimeout(resolve, ms)
-      agent.once('exit', () => {
-        clearTimeout(timer)
-        resolve()
-      })
-    })
+  private async waitForAgentExit(agent: AgentProcess, ms: number): Promise<void> {
+    const deadline = Date.now() + ms
+    while (agent.running && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 25))
+    }
   }
 
   private setupSignalHandlers(): void {

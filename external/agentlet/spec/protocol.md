@@ -125,7 +125,7 @@ Historical Team manifest data is described in [`agent-team.md`](agent-team.md); 
 
 The daemon enforces its startup `--max-agents` value against the authoritative managed-process map. A rejected spawn returns JSON-RPC error data `{ code: "capacity_exhausted", limit, active: { total, jobs, deployments, unknown, stopping } }`; these counts reveal no session IDs, commands, or host correlation IDs.
 
-`server/stop` addresses one exact native `sessionId`. It is idempotent and returns `{ stopped: true, disposition: "stopped" | "already_absent" }`. For a present process, the daemon closes stdin, escalates through termination and kill with bounded exit waits, suppresses auto-restart, and removes the capacity slot only after exit is confirmed. Failure returns `data: { code: "agent_stop_failed", stillRunning: true }`.
+`server/stop` addresses one exact native `sessionId`. It is idempotent and returns `{ stopped: true, disposition: "stopped" | "already_absent" }`. For a present process, the daemon closes stdin, escalates through termination and kill with bounded exit waits, suppresses auto-restart, and removes the capacity slot only after the owned process tree exits. POSIX launches use a dedicated process group retained after the shell exits; Windows uses bounded, awaited `taskkill /PID <pid> /T /F`. Bootstrap failure, idle suspension, shutdown, and planned restart use the same cleanup path; reconnection waits for cleanup. Children that deliberately create another POSIX session are outside the owned group. Failure returns `data: { code: "agent_stop_failed", stillRunning: true }`.
 
 ## 5. ACP relay
 
