@@ -229,6 +229,8 @@ Retained Disk Space repository and handle instances, blob scopes, and legacy `Ca
 
 The `chat_v2/` two-tier log and `threads.json` remain owned by Agenetes L2 (`FileEventLogStore`, SQLite-backed `FileTurnStore`, and `FileThreadStore`), wired in [agenetes/drivers.ts](../../apps/server/src/modules/agent/agenetes/drivers.ts); see [agent-architecture.md](./agent-architecture.md) §5. Workspace activation is coordinated by `apps/server/src/modules/workspace-activation.ts`; the isolated child entry is `workspace-prepare.worker.ts`, and the ordered migration sequence is centralized in `workspace-prepare.ts` with migration implementations under `modules/workspace/migrations/`.
 
+Space hierarchy serialization also lives in `modules/canvas/write-coordinator.ts`. Its process-local queue covers ownership validation and mutation, collection/move, subtree deletion, and composed Space creation/deletion. It acquires a Workspace operation lease before queueing and holds it through completion, permits nested calls for creation and compensation, and invalidates inherited ownership once the outer operation ends. Acquire the hierarchy lock before any Canvas mutexes. The storage composition root uses this application coordinator for lifecycle entry points; adapters retain their own per-Space deletion admission. Neither coordinator provides distributed locking or crash-atomic transactions.
+
 ### 3.1 Task creation across persistence domains
 
 `TaskService.create()` validates its shared request contract, target Canvas, and selectable default root Profile before mutation. It then creates a static ordinary Task Note through the authoritative Canvas executor and persists the canonical Task record through `SpaceTasks.create`.

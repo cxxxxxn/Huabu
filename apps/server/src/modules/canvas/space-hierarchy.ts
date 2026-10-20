@@ -10,10 +10,12 @@ import {
 } from '@huabu/shared/canvas-engine';
 
 import { executeOnServerAlreadyLocked } from './canvas-executor.js';
-import { withCanvasMutexes } from './write-coordinator.js';
+import {
+  withCanvasMutexes,
+  withSpaceHierarchyLock,
+} from './write-coordinator.js';
 import { agentThreadService } from '../agent/agent-thread.service.js';
 import { acquireAgentTurn } from '../agent/turn-lease.js';
-import { withSpaceHierarchyLock } from '../storage/hierarchy-coordinator.js';
 import {
   createSpace,
   deleteSpace,

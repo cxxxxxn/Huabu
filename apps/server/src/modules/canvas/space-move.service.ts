@@ -35,7 +35,10 @@ import {
   SpaceMovePlanError,
   type SpaceMovePlan,
 } from './space-move-plan.js';
-import { withCanvasMutexes } from './write-coordinator.js';
+import {
+  withCanvasMutexes,
+  withSpaceHierarchyLock,
+} from './write-coordinator.js';
 import { getLogger } from '../../utils/logger.js';
 import { buildReachbackEnv } from '../agent/acp/reachback-env.js';
 import {
@@ -50,7 +53,6 @@ import {
 import { agentThreadResolver } from '../agent/agent-thread-resolver.js';
 import { agentThreadService } from '../agent/agent-thread.service.js';
 import { acquireAgentTurn } from '../agent/turn-lease.js';
-import { withSpaceHierarchyLock } from '../storage/hierarchy-coordinator.js';
 import {
   createSpace,
   deleteSpace,

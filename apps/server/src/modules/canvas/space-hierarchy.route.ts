@@ -15,7 +15,7 @@ import {
   setSpaceParent,
   SpaceHierarchyError,
 } from './space-hierarchy.js';
-import { withSpaceHierarchyLock } from '../storage/hierarchy-coordinator.js';
+import { withSpaceHierarchyLock } from './write-coordinator.js';
 import { getStructuredStore } from '../storage/index.js';
 
 import type { FastifyInstance, FastifyReply } from 'fastify';

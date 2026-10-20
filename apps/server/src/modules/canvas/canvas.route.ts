@@ -74,7 +74,10 @@ import {
   WorldPreviewMutationError,
 } from './world-preview-policy.js';
 import { reconcileWorldPreviews } from './world-previews.js';
-import { withCanvasMutex } from './write-coordinator.js';
+import {
+  withCanvasMutex,
+  withSpaceHierarchyLock,
+} from './write-coordinator.js';
 import { MAX_UPLOAD_BYTES } from '../../upload-limits.js';
 import { conversationEventLogStore } from '../agent/agenetes/conversation-stores.js';
 import { AgentNodeBindingError } from '../agent/agent-node-binding.js';
@@ -83,7 +86,6 @@ import { ARTIFACT_URL_REGEX } from '../artifact/utils.js';
 import { getPreprocessDispatcher, getProfile } from '../preprocessing/index.js';
 import { isLabelProtected } from '../preprocessing/label-policy.js';
 import { stripOfficeparserPreamble } from '../preprocessing/loaders/office-strip.js';
-import { withSpaceHierarchyLock } from '../storage/hierarchy-coordinator.js';
 import {
   space,
   createSpace,

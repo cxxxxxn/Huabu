@@ -54,7 +54,7 @@ import {
 import { SqliteStructuredStore } from './backends/sqlite/structured-store.js';
 import { SqliteWorkspaceRepository } from './backends/sqlite/workspace-repository.js';
 import { hasStorageCapability } from './capabilities.js';
-import { withSpaceHierarchyLock } from './hierarchy-coordinator.js';
+import { withSpaceHierarchyLock } from '../canvas/write-coordinator.js';
 import { spaceBlobAreas } from './ports/blob.js';
 import {
   parseStorageProfile,
