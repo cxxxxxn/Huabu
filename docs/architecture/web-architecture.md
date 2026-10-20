@@ -71,6 +71,8 @@ Common DropdownMenu action lists expose a labelled `menu` linked to their trigge
 
 Focusing the first or last enabled menu item also scrolls it into view, including ArrowUp opening a long, scrollable menu at its last option.
 
+CanvasZoomMenu owns a mixed input/action dialog rather than an arrow-only action menu. Its five action items explicitly retain native Tab stops; Tab traverses enabled controls and the dialog dismisses at its first/last boundary.
+
 On submenu triggers, ArrowDown and ArrowUp continue moving through the parent menu rather than opening the child. ArrowRight enters the child and focuses its first enabled item, including when hover has already opened it without moving focus.
 
 Canvas search synchronizes its active row when a result receives DOM focus. Arrow navigation from a result moves focus to the newly active row after Virtuoso reveals it, so Enter activates the same row that has focus. Navigation from the search input retains input focus and uses the active row for confirmation; browsing continues to reveal Canvas nodes without opening Preview tabs until explicit activation.

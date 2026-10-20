@@ -126,7 +126,7 @@ export const UserMessage = memo(function UserMessage({
                   </span>
                 ))}
               {inputKind === 'ink-intent' && content ? ' ' : null}
-              {content}
+              {content && <span data-chat-prompt-content>{content}</span>}
             </div>
           </div>
         ) : null}

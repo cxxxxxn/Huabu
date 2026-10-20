@@ -23,6 +23,7 @@ interface DocumentProps {
 
 const mocks = vi.hoisted(() => ({
   registerSearch: vi.fn(),
+  toast: vi.fn(),
   index: vi.fn(),
   document: vi.fn<(props: DocumentProps) => void>(),
   page: vi.fn(),
@@ -35,6 +36,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
+vi.mock('@/components/Common/Toast', () => ({ toast: mocks.toast }));
 vi.mock('@/api/artifact', () => ({
   resolveArtifactUrl: (src: string) => src,
   uploadImage: vi.fn(),
@@ -151,6 +153,7 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   mocks.header?.remove();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -182,6 +185,78 @@ function load() {
 }
 
 describe('embedded PDF reader', () => {
+  it.each(['alpha', 'missing'])(
+    'waits for the new query adapter after an already indexed %s search',
+    (previousQuery) => {
+      mocks.indexPages = new Map([
+        [0, { pageIndex: 0, text: 'alpha alpha alpha' }],
+        [1, { pageIndex: 1, text: 'beta' }],
+      ]);
+      usePreviewSearchStore.getState().reveal('pdf-1', previousQuery, 0);
+      act(() =>
+        root.render(
+          <PreviewSearchAdapterProvider>
+            <InPreviewSearchBar
+              scopeEl={container}
+              nodeId="pdf-1"
+              requiresAdapter
+            />
+            <PDFPreview id="pdf-1" data={{ src: 'document.pdf' }} />
+          </PreviewSearchAdapterProvider>,
+        ),
+      );
+      load();
+      mocks.toast.mockClear();
+      const scroll = vi
+        .spyOn(HTMLElement.prototype, 'scrollIntoView')
+        .mockImplementation(() => {});
+      act(() => usePreviewSearchStore.getState().reveal('pdf-1', 'beta', 0));
+      expect(scroll).toHaveBeenCalledTimes(1);
+      expect(
+        (scroll.mock.instances[0] as HTMLElement).dataset.pdfPageShell,
+      ).toBe('1');
+      expect(container.textContent).toContain('1/1');
+      expect(usePreviewSearchStore.getState().navigationRequest).toBeNull();
+      expect(mocks.toast).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([-1, 1, 3])(
+    'reports unavailable PDF occurrence %s without navigating to another one',
+    (occurrenceIndex) => {
+      mocks.indexPages = new Map([[0, { pageIndex: 0, text: 'beta' }]]);
+      usePreviewSearchStore.getState().reveal('pdf-1', 'beta', 0);
+      act(() =>
+        root.render(
+          <PreviewSearchAdapterProvider>
+            <InPreviewSearchBar
+              scopeEl={container}
+              nodeId="pdf-1"
+              requiresAdapter
+            />
+            <PDFPreview id="pdf-1" data={{ src: 'document.pdf' }} />
+          </PreviewSearchAdapterProvider>,
+        ),
+      );
+      load();
+      mocks.toast.mockClear();
+      const scroll = vi
+        .spyOn(HTMLElement.prototype, 'scrollIntoView')
+        .mockImplementation(() => {});
+      act(() =>
+        usePreviewSearchStore
+          .getState()
+          .reveal('pdf-1', 'beta', occurrenceIndex),
+      );
+      expect(scroll).not.toHaveBeenCalled();
+      expect(mocks.toast).toHaveBeenCalledExactlyOnceWith(
+        'search.previewMatchNotVisible',
+        { tone: 'info', duration: 4000 },
+      );
+      expect(usePreviewSearchStore.getState().navigationRequest).toBeNull();
+    },
+  );
+
   it('retains a cold PDF handoff until the document and adapter are ready', () => {
     usePreviewSearchStore.getState().reveal('pdf-1', 'needle', 3);
     act(() =>

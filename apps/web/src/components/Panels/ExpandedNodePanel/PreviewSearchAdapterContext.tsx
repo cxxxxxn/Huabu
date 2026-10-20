@@ -10,6 +10,7 @@ import {
 } from 'react';
 
 export type PreviewSearchAdapter = {
+  query: string;
   matchCount: number;
   isSearching: boolean;
   canNavigate: boolean;

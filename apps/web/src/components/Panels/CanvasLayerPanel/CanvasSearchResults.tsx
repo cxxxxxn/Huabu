@@ -348,6 +348,26 @@ export const CanvasSearchResults = (): React.JSX.Element => {
             query,
             row.match.occurrenceIndex,
             {
+              getMatchRoot:
+                row.match.field === 'content'
+                  ? (root) => {
+                      const content = useCanvasStore
+                        .getState()
+                        .nodes.find((entry) => entry.id === nodeId)
+                        ?.data.content;
+                      if (typeof content !== 'string' || !content.trim())
+                        return null;
+                      const prompts = Array.from(
+                        root.querySelectorAll<HTMLElement>(
+                          '[data-chat-prompt-content]',
+                        ),
+                      ).filter(
+                        (prompt) =>
+                          prompt.textContent?.trim() === content.trim(),
+                      );
+                      return prompts.length === 1 ? (prompts[0] ?? null) : null;
+                    }
+                  : undefined,
               onMatch: (range) => {
                 setChatThreadEl(
                   range.startContainer.parentElement?.closest<HTMLElement>(

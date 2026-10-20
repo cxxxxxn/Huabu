@@ -63,7 +63,9 @@ export const InPreviewSearchBar = ({
   const navigationRequest = usePreviewSearchStore((s) => s.navigationRequest);
   const inputRef = useRef<HTMLInputElement>(null);
   const [activeMatchIdx, setActiveMatchIdx] = useState(0);
-  const searchAdapter = usePreviewSearchAdapter();
+  const registeredAdapter = usePreviewSearchAdapter();
+  const searchAdapter =
+    registeredAdapter?.query === query ? registeredAdapter : null;
   const isActive = isOpen && ownerNodeId === nodeId;
 
   useEffect(() => {
@@ -130,15 +132,14 @@ export const InPreviewSearchBar = ({
       usePreviewSearchStore.getState().consumeNavigation(nonce);
     if (searchAdapter) {
       if (!searchAdapter.canNavigate || searchAdapter.isSearching) return;
-      if (searchAdapter.matchCount === 0) {
+      if (occurrenceIndex < 0 || occurrenceIndex >= searchAdapter.matchCount) {
         toast(t('search.previewMatchNotVisible'), {
           tone: 'info',
           duration: 4000,
         });
       } else {
-        const index = Math.min(occurrenceIndex, searchAdapter.matchCount - 1);
-        searchAdapter.navigateToMatch(index);
-        setActiveMatchIdx(index);
+        searchAdapter.navigateToMatch(occurrenceIndex);
+        setActiveMatchIdx(occurrenceIndex);
         setHasNavigated(true);
       }
       consume();

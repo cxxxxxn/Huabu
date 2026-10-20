@@ -396,7 +396,7 @@ export const PDFPreview = ({
 
   const navigateToSearchMatch = useCallback(
     (matchIndex: number) => {
-      const match = searchMatches[matchIndex] ?? searchMatches[0];
+      const match = searchMatches[matchIndex];
       const root = scrollContainerRef.current;
       if (!match || !root) return;
 
@@ -427,6 +427,7 @@ export const PDFPreview = ({
     () =>
       isPdfSearchActive
         ? {
+            query: searchQuery,
             matchCount: searchMatches.length,
             isSearching: !docLoaded || textIndex.isIndexing,
             canNavigate: docLoaded && !textIndex.isIndexing,
@@ -435,6 +436,7 @@ export const PDFPreview = ({
         : null,
     [
       isPdfSearchActive,
+      searchQuery,
       navigateToSearchMatch,
       searchMatches.length,
       textIndex.isIndexing,

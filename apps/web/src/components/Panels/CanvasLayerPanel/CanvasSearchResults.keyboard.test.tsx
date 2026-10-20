@@ -37,7 +37,8 @@ const {
   virtualization,
 } = vi.hoisted(() => {
   const selectNodes = vi.fn();
-  const nodes: { id: string; data: { threadId?: string } }[] = [];
+  const nodes: { id: string; data: { threadId?: string; content?: string } }[] =
+    [];
   return {
     selectNodes,
     openPreviewNode: vi.fn(),
@@ -360,6 +361,44 @@ describe('Canvas search field groups and preview navigation', () => {
       expect.any(Object),
     );
     expect(usePreviewSearchStore.getState().isOpen).toBe(false);
+  });
+
+  it('scopes Question body ordinals to a unique originating prompt, not the full thread or quoted content', () => {
+    canvasState.nodes.push({
+      id: 'first',
+      data: { threadId: 'thread', content: ' recent test test ' },
+    });
+    act(() =>
+      useSearchStore.setState({
+        results: [
+          {
+            ...results[0],
+            match: {
+              ...results[0].match,
+              nodeType: 'question',
+              occurrenceIndex: 1,
+            },
+          },
+        ],
+      }),
+    );
+    act(() => getRow(1).click());
+    const getMatchRoot = scheduleScrollToMatch.mock.lastCall?.[3]?.getMatchRoot;
+    expect(getMatchRoot).toBeTypeOf('function');
+    const thread = document.createElement('div');
+    thread.innerHTML =
+      '<div><span data-chat-prompt-content>earlier test</span></div><div><span>quoted test</span><span data-chat-prompt-content>recent test test</span></div>';
+    const prompt = thread.querySelectorAll<HTMLElement>(
+      '[data-chat-prompt-content]',
+    )[1];
+    expect(getMatchRoot?.(thread)).toBe(prompt);
+    thread.insertAdjacentHTML(
+      'beforeend',
+      '<span data-chat-prompt-content>recent test test</span>',
+    );
+    expect(getMatchRoot?.(thread)).toBeNull();
+    thread.innerHTML = '<span data-chat-prompt-content>earlier test</span>';
+    expect(getMatchRoot?.(thread)).toBeNull();
   });
 
   it('groups interleaved matches by field and labels each field only once', () => {

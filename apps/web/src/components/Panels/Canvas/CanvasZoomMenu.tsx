@@ -186,6 +186,7 @@ export function CanvasZoomMenu() {
             <div role="menu" aria-label={t('canvasControls.zoomMenu')}>
               <div role="separator" className={MENU_SEPARATOR_CLASS} />
               <DropdownMenuItem
+                tabIndex={0}
                 shortcut={formatShortcutById('view.zoomIn')}
                 disabled={zoom >= MAX_ZOOM}
                 onClick={() => run(() => void instance.zoomIn())}
@@ -193,6 +194,7 @@ export function CanvasZoomMenu() {
                 {t('canvasControls.zoomIn')}
               </DropdownMenuItem>
               <DropdownMenuItem
+                tabIndex={0}
                 shortcut={formatShortcutById('view.zoomOut')}
                 disabled={zoom <= MIN_ZOOM}
                 onClick={() => run(() => void instance.zoomOut())}
@@ -200,6 +202,7 @@ export function CanvasZoomMenu() {
                 {t('canvasControls.zoomOut')}
               </DropdownMenuItem>
               <DropdownMenuItem
+                tabIndex={0}
                 shortcut={formatShortcutById('view.resetZoom')}
                 onClick={() => run(() => void instance.zoomTo(1))}
               >
@@ -207,6 +210,7 @@ export function CanvasZoomMenu() {
               </DropdownMenuItem>
               <div role="separator" className={MENU_SEPARATOR_CLASS} />
               <DropdownMenuItem
+                tabIndex={0}
                 shortcut={formatShortcutById('view.fitAll')}
                 disabled={!hasNodes}
                 onClick={() =>
@@ -216,6 +220,7 @@ export function CanvasZoomMenu() {
                 {t('canvasControls.fitAll')}
               </DropdownMenuItem>
               <DropdownMenuItem
+                tabIndex={0}
                 shortcut={formatShortcutById('view.fitSelection')}
                 disabled={!hasSelection}
                 onClick={() =>

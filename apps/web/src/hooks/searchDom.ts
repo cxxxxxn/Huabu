@@ -217,6 +217,7 @@ export function scheduleScrollToMatch(
     onTimeout?: () => void;
     onMatch?: (range: Range) => void;
     fallbackToFirst?: boolean;
+    getMatchRoot?: (root: HTMLElement) => HTMLElement | null;
   },
 ): () => void {
   if (!query) return () => {};
@@ -268,14 +269,16 @@ export function scheduleScrollToMatch(
       )
         return false;
     }
+    const matchRoot = options?.getMatchRoot ? options.getMatchRoot(root) : root;
+    if (!matchRoot) return false;
     // Document source ordinals can differ from rendered Markdown. Conversation
     // ordinals must never fall back to an unrelated, more recent occurrence.
     const range =
-      findNthRange(root, query, nth) ??
+      findNthRange(matchRoot, query, nth) ??
       (root.matches('[data-chat-thread-root]') ||
       options?.fallbackToFirst === false
         ? null
-        : findNthRange(root, query, 0));
+        : findNthRange(matchRoot, query, 0));
     if (!range) return false;
     scrollRangeIntoView(range);
     options?.onMatch?.(range);

@@ -20,6 +20,58 @@ function rootWith(html: string): HTMLElement {
 }
 
 describe('preview DOM search boundaries', () => {
+  it('reveals conversation history before resolving an ordinal inside a scoped message', async () => {
+    const root = rootWith('<p data-id="recent">recent needle needle</p>');
+    root.setAttribute('data-chat-thread-root', '');
+    root.setAttribute('data-chat-has-older', 'true');
+    root.addEventListener('chat-reveal-search', (event) =>
+      event.preventDefault(),
+    );
+    const getMatchRoot = vi.fn(() =>
+      root.querySelector<HTMLElement>('[data-id="recent"]'),
+    );
+    const onMatch = vi.fn();
+    const scroll = vi
+      .spyOn(HTMLElement.prototype, 'scrollIntoView')
+      .mockImplementation(() => {});
+    const cancel = scheduleScrollToMatch(() => root, 'needle', 1, {
+      getMatchRoot,
+      onMatch,
+    });
+    expect(getMatchRoot).not.toHaveBeenCalled();
+    root.insertAdjacentHTML(
+      'afterbegin',
+      '<p data-id="older">older needle needle</p>',
+    );
+    root.removeAttribute('data-chat-has-older');
+    await vi.waitFor(() => expect(onMatch).toHaveBeenCalledTimes(1));
+    expect(
+      onMatch.mock.calls[0]?.[0].startContainer.parentElement?.dataset.id,
+    ).toBe('recent');
+    cancel();
+    scroll.mockRestore();
+    root.remove();
+  });
+
+  it('reports a missing or ambiguous originating prompt without using the full thread', async () => {
+    const root = rootWith('unrelated needle');
+    root.setAttribute('data-chat-thread-root', '');
+    root.addEventListener('chat-reveal-search', (event) =>
+      event.preventDefault(),
+    );
+    const onMatch = vi.fn();
+    const onTimeout = vi.fn();
+    const cancel = scheduleScrollToMatch(() => root, 'needle', 0, {
+      getMatchRoot: () => null,
+      onMatch,
+      onTimeout,
+      timeoutMs: 10,
+    });
+    await vi.waitFor(() => expect(onTimeout).toHaveBeenCalledTimes(1));
+    expect(onMatch).not.toHaveBeenCalled();
+    cancel();
+    root.remove();
+  });
   it('scrolls a match hidden below an inner panel even when it is inside the browser viewport', () => {
     const root = rootWith('needle');
     root.style.overflowY = 'auto';
