@@ -243,13 +243,13 @@ describe('agentlet daemon integration', () => {
         'setInterval(() => {}, 1000)',
         "const { spawn } = require('node:child_process')",
         `const child = spawn(process.execPath, ['-e', ${JSON.stringify("process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.send('ready')")}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] })`,
-        `child.on('message', () => require('node:fs').writeFileSync(${JSON.stringify(restartPidsPath)}, JSON.stringify({ pid: process.pid, childPid: child.pid })))`,
+        "child.on('message', () => require('node:fs').writeFileSync(process.argv[2], JSON.stringify({ pid: process.pid, childPid: child.pid })))",
       ].join('\n'))
     }
     expect(await request(16, ServerMethods.SPAWN, {
       appId: 'thread-before-restart',
       sessionSpec: {
-        command: `node ${JSON.stringify(process.platform === 'win32' ? mockAgentPath : restartAgentPath)}`,
+        command: `node ${JSON.stringify(process.platform === 'win32' ? mockAgentPath : restartAgentPath)} ${JSON.stringify(restartPidsPath)}`,
         autoRestart: true,
       },
     })).toMatchObject({ result: { sessionId: 'native-bootstrap' } })

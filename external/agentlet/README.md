@@ -76,6 +76,8 @@ A `server/shutdown` notification with reason `server_shutting_down` means the ho
 
 Stopping waits for owned process-tree cleanup before releasing capacity or reconnecting, not merely for the shell to exit. POSIX signals the dedicated process group; Windows awaits tree-wide `taskkill`. Descendants that deliberately create a separate POSIX session are outside that group.
 
+Failed bootstrap cleanup retains its capacity reservation and is retried after one second. Idle cleanup failure keeps the agent tracked for an explicit stop retry. Shutdown attempts all pending and managed cleanups concurrently and waits for every result before exiting, reporting failure if any tree could not be stopped.
+
 ## Harness discovery
 
 The daemon advertises `capabilities.harnessDiscovery: { version: 2 }`. Gateways may call `server/discoverHarnesses` with `{}` for read-only discovery or `{ "prepareWorkspaces": true }` for automatic provisioning. The response includes every registered Definition with static identity, boolean capabilities, `ready`, `adapter-missing`, or `not-found` status, optional version, workspace, and diagnostics. No remote candidates, commands, IDs, or roots are accepted.
