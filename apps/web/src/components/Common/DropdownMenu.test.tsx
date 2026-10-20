@@ -222,12 +222,41 @@ describe('DropdownMenu keyboard contract', () => {
     expect(document.activeElement).toBe(submenuTrigger);
   });
 
-  it('does not steal focus when a submenu opens on hover', async () => {
+  it.each([
+    ['ArrowDown', 'last'],
+    ['ArrowUp', 'first'],
+  ])(
+    'keeps %s on a submenu trigger in the parent menu',
+    async (key, target) => {
+      await mount(
+        <DropdownMenu trigger={<Button data-testid="trigger">Actions</Button>}>
+          <DropdownMenuItem data-testid="first">First</DropdownMenuItem>
+          <DropdownMenuSubmenu label="More">
+            <DropdownMenuItem>Child</DropdownMenuItem>
+          </DropdownMenuSubmenu>
+          <DropdownMenuItem data-testid="last">Last</DropdownMenuItem>
+        </DropdownMenu>,
+      );
+      await click(getElement('[data-testid="trigger"]'));
+      await press(getElement('[data-testid="first"]'), 'ArrowDown');
+      const submenuTrigger = getElement(
+        '[role="menuitem"][aria-haspopup="menu"]',
+      );
+      expect(document.activeElement).toBe(submenuTrigger);
+      await press(submenuTrigger, key);
+      expect(document.activeElement).toBe(
+        getElement(`[data-testid="${target}"]`),
+      );
+      expect(document.querySelectorAll('[role="menu"]')).toHaveLength(1);
+    },
+  );
+
+  it('preserves hover focus and supports entering the open submenu with ArrowRight', async () => {
     await mount(
       <DropdownMenu trigger={<Button data-testid="trigger">Actions</Button>}>
         <DropdownMenuItem data-testid="first">First</DropdownMenuItem>
         <DropdownMenuSubmenu label="More">
-          <DropdownMenuItem>Child</DropdownMenuItem>
+          <DropdownMenuItem data-testid="child">Child</DropdownMenuItem>
         </DropdownMenuSubmenu>
       </DropdownMenu>,
     );
@@ -245,6 +274,8 @@ describe('DropdownMenu keyboard contract', () => {
     expect(document.activeElement).toBe(first);
     await press(first, 'ArrowDown');
     expect(document.activeElement).toBe(submenuTrigger);
+    await press(submenuTrigger, 'ArrowRight');
+    expect(document.activeElement).toBe(getElement('[data-testid="child"]'));
   });
 
   it('dismisses the whole menu chain when Tab leaves a submenu', async () => {

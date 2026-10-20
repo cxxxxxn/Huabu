@@ -328,7 +328,9 @@ export const DropdownMenu: React.FC<DropdownMenuProps> = ({
         event.defaultPrevented ||
         event.target !== event.currentTarget ||
         contentRole !== 'menu' ||
-        (event.key !== 'ArrowDown' && event.key !== 'ArrowUp')
+        (opensSideways
+          ? event.key !== 'ArrowRight'
+          : event.key !== 'ArrowDown' && event.key !== 'ArrowUp')
       )
         return;
       event.preventDefault();
@@ -510,16 +512,8 @@ export const DropdownMenuSubmenu: React.FC<DropdownMenuSubmenuProps> = ({
               />
             }
             onKeyDown={(event) => {
-              if (
-                ['ArrowRight', 'ArrowUp', 'ArrowDown', 'Enter', ' '].includes(
-                  event.key,
-                )
-              )
+              if (['ArrowRight', 'Enter', ' '].includes(event.key))
                 keyboardOpenRef.current = true;
-              if (event.key === 'ArrowRight') {
-                event.preventDefault();
-                openSubmenu();
-              }
             }}
             onClick={() => {
               keyboardOpenRef.current = true;
