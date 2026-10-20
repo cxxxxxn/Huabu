@@ -85,6 +85,20 @@ afterEach(() => {
 })
 
 describe('cleanup failure ownership', () => {
+  it.each(['shutdownInProgress', 'serverRestartInProgress'])(
+    'rejects new launches while %s is active',
+    async flag => {
+      const { daemon, responses } = fixture()
+      Reflect.set(daemon, flag, true)
+      await spawn(daemon, 1)
+      expect(agents).toHaveLength(0)
+      expect(tracked(daemon, 'startingAgents').size).toBe(0)
+      expect(responses).toHaveBeenLastCalledWith(1, undefined, expect.objectContaining({
+        data: { code: 'daemon_stopping' },
+      }))
+    },
+  )
+
   it('reserves failed bootstrap capacity until a successful cleanup retry', async () => {
     const { daemon, logger, responses } = fixture()
     bootstrapFailure = true

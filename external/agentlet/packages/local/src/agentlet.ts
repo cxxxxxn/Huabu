@@ -313,6 +313,14 @@ export class Agentlet {
   }
 
   private async handleSpawn(requestId: string | number, params: SpawnParams): Promise<void> {
+    if (this.shutdownInProgress || this.serverRestartInProgress) {
+      this.sendDaemonResponse(requestId, undefined, {
+        code: -32000,
+        message: 'Agentlet is stopping or preparing to reconnect',
+        data: { code: 'daemon_stopping' },
+      })
+      return
+    }
     const sessionSpec = params?.sessionSpec
 
     if (!sessionSpec || typeof sessionSpec !== 'object' || Array.isArray(sessionSpec)) {
