@@ -8,15 +8,13 @@
  * toggle).
  *
  * Behaviour parity with the previous floating overlay:
- *   - Results stream in already grouped by node (per emission
- *     order). We bucket adjacent rows by `nodeId`, render a header
- *     row per group with the canonical node icon (Spline for edges),
- *     and indent match rows beneath their header.
- *   - ↑ / ↓ navigates the flat (header + visible match) list, live-
- *     follows on the canvas (minimal reveal + a preview open when the
- *     target has a real preview).
+ *   - Results are grouped by node and then field in first-seen order,
+ *     with one heading per field and the canonical node icon per node.
+ *   - ↑ / ↓ navigates the flat (header + visible match) list and
+ *     follows on the canvas without opening Preview Workspace tabs.
  *   - Enter on a header toggles collapse; Enter on a match opens the
- *     owning node without injecting search state into its preview.
+ *     owning node and hands content matches to preview-local search
+ *     or reveals the matching Question conversation occurrence.
  *   - ←/→ collapse / expand the current group.
  *   - Highlight ranges are painted on the canvas DOM only; expanded
  *     previews own an independent search layer.
@@ -36,6 +34,8 @@ import { ChevronDown, ChevronRight, TriangleAlert } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
+
+import { usePreviewSearchStore } from '@/store/previewSearchStore';
 
 import { shouldCanvasSearchOwnKeyboard } from './canvasSearchKeyboard';
 import { revealNodesOnCanvas } from './focusNodesOnCanvas';
@@ -63,7 +63,7 @@ import { cn } from '../../Common/cn';
 import { toast } from '../../Common/Toast';
 import { hasNodePreview } from '../../Nodes/previews';
 
-const ROW_HEIGHT = 40;
+const ROW_HEIGHT = 28;
 
 export const CanvasSearchResults = (): React.JSX.Element => {
   const { t } = useTranslation();
@@ -90,9 +90,12 @@ export const CanvasSearchResults = (): React.JSX.Element => {
 
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
+  const cancelNavigationRef = useRef<(() => void) | null>(null);
   const [activeIdx, setActiveIdx] = useState(0);
   const [canvasRoot, setCanvasRoot] = useState<HTMLElement | null>(null);
   const [chatThreadEl, setChatThreadEl] = useState<HTMLElement | null>(null);
+
+  useEffect(() => () => cancelNavigationRef.current?.(), [query, scope]);
 
   // Resolve the canvas highlight root once on mount and whenever the
   // search scope flips back on (e.g. after `close()` + new query).
@@ -118,8 +121,17 @@ export const CanvasSearchResults = (): React.JSX.Element => {
       setChatThreadEl(null);
       return;
     }
+    const threadId = useCanvasStore
+      .getState()
+      .nodes.find((node) => node.id === expandedNodeId)?.data.threadId;
     setChatThreadEl(
-      document.querySelector<HTMLElement>('[data-chat-thread-root]') ?? null,
+      Array.from(
+        document.querySelectorAll<HTMLElement>('[data-chat-thread-root]'),
+      ).find(
+        (element) =>
+          element.dataset.chatThreadId === threadId &&
+          !element.closest('[data-preview-active="false"]'),
+      ) ?? null,
     );
   }, [expandedNodeId, activeIdx]);
 
@@ -196,7 +208,25 @@ export const CanvasSearchResults = (): React.JSX.Element => {
     for (const g of nodeGroups) {
       out.push({ kind: 'header', group: g });
       if (!collapsedNodeIds.has(g.nodeId)) {
-        for (const r of g.rows) out.push({ kind: 'match', group: g, row: r });
+        const fields = new Map<
+          SearchResultRow['match']['field'],
+          SearchResultRow[]
+        >();
+        for (const row of g.rows) {
+          const matches = fields.get(row.match.field);
+          if (matches) matches.push(row);
+          else fields.set(row.match.field, [row]);
+        }
+        for (const matches of fields.values()) {
+          matches.forEach((row, index) =>
+            out.push({
+              kind: 'match',
+              group: g,
+              row,
+              firstInField: index === 0,
+            }),
+          );
+        }
       }
     }
     return out;
@@ -269,6 +299,8 @@ export const CanvasSearchResults = (): React.JSX.Element => {
 
   const jumpToResult = useCallback(
     (row: SearchResultRow) => {
+      cancelNavigationRef.current?.();
+      cancelNavigationRef.current = null;
       const { nodeId, nodeType } = row.match;
       // Edge rows share the group focus path: fit on both endpoints,
       // never open the (non-existent) edge preview.
@@ -293,13 +325,16 @@ export const CanvasSearchResults = (): React.JSX.Element => {
       // Open that thread in the right panel (instead of an expanded
       // preview); the dedicated effect below highlights + scrolls to
       // the matched message inside it.
-      if (row.match.field === 'conversation') {
+      if (
+        row.match.field === 'conversation' ||
+        (nodeType === 'question' && row.match.field === 'content')
+      ) {
         if (openConversationForNode(nodeId) && query) {
           const node = useCanvasStore
             .getState()
             .nodes.find((entry) => entry.id === nodeId);
           const threadId = node?.data.threadId;
-          scheduleScrollToMatch(
+          cancelNavigationRef.current = scheduleScrollToMatch(
             () =>
               Array.from(
                 document.querySelectorAll<HTMLElement>(
@@ -313,6 +348,13 @@ export const CanvasSearchResults = (): React.JSX.Element => {
             query,
             row.match.occurrenceIndex,
             {
+              onMatch: (range) => {
+                setChatThreadEl(
+                  range.startContainer.parentElement?.closest<HTMLElement>(
+                    '[data-chat-thread-root]',
+                  ) ?? null,
+                );
+              },
               onTimeout: () =>
                 toast(t('search.conversationMatchNotVisible'), {
                   tone: 'info',
@@ -328,7 +370,14 @@ export const CanvasSearchResults = (): React.JSX.Element => {
       // without a `NodePreviews` entry leave the user's current preview alone.
       if (hasNodePreview(nodeType)) {
         // Browsing results reuses the group's inspection slot (§9.2).
-        openPreviewNode(nodeId, { transient: true });
+        openPreviewNode(nodeId, { transient: true, focusEditor: false });
+        if (row.match.field === 'content') {
+          usePreviewSearchStore
+            .getState()
+            .reveal(nodeId, query, row.match.occurrenceIndex);
+        }
+      } else if (nodeType === 'question') {
+        openConversationForNode(nodeId);
       }
       focusNodeOnCanvas(nodeId);
     },
@@ -500,6 +549,7 @@ export const CanvasSearchResults = (): React.JSX.Element => {
             ) : (
               <NodeMatchItem
                 index={index}
+                firstInField={v.firstInField}
                 row={v.row}
                 active={index === activeIdx}
                 onFocus={() => setActiveIdx(index)}
@@ -544,7 +594,12 @@ interface NodeGroup {
 
 type VisibleRow =
   | { kind: 'header'; group: NodeGroup }
-  | { kind: 'match'; group: NodeGroup; row: SearchResultRow };
+  | {
+      kind: 'match';
+      group: NodeGroup;
+      row: SearchResultRow;
+      firstInField: boolean;
+    };
 
 interface NodeHeaderItemProps {
   index: number;
@@ -629,6 +684,7 @@ const NodeHeaderItem = ({
 
 interface NodeMatchItemProps {
   index: number;
+  firstInField: boolean;
   row: SearchResultRow;
   active: boolean;
   onClick: () => void;
@@ -637,6 +693,7 @@ interface NodeMatchItemProps {
 
 const NodeMatchItem = ({
   index,
+  firstInField,
   row,
   active,
   onClick,
@@ -644,7 +701,12 @@ const NodeMatchItem = ({
 }: NodeMatchItemProps): React.JSX.Element => {
   const { t } = useTranslation();
   return (
-    <div className="px-2">
+    <div className="px-2" data-search-field={row.match.field}>
+      {firstInField && (
+        <div className="text-fg-subtle px-3 pt-1 pl-[54px] text-xs uppercase">
+          {t(`search.fields.${row.match.field}`)}
+        </div>
+      )}
       <Button
         variant="ghost"
         size="sm"
@@ -658,12 +720,8 @@ const NodeMatchItem = ({
         onClick={onClick}
         onFocus={onFocus}
         data-search-row-index={index}
+        aria-label={`${t(`search.fields.${row.match.field}`)}: ${row.match.snippet}`}
       >
-        <div className="flex items-center gap-2 text-xs">
-          <span className="text-fg-subtle shrink-0 uppercase">
-            {t(`search.fields.${row.match.field}`)}
-          </span>
-        </div>
         <SnippetLine
           text={row.match.snippet}
           matchStart={row.match.matchStart}

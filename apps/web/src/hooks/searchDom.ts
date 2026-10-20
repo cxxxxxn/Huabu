@@ -126,12 +126,30 @@ function isSearchableTextNode(node: Node, boundary: HTMLElement): boolean {
 export function scrollRangeIntoView(range: Range): void {
   const rect = range.getBoundingClientRect();
   const target = rect.top + rect.height / 2;
-  const viewport = window.innerHeight;
+  let visibleTop = 0;
+  let visibleBottom = window.innerHeight;
+  for (
+    let parent = range.startContainer.parentElement;
+    parent;
+    parent = parent.parentElement
+  ) {
+    if (!/(auto|scroll|hidden|clip)/.test(getComputedStyle(parent).overflowY))
+      continue;
+    const bounds = parent.getBoundingClientRect();
+    if (bounds.height === 0) continue;
+    visibleTop = Math.max(visibleTop, bounds.top);
+    visibleBottom = Math.min(visibleBottom, bounds.bottom);
+  }
+  const inset = Math.min(80, Math.max(0, visibleBottom - visibleTop) / 4);
   // `rect.width === 0` happens for ranges inside not-yet-laid-out
   // text (e.g. pdf.js text-layer spans before their first paint);
   // treat that as "needs scroll" so the parent element comes into
   // view and the next observer pass can refine the position.
-  if (rect.width === 0 || target < 80 || target > viewport - 80) {
+  if (
+    rect.width === 0 ||
+    target < visibleTop + inset ||
+    target > visibleBottom - inset
+  ) {
     range.startContainer.parentElement?.scrollIntoView({
       block: 'center',
       behavior: 'auto',
@@ -172,7 +190,11 @@ export function scheduleScrollToMatch(
   getRoot: () => HTMLElement | null,
   query: string,
   nth: number,
-  options?: { timeoutMs?: number; onTimeout?: () => void },
+  options?: {
+    timeoutMs?: number;
+    onTimeout?: () => void;
+    onMatch?: (range: Range) => void;
+  },
 ): () => void {
   if (!query) return () => {};
   const timeoutMs = options?.timeoutMs ?? 8000;
@@ -185,8 +207,11 @@ export function scheduleScrollToMatch(
   let rafId = 0;
   let resolved = false;
   const preparedChatRoots = new WeakSet<HTMLElement>();
+  let preparedChatRoot: HTMLElement | null = null;
 
   const cleanup = (): void => {
+    preparedChatRoot?.dispatchEvent(new Event('chat-search-finished'));
+    preparedChatRoot = null;
     observer?.disconnect();
     observer = null;
     observedTarget = null;
@@ -211,17 +236,25 @@ export function scheduleScrollToMatch(
         root.dispatchEvent(request);
         if (!request.defaultPrevented) return false;
         preparedChatRoots.add(root);
+        preparedChatRoot = root;
       }
-      if (root.hasAttribute('data-chat-cached-earlier')) return false;
+      if (
+        root.hasAttribute('data-chat-cached-earlier') ||
+        root.hasAttribute('data-chat-has-older') ||
+        root.hasAttribute('data-chat-history-loading')
+      )
+        return false;
     }
-    // Prefer the requested ordinal; fall back to the first match if
-    // the DOM has fewer occurrences than the indexed content (e.g.
-    // markdown source has matches in syntax tokens that the rendered
-    // view strips, or pdf.js hasn't paginated all hits yet).
+    // Document source ordinals can differ from rendered Markdown. Conversation
+    // ordinals must never fall back to an unrelated, more recent occurrence.
     const range =
-      findNthRange(root, query, nth) ?? findNthRange(root, query, 0);
+      findNthRange(root, query, nth) ??
+      (root.matches('[data-chat-thread-root]')
+        ? null
+        : findNthRange(root, query, 0));
     if (!range) return false;
     scrollRangeIntoView(range);
+    options?.onMatch?.(range);
     return true;
   };
 
@@ -252,12 +285,18 @@ export function scheduleScrollToMatch(
       subtree: true,
       characterData: true,
       attributes: true,
-      attributeFilter: ['data-chat-cached-earlier', 'data-preview-active'],
+      attributeFilter: [
+        'data-chat-cached-earlier',
+        'data-chat-has-older',
+        'data-chat-history-loading',
+        'data-preview-active',
+      ],
     });
     observedTarget = desired;
   };
 
   if (tryScroll()) {
+    cleanup();
     return () => {
       cancelled = true;
     };

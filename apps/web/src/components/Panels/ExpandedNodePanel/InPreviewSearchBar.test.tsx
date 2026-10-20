@@ -40,6 +40,54 @@ afterEach(() => {
 });
 
 describe('InPreviewSearchBar preview-search lifecycle', () => {
+  it('keeps a newer node search when the previous renderer unmounts', () => {
+    usePreviewSearchStore.getState().open('note-1');
+    act(() =>
+      root.render(<InPreviewSearchBar scopeEl={null} nodeId="note-1" />),
+    );
+    const focusedControl = document.createElement('button');
+    container.append(focusedControl);
+    focusedControl.focus();
+    act(() => {
+      usePreviewSearchStore.getState().reveal('note-2', 'needle', 1);
+      root.render(<InPreviewSearchBar scopeEl={null} nodeId="note-2" />);
+    });
+    expect(usePreviewSearchStore.getState()).toMatchObject({
+      nodeId: 'note-2',
+      query: 'needle',
+      navigationRequest: { occurrenceIndex: 1 },
+    });
+    expect(document.activeElement).toBe(focusedControl);
+  });
+
+  it('waits for asynchronously mounted note content and scrolls to the requested occurrence', async () => {
+    const scope = document.createElement('div');
+    const rootHost = document.createElement('div');
+    act(() => root.unmount());
+    container.append(scope, rootHost);
+    root = createRoot(rootHost);
+    const scroll = vi
+      .spyOn(HTMLElement.prototype, 'scrollIntoView')
+      .mockImplementation(() => {});
+    const focus = document.createElement('button');
+    container.append(focus);
+    focus.focus();
+    usePreviewSearchStore.getState().reveal('note-1', 'needle', 1);
+    act(() =>
+      root.render(<InPreviewSearchBar scopeEl={scope} nodeId="note-1" />),
+    );
+    expect(usePreviewSearchStore.getState().navigationRequest).not.toBeNull();
+    scope.innerHTML =
+      '<p data-preview-search-content>first needle</p><p data-preview-search-content>second needle</p>';
+    await act(async () => {
+      await vi.waitFor(() => expect(scroll).toHaveBeenCalledTimes(1));
+    });
+    expect(scroll.mock.instances[0]).toBe(scope.lastElementChild);
+    expect(usePreviewSearchStore.getState().navigationRequest).toBeNull();
+    expect(document.activeElement).toBe(focus);
+    scroll.mockRestore();
+  });
+
   it('is active while its node owns preview search', () => {
     usePreviewSearchStore.getState().open('pdf-1');
     usePreviewSearchStore.getState().setQuery('needle');

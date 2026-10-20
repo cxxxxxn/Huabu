@@ -535,6 +535,7 @@
     "searchingNoteContents": "Searching note contents…",
     "resultsTruncated": "The result set only contains a subset of all matches. Be more specific in your search to narrow down the results.",
     "conversationMatchNotVisible": "Match not visible in the conversation — scroll manually to find it.",
+    "previewMatchNotVisible": "Match not visible in this preview — use Find to locate it manually.",
     "fields": {
       "label": "Title",
       "summary": "Summary",

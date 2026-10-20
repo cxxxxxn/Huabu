@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import enCommon from '@/i18n/resources/en/common.json';
 import zhCNCommon from '@/i18n/resources/zh-CN/common.json';
+import { usePreviewSearchStore } from '@/store/previewSearchStore';
 import { useSearchStore, type SearchResultRow } from '@/store/searchStore';
 
 import { CanvasSearchResults } from './CanvasSearchResults';
@@ -206,7 +207,7 @@ describe('Canvas search localization', () => {
     act(() => useSearchStore.setState({ results: fieldResults }));
     const getLabels = () =>
       Array.from(
-        container?.querySelectorAll('[data-search-row-index] .uppercase') ?? [],
+        container?.querySelectorAll('[data-search-field] .uppercase') ?? [],
         (element) => element.textContent,
       );
     expect(getLabels()).toEqual([
@@ -266,6 +267,115 @@ afterEach(() => {
   searchInput?.remove();
   root = undefined;
   useSearchStore.getState().close();
+  usePreviewSearchStore.getState().close();
+});
+
+describe('Canvas search field groups and preview navigation', () => {
+  it('opens Question prompt-content matches in their conversation rather than a document preview', () => {
+    canvasState.nodes.push({ id: 'first', data: { threadId: 'thread' } });
+    act(() =>
+      useSearchStore.setState({
+        results: [
+          {
+            ...results[0],
+            match: {
+              ...results[0].match,
+              nodeType: 'question',
+              occurrenceIndex: 1,
+            },
+          },
+        ],
+      }),
+    );
+    act(() => getRow(1).click());
+    expect(openPreviewNode).toHaveBeenCalledExactlyOnceWith('first');
+    expect(scheduleScrollToMatch).toHaveBeenCalledWith(
+      expect.any(Function),
+      'test',
+      1,
+      expect.any(Object),
+    );
+    expect(usePreviewSearchStore.getState().isOpen).toBe(false);
+  });
+
+  it('groups interleaved matches by field and labels each field only once', () => {
+    const rows: SearchResultRow[] = [
+      results[0],
+      {
+        ...results[0],
+        key: 'first:summary:0',
+        match: { ...results[0].match, field: 'summary' },
+      },
+      {
+        ...results[0],
+        key: 'first:content:1',
+        match: { ...results[0].match, occurrenceIndex: 1 },
+      },
+    ];
+    act(() => useSearchStore.setState({ results: rows }));
+    expect(
+      Array.from(
+        container?.querySelectorAll('[data-search-field]') ?? [],
+        (element) => element.getAttribute('data-search-field'),
+      ),
+    ).toEqual(['content', 'content', 'summary']);
+    expect(
+      Array.from(
+        container?.querySelectorAll('.uppercase') ?? [],
+        (element) => element.textContent,
+      ),
+    ).toEqual(['Content', 'Summary']);
+    act(() => getRow(2).focus());
+    press(getRow(2), 'Enter');
+    expect(usePreviewSearchStore.getState()).toMatchObject({
+      nodeId: 'first',
+      query: 'test',
+      isOpen: true,
+      focusInput: false,
+      navigationRequest: { occurrenceIndex: 1 },
+    });
+  });
+
+  it('hands the clicked content match to preview search without stealing result focus', () => {
+    act(() => getRow(3).focus());
+    act(() => getRow(3).click());
+    expect(openPreviewNode).toHaveBeenCalledExactlyOnceWith('second', {
+      transient: true,
+      focusEditor: false,
+    });
+    expect(usePreviewSearchStore.getState()).toMatchObject({
+      nodeId: 'second',
+      query: 'test',
+      isOpen: true,
+      focusInput: false,
+      navigationRequest: { occurrenceIndex: 0 },
+    });
+    expect(document.activeElement).toBe(getRow(3));
+  });
+
+  it('cancels a pending conversation jump when activating another result or closing search', () => {
+    const cancel = vi.fn();
+    scheduleScrollToMatch.mockReturnValue(cancel);
+    canvasState.nodes.push({ id: 'first', data: { threadId: 'thread' } });
+    act(() =>
+      useSearchStore.setState({
+        results: [
+          {
+            ...results[0],
+            match: { ...results[0].match, field: 'conversation' },
+          },
+          results[1],
+        ],
+      }),
+    );
+    act(() => getRow(1).click());
+    act(() => getRow(3).click());
+    expect(cancel).toHaveBeenCalledTimes(1);
+    act(() => getRow(1).click());
+    act(() => useSearchStore.getState().close());
+    expect(cancel).toHaveBeenCalledTimes(2);
+    scheduleScrollToMatch.mockReset();
+  });
 });
 
 describe('Canvas search keyboard focus', () => {
@@ -284,6 +394,7 @@ describe('Canvas search keyboard focus', () => {
     press(getRow(1), 'Enter');
     expect(openPreviewNode).toHaveBeenCalledExactlyOnceWith('first', {
       transient: true,
+      focusEditor: false,
     });
     expect(useSearchStore.getState().collapsedNodeIds.size).toBe(0);
     press(getRow(1), 'ArrowDown');
@@ -300,12 +411,16 @@ describe('Canvas search keyboard focus', () => {
     press(searchInput, 'Enter');
     expect(openPreviewNode).toHaveBeenCalledExactlyOnceWith('first', {
       transient: true,
+      focusEditor: false,
     });
   });
 
   it('continues arrow navigation from a clicked match', () => {
     act(() => getRow(3).click());
-    expect(openPreviewNode).toHaveBeenCalledWith('second', { transient: true });
+    expect(openPreviewNode).toHaveBeenCalledWith('second', {
+      transient: true,
+      focusEditor: false,
+    });
     if (!searchInput) throw new Error('Missing search input');
     act(() => searchInput?.focus());
     press(searchInput, 'ArrowUp');

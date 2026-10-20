@@ -3,7 +3,7 @@
 > Structure, dependency rules, and conventions for the frontend. The point of
 > this doc is the **layering rules** below — not an exhaustive file listing
 > (those rot fast; `ls` the dir for the current files).
-> Last updated: 2026-10-19
+> Last updated: 2026-10-20
 
 ---
 
@@ -69,7 +69,11 @@ What stays in `apps/web/src/handler/canvasCommand/`:
 
 Common DropdownMenu action lists expose a labelled `menu` linked to their trigger. Opening focuses the first enabled item; ArrowDown/ArrowUp on the trigger open at the first/last enabled item, and ArrowDown/ArrowUp/Home/End inside the menu move focus while skipping disabled items. Tab dismisses without blocking native traversal, Escape returns focus to the trigger, and ArrowRight/ArrowLeft enter/leave submenus. Hover-opened submenus do not steal focus. Menu items retain native button/link activation. Form and layout panels declare `contentRole="dialog"` so text editing and ordinary tab order remain native; consumers that already own their menu/dialog semantics and keyboard navigation declare `contentRole="presentation"` to avoid nested menus or duplicate handlers. Popover forwards the root DOM semantics and keyboard handler without adding layout wrappers.
 
+On submenu triggers, ArrowDown and ArrowUp continue moving through the parent menu rather than opening the child. ArrowRight enters the child and focuses its first enabled item, including when hover has already opened it without moving focus.
+
 Canvas search synchronizes its active row when a result receives DOM focus. Arrow navigation from a result moves focus to the newly active row after Virtuoso reveals it, so Enter activates the same row that has focus. Navigation from the search input retains input focus and uses the active row for confirmation; browsing continues to reveal Canvas nodes without opening Preview tabs until explicit activation.
+
+Canvas search groups matches by node and then by field in first-seen order. Each field has one localized heading above its contiguous matches, rather than a repeated label on every match. Field headings are not extra keyboard stops; each snippet remains independently focusable and activatable, with its field included in its accessible name. Node counts continue to count matches rather than fields.
 
 Canvas search uses the shared `search` translation keys for empty, streaming, truncated-result, and conversation-match timeout messages. Result-field identifiers remain unchanged in the wire data and map to localized display labels for title, summary, keywords, content, and conversation. Switching language updates result labels and status messages without resetting the search.
 

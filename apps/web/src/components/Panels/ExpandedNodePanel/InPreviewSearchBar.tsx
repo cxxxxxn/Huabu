@@ -30,10 +30,16 @@ import { useTranslation } from 'react-i18next';
 
 import { usePreviewSearchAdapter } from './PreviewSearchAdapterContext';
 import { formatShortcutById } from '../../../config/shortcuts';
-import { findNthRange, scrollRangeIntoView } from '../../../hooks/searchDom';
+import {
+  findNthRange,
+  findRanges,
+  scheduleScrollToMatch,
+  scrollRangeIntoView,
+} from '../../../hooks/searchDom';
 import { useTextHighlight } from '../../../hooks/useTextHighlight';
 import { usePreviewSearchStore } from '../../../store/previewSearchStore';
 import { Button } from '../../Common/Button';
+import { toast } from '../../Common/Toast';
 
 interface InPreviewSearchBarProps {
   /** Root of the preview content. Highlights paint over its descendants. */
@@ -51,24 +57,27 @@ export const InPreviewSearchBar = ({
   const query = usePreviewSearchStore((s) => s.query);
   const setQuery = usePreviewSearchStore((s) => s.setQuery);
   const close = usePreviewSearchStore((s) => s.close);
+  const focusInput = usePreviewSearchStore((s) => s.focusInput);
+  const navigationRequest = usePreviewSearchStore((s) => s.navigationRequest);
   const inputRef = useRef<HTMLInputElement>(null);
   const [activeMatchIdx, setActiveMatchIdx] = useState(0);
   const searchAdapter = usePreviewSearchAdapter();
   const isActive = isOpen && ownerNodeId === nodeId;
 
   useEffect(() => {
-    if (isActive) {
+    if (isActive && focusInput) {
       inputRef.current?.focus();
       inputRef.current?.select();
     }
-  }, [isActive]);
+  }, [isActive, focusInput]);
 
   // Preview search is a per-node session. When the owning node changes or
   // the panel unmounts, reset the shared store so reopening the same node
   // does not resurrect a stale query and steal focus on mount.
   useEffect(() => {
     return () => {
-      usePreviewSearchStore.getState().close();
+      const state = usePreviewSearchStore.getState();
+      if (state.nodeId === nodeId) state.close();
     };
   }, [nodeId]);
 
@@ -99,6 +108,44 @@ export const InPreviewSearchBar = ({
     setActiveMatchIdx(0);
     setHasNavigated(false);
   }, [query]);
+
+  useEffect(() => {
+    if (!isActive || !navigationRequest || !scopeEl || !query) return;
+    const { occurrenceIndex, nonce } = navigationRequest;
+    const consume = () =>
+      usePreviewSearchStore.getState().consumeNavigation(nonce);
+    if (searchAdapter) {
+      if (!searchAdapter.canNavigate || searchAdapter.isSearching) return;
+      if (searchAdapter.matchCount === 0) {
+        toast(t('search.previewMatchNotVisible'), {
+          tone: 'info',
+          duration: 4000,
+        });
+      } else {
+        const index = Math.min(occurrenceIndex, searchAdapter.matchCount - 1);
+        searchAdapter.navigateToMatch(index);
+        setActiveMatchIdx(index);
+        setHasNavigated(true);
+      }
+      consume();
+      return;
+    }
+    return scheduleScrollToMatch(() => scopeEl, query, occurrenceIndex, {
+      onMatch: () => {
+        const count = findRanges(scopeEl, query).length;
+        setActiveMatchIdx(occurrenceIndex < count ? occurrenceIndex : 0);
+        setHasNavigated(true);
+        consume();
+      },
+      onTimeout: () => {
+        toast(t('search.previewMatchNotVisible'), {
+          tone: 'info',
+          duration: 4000,
+        });
+        consume();
+      },
+    });
+  }, [isActive, navigationRequest, scopeEl, query, searchAdapter, t]);
 
   const jumpToMatch = (idx: number): void => {
     if (

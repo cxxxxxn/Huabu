@@ -535,6 +535,7 @@
     "searchingNoteContents": "正在搜索笔记正文…",
     "resultsTruncated": "当前仅显示部分匹配结果，请使用更具体的搜索内容缩小范围。",
     "conversationMatchNotVisible": "对话中未显示匹配内容，请手动滚动查找。",
+    "previewMatchNotVisible": "预览中未显示匹配内容，请使用查找手动定位。",
     "fields": {
       "label": "标题",
       "summary": "摘要",

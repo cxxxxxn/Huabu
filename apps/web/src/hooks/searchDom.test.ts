@@ -3,7 +3,12 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { findNthRange, findRanges, scheduleScrollToMatch } from './searchDom';
+import {
+  findNthRange,
+  findRanges,
+  scheduleScrollToMatch,
+  scrollRangeIntoView,
+} from './searchDom';
 
 function rootWith(html: string): HTMLElement {
   const root = document.createElement('div');
@@ -15,6 +20,82 @@ function rootWith(html: string): HTMLElement {
 }
 
 describe('preview DOM search boundaries', () => {
+  it('scrolls a match hidden below an inner panel even when it is inside the browser viewport', () => {
+    const root = rootWith('needle');
+    root.style.overflowY = 'auto';
+    const range = findNthRange(root, 'needle', 0);
+    if (!range) throw new Error('Missing fixture match');
+    vi.spyOn(root, 'getBoundingClientRect').mockReturnValue(
+      new DOMRect(0, 100, 300, 200),
+    );
+    vi.spyOn(range, 'getBoundingClientRect').mockReturnValue(
+      new DOMRect(0, 350, 100, 20),
+    );
+    const scroll = vi
+      .spyOn(root, 'scrollIntoView')
+      .mockImplementation(() => {});
+    scrollRangeIntoView(range);
+    expect(scroll).toHaveBeenCalledExactlyOnceWith({
+      block: 'center',
+      behavior: 'auto',
+    });
+    scroll.mockRestore();
+    root.remove();
+  });
+
+  it('waits for older server pages before resolving a conversation ordinal', async () => {
+    const root = rootWith(
+      '<p data-preview-search-content data-id="recent">needle recent</p>',
+    );
+    root.setAttribute('data-chat-thread-root', '');
+    root.setAttribute('data-chat-has-older', 'true');
+    root.addEventListener('chat-reveal-search', (event) =>
+      event.preventDefault(),
+    );
+    const finished = vi.fn();
+    root.addEventListener('chat-search-finished', finished);
+    const onMatch = vi.fn();
+    const scroll = vi
+      .spyOn(HTMLElement.prototype, 'scrollIntoView')
+      .mockImplementation(() => {});
+    const cancel = scheduleScrollToMatch(() => root, 'needle', 0, { onMatch });
+    expect(onMatch).not.toHaveBeenCalled();
+    root.innerHTML =
+      '<p data-preview-search-content data-id="older">needle older</p><p data-preview-search-content>needle recent</p>';
+    root.removeAttribute('data-chat-has-older');
+    expect(findRanges(root, 'needle')).toHaveLength(2);
+    await vi.waitFor(() => expect(onMatch).toHaveBeenCalledTimes(1));
+    expect(
+      onMatch.mock.calls[0]?.[0].startContainer.parentElement?.dataset.id,
+    ).toBe('older');
+    expect(finished).toHaveBeenCalledTimes(1);
+    cancel();
+    scroll.mockRestore();
+    root.remove();
+  });
+
+  it('does not silently jump to the first conversation occurrence when the requested one is missing', async () => {
+    const root = rootWith('needle');
+    root.setAttribute('data-chat-thread-root', '');
+    root.addEventListener('chat-reveal-search', (event) =>
+      event.preventDefault(),
+    );
+    const onMatch = vi.fn();
+    const onTimeout = vi.fn();
+    const finished = vi.fn();
+    root.addEventListener('chat-search-finished', finished);
+    const cancel = scheduleScrollToMatch(() => root, 'needle', 3, {
+      timeoutMs: 10,
+      onMatch,
+      onTimeout,
+    });
+    await vi.waitFor(() => expect(onTimeout).toHaveBeenCalledTimes(1));
+    expect(onMatch).not.toHaveBeenCalled();
+    expect(finished).toHaveBeenCalledTimes(1);
+    cancel();
+    root.remove();
+  });
+
   it('searches marked document content instead of adjacent editor chrome', () => {
     const root = rootWith(`
       <div class="milkdown-slash-menu">Task List</div>

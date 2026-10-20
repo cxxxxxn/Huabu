@@ -31,6 +31,7 @@ import { findRanges } from './searchDom';
 
 /** Global registered highlight name. CSS selector: `::highlight(huabu-search)`. */
 const HIGHLIGHT_NAME = 'huabu-search';
+const surfaceRanges = new Map<symbol, Range[]>();
 
 interface UseTextHighlightOptions {
   /**
@@ -39,7 +40,7 @@ interface UseTextHighlightOptions {
    * `::highlight()` registration — used when the canvas-wide search
    * needs to paint matches on both the canvas root and the expanded
    * preview panel at the same time. `null` (or an array of only
-   * `null`s) clears the highlight set.
+   * `null`s) removes this surface's ranges without clearing other surfaces.
    */
   container: HTMLElement | (HTMLElement | null)[] | null;
   /** Needle. Empty string clears the highlight set. */
@@ -122,7 +123,6 @@ export function useTextHighlight({
     // No-container / no-query / no-API → make sure count is zeroed
     // even when the API isn't available (jsdom in tests).
     if (liveContainers.length === 0 || !query) {
-      highlights?.delete(HIGHLIGHT_NAME);
       setMatchCount(0);
       return;
     }
@@ -139,6 +139,13 @@ export function useTextHighlight({
       return;
     }
 
+    const surface = Symbol('search-surface');
+    const publish = (): void => {
+      const ranges = Array.from(surfaceRanges.values()).flat();
+      if (ranges.length === 0) highlights.delete(HIGHLIGHT_NAME);
+      else highlights.set(HIGHLIGHT_NAME, new HighlightCtor(...ranges));
+    };
+
     const apply = (): void => {
       const ranges: Range[] = [];
       for (const c of liveContainers) {
@@ -152,17 +159,8 @@ export function useTextHighlight({
       // Only update state when the count actually changes — avoids
       // a render storm during pdf.js's per-page text-layer mounts.
       setMatchCount((prev) => (prev === ranges.length ? prev : ranges.length));
-      if (ranges.length === 0) {
-        highlights.delete(HIGHLIGHT_NAME);
-        return;
-      }
-      // Highlight constructor accepts an iterable of Range.
-      highlights.set(
-        HIGHLIGHT_NAME,
-        new HighlightCtor(
-          ...(ranges as unknown as ConstructorParameters<typeof Highlight>),
-        ),
-      );
+      surfaceRanges.set(surface, ranges);
+      publish();
     };
 
     apply();
@@ -198,7 +196,8 @@ export function useTextHighlight({
     return () => {
       if (scheduled) cancelAnimationFrame(scheduled);
       for (const o of observers) o.disconnect();
-      highlights.delete(HIGHLIGHT_NAME);
+      surfaceRanges.delete(surface);
+      publish();
     };
     // `liveContainers` is rebuilt every render but `depKey` collapses
     // it into a primitive identity string, so the effect only re-runs
