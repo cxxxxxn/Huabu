@@ -231,6 +231,8 @@ The `chat_v2/` two-tier log and `threads.json` remain owned by Agenetes L2 (`Fil
 
 Space hierarchy serialization also lives in `modules/canvas/write-coordinator.ts`. Its process-local queue covers ownership validation and mutation, collection/move, subtree deletion, and composed Space creation/deletion. It acquires a Workspace operation lease before queueing and holds it through completion, permits nested calls for creation and compensation, and invalidates inherited ownership once the outer operation ends. Acquire the hierarchy lock before any Canvas mutexes. The storage composition root uses this application coordinator for lifecycle entry points; adapters retain their own per-Space deletion admission. Neither coordinator provides distributed locking or crash-atomic transactions.
 
+Standalone `deleteSpace()` lists membership to reject non-leaf deletion. Confirmed subtree deletion lists membership once under the hierarchy lock, validates the confirmation token, and uses `deleteSpaceFromValidatedTreeAlreadyLocked()` for its descendant-first plan instead of repeating that listing for every member. This internal path asserts active hierarchy-lock ownership and reuses the same per-Space deletion session and blob-first cleanup. The caller stops on the first failure and reports completed and remaining members; Canvas mutexes, Agent turn leases, and the Workspace lease remain held across the operation.
+
 ### 3.1 Task creation across persistence domains
 
 `TaskService.create()` validates its shared request contract, target Canvas, and selectable default root Profile before mutation. It then creates a static ordinary Task Note through the authoritative Canvas executor and persists the canonical Task record through `SpaceTasks.create`.

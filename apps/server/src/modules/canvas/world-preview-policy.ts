@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { CANVAS_NODE_TYPES } from '@huabu/shared';
+import { CANVAS_NODE_TYPES, spaceHierarchyParamsSchema } from '@huabu/shared';
 import { COMMAND_META, getDescendantIds } from '@huabu/shared/canvas-engine';
 
 import {
@@ -48,7 +48,11 @@ export async function assertChildSpaceEntriesAllowed(
   const byId = new Map(storedNodes(nodes).map((node) => [node.id, node]));
   for (const previous of storedNodes(previousNodes)) {
     const target = previewTarget(previous);
-    if (!target) continue;
+    if (
+      !target ||
+      !spaceHierarchyParamsSchema.shape.canvasId.safeParse(target).success
+    )
+      continue;
     const next = byId.get(previous.id);
     if (next && previewTarget(next) === target) continue;
     const child = await space(target).read();

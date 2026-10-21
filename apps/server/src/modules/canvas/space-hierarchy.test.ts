@@ -8,7 +8,9 @@ import { join } from 'node:path';
 import Fastify from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { executeOnServer } from './canvas-executor.js';
+import { invertDelta } from '@huabu/shared/canvas-engine';
+
+import { applyDeltasOnServer, executeOnServer } from './canvas-executor.js';
 import * as canvasSync from './canvas-sync.js';
 import canvasRoutes from './canvas.route.js';
 import {
@@ -292,6 +294,95 @@ describe('Mixed selection Space migration', () => {
 });
 
 describe('Space ownership', () => {
+  it.each(['commands', 'deltas', 'structure', 'sidecar'])(
+    'allows malformed dangling shortcut cleanup through %s',
+    async (path) => {
+      await executeOnServer({
+        canvasId: 'root',
+        originator: { source: 'ui' },
+        commands: [
+          {
+            type: 'CREATE_NODES',
+            nodes: [
+              { id: 'node-frame', nodeType: 'frame', position: { x: 0, y: 0 } },
+              {
+                id: 'node-shortcut',
+                nodeType: 'spacePreview',
+                parentId: 'node-frame',
+                position: { x: 0, y: 0 },
+                data: { targetCanvasId: 'invalid/target' },
+              },
+            ],
+          },
+        ],
+      });
+      const app = Fastify();
+      await app.register(canvasRoutes);
+      try {
+        const before = await storage.space('root').read();
+        if (!before) throw new Error('Missing fixture');
+        if (path === 'commands') {
+          await executeOnServer({
+            canvasId: 'root',
+            originator: { source: 'ui' },
+            commands: [{ type: 'DELETE_NODES', nodeIds: ['node-frame'] }],
+          });
+        } else if (path === 'deltas') {
+          await applyDeltasOnServer({
+            canvasId: 'root',
+            deltas: (before.state.nodes as CanvasNode[]).map((node) => ({
+              type: 'DELETE_NODE',
+              node,
+            })),
+            originator: { source: 'ui' },
+          });
+        } else if (path === 'structure') {
+          const response = await app.inject({
+            method: 'PUT',
+            url: '/root',
+            payload: {
+              version: before.version,
+              state: { nodes: [], edges: [] },
+            },
+          });
+          expect(response.statusCode, response.body).toBe(200);
+        } else {
+          const response = await app.inject({
+            method: 'DELETE',
+            url: '/root/nodes/node-shortcut',
+          });
+          expect(response.statusCode, response.body).toBe(200);
+          expect(
+            await storage.space('root').nodes.read('node-shortcut'),
+          ).toBeNull();
+        }
+        if (path !== 'sidecar')
+          expect((await storage.space('root').read())?.state.nodes).toEqual([]);
+      } finally {
+        await app.close();
+      }
+    },
+  );
+
+  it.each(['invalid/target', '../target', 'invalid\\target', '', 'bad target'])(
+    'does not look up malformed target %j when removing or retargeting a shortcut',
+    async (targetCanvasId) => {
+      const node = {
+        id: 'node-shortcut',
+        type: 'spacePreview',
+        data: { targetCanvasId },
+      };
+      const readTarget = vi.spyOn(storage, 'space');
+      await assertChildSpaceEntriesAllowed('root', [node], []);
+      await assertChildSpaceEntriesAllowed(
+        'root',
+        [node],
+        [{ ...node, data: { targetCanvasId: 'root' } }],
+      );
+      expect(readTarget).not.toHaveBeenCalled();
+    },
+  );
+
   it('accepts geometry-only PUTs but rejects removed or retargeted canonical entries', async () => {
     const child = await createChildSpace('root', 'Child');
     const app = Fastify();
@@ -361,6 +452,58 @@ describe('Space ownership', () => {
     ).rejects.toThrow('child Space entry');
     expect(readTarget).toHaveBeenCalledWith(child.canvasId);
     expect(listing).not.toHaveBeenCalled();
+  });
+
+  it('does not list Workspace membership during ordinary commands, delta replay, or structural saves', async () => {
+    const child = await createChildSpace('root', 'Child');
+    const repository = storage.getStructuredStore().spaces();
+    const listing = vi
+      .spyOn(Object.getPrototypeOf(repository) as typeof repository, 'list')
+      .mockRejectedValue(new Error('An unrelated Space is unreadable'));
+    const created = await executeOnServer({
+      canvasId: 'root',
+      originator: { source: 'ui' },
+      commands: [
+        {
+          type: 'CREATE_NODES',
+          nodes: [
+            {
+              id: 'node-note',
+              nodeType: 'note',
+              position: { x: 600, y: 0 },
+              data: { content: 'Ordinary edit' },
+            },
+          ],
+        },
+      ],
+    });
+    await applyDeltasOnServer({
+      canvasId: 'root',
+      originator: { source: 'ui' },
+      deltas: [...created.deltas].reverse().map(invertDelta),
+    });
+    const current = await storage.space('root').read();
+    const app = Fastify();
+    await app.register(canvasRoutes);
+    try {
+      const response = await app.inject({
+        method: 'PUT',
+        url: '/root',
+        payload: {
+          version: current?.version,
+          state: {
+            nodes: [
+              { id: child.parentEntryNodeId, position: { x: 20, y: 30 } },
+            ],
+            edges: [],
+          },
+        },
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(listing).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
   });
   it('places the canonical child entry at the requested canvas coordinates', async () => {
     const app = Fastify();
@@ -509,10 +652,43 @@ describe('Space ownership', () => {
     expect((await storage.space('root').read())?.state.nodes).toEqual([]);
   });
 
+  it.each([1, 4, 12])(
+    'lists membership once when deleting %i nested Spaces',
+    async (count) => {
+      const root = await createChildSpace('root', 'Subtree');
+      const ids = [root.canvasId];
+      for (let index = 1; index < count; index++) {
+        const child = await createChildSpace(ids[index - 1], `Child ${index}`);
+        ids.push(child.canvasId);
+      }
+      const preview = deletionPreview(await list(), root.canvasId);
+      const repository = storage.getStructuredStore().spaces();
+      const listing = vi.spyOn(
+        Object.getPrototypeOf(repository) as typeof repository,
+        'list',
+      );
+      expect(await deleteSpaceTree(root.canvasId, preview.token)).toEqual(
+        [...ids].reverse(),
+      );
+      expect(listing).toHaveBeenCalledOnce();
+      expect((await storage.space('root').read())?.state.nodes).toEqual([]);
+    },
+  );
+
+  it('rejects the internal deletion path outside the hierarchy lock', async () => {
+    await expect(
+      storage.deleteSpaceFromValidatedTreeAlreadyLocked('root'),
+    ).rejects.toThrow('hierarchy lock');
+    expect(await storage.space('root').read()).not.toBeNull();
+  });
+
   it('reports completed and remaining members after a partial deletion failure', async () => {
     const child = await createChildSpace('root', 'Child');
-    const original = storage.deleteSpace;
-    vi.spyOn(storage, 'deleteSpace').mockImplementation(async (id) => {
+    const original = storage.deleteSpaceFromValidatedTreeAlreadyLocked;
+    vi.spyOn(
+      storage,
+      'deleteSpaceFromValidatedTreeAlreadyLocked',
+    ).mockImplementation(async (id) => {
       if (id === 'root') throw new Error('Storage unavailable');
       return original(id);
     });
@@ -528,6 +704,26 @@ describe('Space ownership', () => {
     expect(await storage.space('root').read()).not.toBeNull();
   });
 
+  it('stops before deleting ancestors when a descendant is refused', async () => {
+    const child = await createChildSpace('root', 'Child');
+    const deletion = vi
+      .spyOn(storage, 'deleteSpaceFromValidatedTreeAlreadyLocked')
+      .mockResolvedValue({
+        ok: false,
+        reason: 'world-forbidden',
+      });
+    await expect(
+      deleteSpaceTree('root', deletionPreview(await list(), 'root').token),
+    ).rejects.toMatchObject({
+      code: 'SPACE_TREE_DELETE_FAILED',
+      details: {
+        deletedCanvasIds: [],
+        remainingCanvasIds: [child.canvasId, 'root'],
+      },
+    });
+    expect(deletion).toHaveBeenCalledExactlyOnceWith(child.canvasId);
+    expect(await list()).toHaveLength(2);
+  });
   it('rejects a busy conversation before deleting any subtree member', async () => {
     const child = await createChildSpace('root', 'Child');
     await executeOnServer({

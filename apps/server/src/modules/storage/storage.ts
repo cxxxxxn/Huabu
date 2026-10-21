@@ -54,7 +54,10 @@ import {
 import { SqliteStructuredStore } from './backends/sqlite/structured-store.js';
 import { SqliteWorkspaceRepository } from './backends/sqlite/workspace-repository.js';
 import { hasStorageCapability } from './capabilities.js';
-import { withSpaceHierarchyLock } from '../canvas/write-coordinator.js';
+import {
+  assertSpaceHierarchyLocked,
+  withSpaceHierarchyLock,
+} from '../canvas/write-coordinator.js';
 import { spaceBlobAreas } from './ports/blob.js';
 import {
   parseStorageProfile,
@@ -838,13 +841,18 @@ export async function deleteSpace(
     ) {
       throw new Error('Space has children; use confirmed subtree deletion');
     }
-    return deleteSpaceUnlocked(canvasId);
+    return deleteSpaceFromValidatedTreeAlreadyLocked(canvasId);
   });
 }
 
-async function deleteSpaceUnlocked(
+/**
+ * Internal lifecycle path for a validated descendant-first deletion plan.
+ * The caller must stop on failure and hold the hierarchy lock throughout.
+ */
+export async function deleteSpaceFromValidatedTreeAlreadyLocked(
   canvasId: string,
 ): Promise<SpaceDeleteOutcome> {
+  assertSpaceHierarchyLocked();
   const storage = ensure();
   const started = await storage.structured.spaces().beginDelete({ canvasId });
   if (!started.ok) return started;

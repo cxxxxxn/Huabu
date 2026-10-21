@@ -97,27 +97,31 @@ it('allows geometry undo and redo for canonical entries', async () => {
   expect(notifications.toast).not.toHaveBeenCalled();
 });
 
-it('blocks a Frame deletion before deleting any ordinary descendants when ownership is unknown', () => {
-  const nodes: Node[] = [
-    { id: 'node-frame', type: 'frame', position: { x: 0, y: 0 }, data: {} },
-    { ...entry, parentId: 'node-frame' },
-    {
-      id: 'node-note',
-      type: 'note',
-      parentId: 'node-frame',
-      position: { x: 0, y: 0 },
-      data: { content: 'Keep' },
-    },
-  ];
-  useCanvasStore.getState()._setStateNoAutosave({ nodes });
-  useCanvasStore
-    .getState()
-    .dispatchUiIntent({ type: 'DELETE_NODES', nodeIds: ['node-frame'] });
-  expect(useCanvasStore.getState().nodes).toEqual(nodes);
-  expect(api.deleteNode).not.toHaveBeenCalled();
-  expect(canvasHistoryManager.hasPendingDeletes('parent')).toBe(false);
-  expect(refresh).toHaveBeenCalledOnce();
-});
+it.each(['loading', 'error', 'ready'] as const)(
+  'blocks a Frame deletion before deleting any ordinary descendants when ownership is missing (%s)',
+  (spaceTitlesStatus) => {
+    useWorkspaceStore.setState({ spaceTitlesStatus });
+    const nodes: Node[] = [
+      { id: 'node-frame', type: 'frame', position: { x: 0, y: 0 }, data: {} },
+      { ...entry, parentId: 'node-frame' },
+      {
+        id: 'node-note',
+        type: 'note',
+        parentId: 'node-frame',
+        position: { x: 0, y: 0 },
+        data: { content: 'Keep' },
+      },
+    ];
+    useCanvasStore.getState()._setStateNoAutosave({ nodes });
+    useCanvasStore
+      .getState()
+      .dispatchUiIntent({ type: 'DELETE_NODES', nodeIds: ['node-frame'] });
+    expect(useCanvasStore.getState().nodes).toEqual(nodes);
+    expect(api.deleteNode).not.toHaveBeenCalled();
+    expect(canvasHistoryManager.hasPendingDeletes('parent')).toBe(false);
+    expect(refresh).toHaveBeenCalledOnce();
+  },
+);
 
 it('also protects direct command deletion instead of relying on UI Delete', () => {
   knowChild();

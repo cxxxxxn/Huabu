@@ -5,7 +5,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { nodeRevisionOf } from '@huabu/shared/canvas-engine';
 
-import { updateNode, withSpaceHierarchyLock } from './write-coordinator.js';
+import {
+  assertSpaceHierarchyLocked,
+  updateNode,
+  withSpaceHierarchyLock,
+} from './write-coordinator.js';
 import { acquireWorkspaceOperationLease } from '../workspace.js';
 
 import type {
@@ -78,6 +82,22 @@ describe('withSpaceHierarchyLock', () => {
     await expect(failed).rejects.toBe(error);
     await expect(next).resolves.toBe('next');
     expect(releaseLease).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects expired inherited lock ownership', async () => {
+    const gate = deferred();
+    let inherited!: Promise<void>;
+    await withSpaceHierarchyLock(async () => {
+      expect(assertSpaceHierarchyLocked).not.toThrow();
+      inherited = (async () => {
+        await gate.promise;
+        assertSpaceHierarchyLocked();
+      })();
+    });
+    const rejected = expect(inherited).rejects.toThrow('hierarchy lock');
+    gate.resolve();
+    await rejected;
+    expect(assertSpaceHierarchyLocked).toThrow('hierarchy lock');
   });
 
   it('does not let expired inherited contexts bypass the queue', async () => {

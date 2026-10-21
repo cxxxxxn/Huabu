@@ -18,7 +18,7 @@ import { agentThreadService } from '../agent/agent-thread.service.js';
 import { acquireAgentTurn } from '../agent/turn-lease.js';
 import {
   createSpace,
-  deleteSpace,
+  deleteSpaceFromValidatedTreeAlreadyLocked,
   getStructuredStore,
   space,
 } from '../storage/index.js';
@@ -307,7 +307,7 @@ export async function deleteSpaceTree(
             }
           }
           for (const id of ids) {
-            const outcome = await deleteSpace(id);
+            const outcome = await deleteSpaceFromValidatedTreeAlreadyLocked(id);
             if (!outcome.ok)
               throw new Error(
                 `Could not delete Space ${id}: ${outcome.reason}`,

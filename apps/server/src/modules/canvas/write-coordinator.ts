@@ -26,6 +26,11 @@ const canvasMutexChains = new Map<string, Promise<unknown>>();
 const hierarchyOwner = new AsyncLocalStorage<{ active: boolean }>();
 let hierarchyTail: Promise<void> = Promise.resolve();
 
+export function assertSpaceHierarchyLocked(): void {
+  if (!hierarchyOwner.getStore()?.active)
+    throw new Error('Space hierarchy lock is required');
+}
+
 /** Acquire before Canvas mutexes; nested create/delete compensation may reenter. */
 export async function withSpaceHierarchyLock<T>(
   operation: () => Promise<T>,
