@@ -433,6 +433,7 @@ export const NodeToolbar = ({ activeTool, onToolChange }: NodeToolbarProps) => {
                 activeTool === 'lasso' ? 'L' : activeTool === 'pan' ? 'P' : 'S'
               }
               primaryShortcutBadgeActive={!pendingNodeType}
+              primaryPressed={!pendingNodeType}
               primaryButtonClassName={clsx(
                 MAIN_TOOL_BUTTON_CLASS,
                 !pendingNodeType &&
@@ -453,6 +454,7 @@ export const NodeToolbar = ({ activeTool, onToolChange }: NodeToolbarProps) => {
             title={toolTitle(t('toolbar.nodes.note'), '1')}
             shortcutBadge={isNotMouse ? undefined : '1'}
             shortcutBadgeActive={pendingNodeType === 'note'}
+            aria-pressed={pendingNodeType === 'note'}
             className={clsx(
               MAIN_TOOL_BUTTON_CLASS,
               pendingNodeType === 'note' &&
@@ -471,6 +473,7 @@ export const NodeToolbar = ({ activeTool, onToolChange }: NodeToolbarProps) => {
             title={toolTitle(t('toolbar.nodes.text'), '2')}
             shortcutBadge={isNotMouse ? undefined : '2'}
             shortcutBadgeActive={pendingNodeType === 'text'}
+            aria-pressed={pendingNodeType === 'text'}
             className={clsx(
               MAIN_TOOL_BUTTON_CLASS,
               pendingNodeType === 'text' &&
@@ -489,6 +492,7 @@ export const NodeToolbar = ({ activeTool, onToolChange }: NodeToolbarProps) => {
             title={toolTitle(t('toolbar.nodes.frame'), '3')}
             shortcutBadge={isNotMouse ? undefined : '3'}
             shortcutBadgeActive={pendingNodeType === 'frame'}
+            aria-pressed={pendingNodeType === 'frame'}
             className={clsx(
               MAIN_TOOL_BUTTON_CLASS,
               pendingNodeType === 'frame' &&
@@ -524,6 +528,7 @@ export const NodeToolbar = ({ activeTool, onToolChange }: NodeToolbarProps) => {
                 title={`${t('toolbar.nodes.sketch')} (4)`}
                 shortcutBadge="4"
                 shortcutBadgeActive={pendingNodeType === 'sketch'}
+                aria-pressed={pendingNodeType === 'sketch'}
                 className={clsx(
                   MAIN_TOOL_BUTTON_CLASS,
                   pendingNodeType === 'sketch' &&

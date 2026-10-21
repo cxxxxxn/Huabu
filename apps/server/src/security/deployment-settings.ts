@@ -141,7 +141,7 @@ export function resolveDeploymentEnvironment(
   };
   const disk = parseStorageProfile(env).structured.kind === 'disk';
   if (disk) {
-    const workspace = env.HUABU_WORKSPACE?.trim() || remote.workspacePath;
+    const workspace = env.HUABU_WORKSPACE ?? remote.workspacePath;
     if (!workspace || !isAbsolute(workspace)) {
       throw new Error(
         'Remote disk access requires an absolute Home directory. Run pnpm run setup or set HUABU_WORKSPACE.',

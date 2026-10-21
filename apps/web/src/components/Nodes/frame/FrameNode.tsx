@@ -239,6 +239,7 @@ export const FrameNode = memo(
       <DropdownMenu
         floating
         placement="bottom"
+        contentRole="dialog"
         className="node-toolbar-layout"
         trigger={
           <Button variant="ghost" iconOnly title={t('node.frameLayout')}>

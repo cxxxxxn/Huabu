@@ -1475,7 +1475,9 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
             const current = currentById.get(node.id);
             const patch = node.data ?? {};
             return current &&
-              changesAgentNodePreparation(current.data ?? {}, patch)
+              (changesAgentNodePreparation(current.data ?? {}, patch) ||
+                (Object.prototype.hasOwnProperty.call(patch, 'agentMode') &&
+                  patch.agentMode !== current.data?.agentMode))
               ? [{ current, patch }]
               : [];
           }),

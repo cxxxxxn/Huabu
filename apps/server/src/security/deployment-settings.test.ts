@@ -173,6 +173,28 @@ describe('saved deployment configuration', () => {
       ),
     ).toThrow('configured together');
   });
+  it.each(['', ' ', '\t', 'relative/home'])(
+    'rejects an invalid explicit Home override instead of selecting the saved Home: %j',
+    (workspace) => {
+      expect(() =>
+        resolveDeploymentEnvironment(
+          { HUABU_WORKSPACE: workspace },
+          remote,
+          'saved-password',
+        ),
+      ).toThrow('absolute Home directory');
+    },
+  );
+  it('preserves whitespace that belongs to an absolute Home path', () => {
+    const workspace = `${join(tmpdir(), 'home with spaces')} `;
+    expect(
+      resolveDeploymentEnvironment(
+        { HUABU_WORKSPACE: workspace },
+        remote,
+        'saved-password',
+      ).HUABU_WORKSPACE,
+    ).toBe(workspace);
+  });
   it('fails closed when the saved password or config is missing/damaged', () => {
     expect(() => resolveDeploymentEnvironment({}, remote, null)).toThrow(
       'no saved password',

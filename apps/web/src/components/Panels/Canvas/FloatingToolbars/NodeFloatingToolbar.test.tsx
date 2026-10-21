@@ -173,6 +173,38 @@ describe('NodeFloatingToolbar type-icon drag surface', () => {
     act(() => trigger.click());
   }
 
+  it('lets the shared menu move focus through production overflow actions', async () => {
+    render();
+    await act(async () => openPanel('toolbar.more'));
+    const items = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    );
+    expect(items).toHaveLength(4);
+    expect(items[0].textContent).toContain('spaceHierarchy.collectAction');
+    expect(document.activeElement).toBe(items[0]);
+    act(() =>
+      items[0].dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'ArrowDown',
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    expect(document.activeElement).toBe(items[1]);
+    act(() =>
+      items[1].dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'End',
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    expect(document.activeElement).toBe(items[3]);
+    expect(items[3].textContent).toContain('actions.delete');
+  });
+
   it('anchors Move to the persistent overflow trigger rather than its disappearing menu item', () => {
     render();
     const trigger = container.querySelector<HTMLButtonElement>(

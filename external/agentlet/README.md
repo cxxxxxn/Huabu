@@ -74,6 +74,10 @@ The control and session connections use the same `agentletId`. Each spawned ACP 
 
 A `server/shutdown` notification with reason `server_shutting_down` means the host is stopping, not that the user wants the daemon to exit. The daemon stops old managed agents and pending launches, stays alive, and reconnects with the same device identity and credentials after delays of 1, 2, 4, 8, 16, then 30 seconds by default. Attempts continue while the daemon runs; a successful handshake resets the delay. This restores device availability, not running tasks or session relays. Other shutdown reasons and user signals still stop the daemon. A rejected control handshake or HTTP 401/403 upgrade exits nonzero with actionable connection guidance rather than retrying rejected credentials indefinitely.
 
+Stopping waits for owned process-tree cleanup before releasing capacity or reconnecting, not merely for the shell to exit. POSIX signals the dedicated process group; Windows awaits tree-wide `taskkill`. Descendants that deliberately create a separate POSIX session are outside that group.
+
+Failed bootstrap cleanup retains its capacity reservation and is retried after one second. Idle cleanup failure keeps the agent tracked for an explicit stop retry. Shutdown attempts all pending and managed cleanups concurrently and waits for every result before exiting, reporting failure if any tree could not be stopped.
+
 ## Harness discovery
 
 The daemon advertises `capabilities.harnessDiscovery: { version: 2 }`. Gateways may call `server/discoverHarnesses` with `{}` for read-only discovery or `{ "prepareWorkspaces": true }` for automatic provisioning. The response includes every registered Definition with static identity, boolean capabilities, `ready`, `adapter-missing`, or `not-found` status, optional version, workspace, and diagnostics. No remote candidates, commands, IDs, or roots are accepted.

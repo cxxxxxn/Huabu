@@ -93,9 +93,7 @@ describe('private standalone master key', () => {
     },
   );
   it('uses an instance-specific default and a source-relative data directory', () => {
-    expect(getDataDir({}).replaceAll('\\', '/')).toMatch(
-      /apps\/server\/data\/$/,
-    );
+    expect(getDataDir({}).replaceAll('\\', '/')).toMatch(/apps\/server\/data$/);
     expect(getConfigDir({ HUABU_DATA_DIR: '/one' })).not.toBe(
       getConfigDir({ HUABU_DATA_DIR: '/two' }),
     );

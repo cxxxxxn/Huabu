@@ -87,8 +87,8 @@ export class Agentlet {
   }
   private controlWs: WebSocket | null = null
   private readonly agents = new Map<string, ManagedAgent>()
-  private pendingSpawns = 0
   private readonly startingAgents = new Set<AgentProcess>()
+  private readonly startingCleanupTimers = new Map<AgentProcess, ReturnType<typeof setTimeout>>()
   private readonly stopOperations = new Map<string, Promise<StopResult>>()
   private handshakeComplete = false
 
@@ -313,6 +313,14 @@ export class Agentlet {
   }
 
   private async handleSpawn(requestId: string | number, params: SpawnParams): Promise<void> {
+    if (this.shutdownInProgress || this.serverRestartInProgress) {
+      this.sendDaemonResponse(requestId, undefined, {
+        code: -32000,
+        message: 'Agentlet is stopping or preparing to reconnect',
+        data: { code: 'daemon_stopping' },
+      })
+      return
+    }
     const sessionSpec = params?.sessionSpec
 
     if (!sessionSpec || typeof sessionSpec !== 'object' || Array.isArray(sessionSpec)) {
@@ -410,13 +418,13 @@ export class Agentlet {
 
     if (
       this.options.maxAgents &&
-      this.agents.size + this.pendingSpawns >= this.options.maxAgents
+      this.agents.size + this.startingAgents.size >= this.options.maxAgents
     ) {
       const active = {
-        total: this.agents.size + this.pendingSpawns,
+        total: this.agents.size + this.startingAgents.size,
         jobs: 0,
         deployments: 0,
-        unknown: this.pendingSpawns,
+        unknown: this.startingAgents.size,
         stopping: 0,
       }
       for (const managed of this.agents.values()) {
@@ -436,8 +444,6 @@ export class Agentlet {
       })
       return
     }
-    this.pendingSpawns++
-
     this.logger.info('spawning_agent', { command, cwd, sessionId: params.sessionId })
 
     const spawnSocket = this.controlWs
@@ -469,7 +475,6 @@ export class Agentlet {
         }, this.logger)
       } catch (err) {
         this.logger.error('session_bootstrap_failed', { message: err instanceof Error ? err.message : String(err) })
-        agent.terminate()
         if (this.controlWs === spawnSocket) this.sendDaemonResponse(requestId, undefined, {
           code: -32000,
           message: `Session bootstrap failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -481,7 +486,6 @@ export class Agentlet {
       }
       if (this.controlWs !== spawnSocket || this.shutdownInProgress || this.serverRestartInProgress) {
         this.logger.warn('spawn_cancelled', { message: 'Server disconnected during agent bootstrap.' })
-        await this.stopAgentProcess(agent)
         return
       }
 
@@ -543,10 +547,10 @@ export class Agentlet {
         idleSuspending: false,
       }
 
-      agent.on('exit', (code, signal) => {
+      agent.on('exit', async (code, signal) => {
         this.logger.info('agent_exited', { sessionId, code, signal })
         const wasStopping = managed.status === 'stopping'
-        managed.status = 'stopped'
+        managed.status = 'stopping'
         // Drop the early-message buffer listener if the agent exits before
         // handshake_ok (idempotent if already detached).
         detachEarlyBuffer()
@@ -568,6 +572,18 @@ export class Agentlet {
           }
           managed.ws.send(exitNotification)
         }
+
+        if (wasStopping || managed.idleSuspending || this.shutdownInProgress) return
+        try {
+          await this.stopAgentProcess(agent)
+        } catch (error) {
+          this.logger.error('agent_exit_cleanup_failed', {
+            sessionId,
+            message: error instanceof Error ? error.message : String(error),
+          })
+          return
+        }
+        managed.status = 'stopped'
 
         // Suppress autoRestart if this exit was caused by idle suspension
         if (
@@ -596,6 +612,7 @@ export class Agentlet {
       })
 
       this.agents.set(sessionId, managed)
+      this.startingAgents.delete(agent)
 
       // Open a new WS connection for this agent
       const agentWs = new WsClient({
@@ -633,7 +650,13 @@ export class Agentlet {
 
         // Handle idle timeout: notify server and gracefully stop agent
         relay.on('idle', () => {
-          this.handleIdleSuspend(managed)
+          void this.handleIdleSuspend(managed).catch((error: unknown) => {
+            managed.status = 'stopping'
+            this.logger.error('idle_suspend_failed', {
+              sessionId,
+              message: error instanceof Error ? error.message : String(error),
+            })
+          })
         })
 
         // Stop buffering and hand the captured early messages to the relay so
@@ -645,8 +668,12 @@ export class Agentlet {
       agentWs.on('handshake_error', (err) => {
         this.logger.error('agent_handshake_failed', { sessionId, code: err.code, message: err.message })
         detachEarlyBuffer()
-        agent.terminate()
-        this.agents.delete(sessionId)
+        void this.stopManagedAgent(managed).catch((error: unknown) => {
+          this.logger.error('agent_cleanup_failed', {
+            sessionId,
+            message: error instanceof Error ? error.message : String(error),
+          })
+        })
       })
 
       agentWs.on('close', () => {
@@ -671,9 +698,40 @@ export class Agentlet {
         message: `Failed to spawn agent: ${err instanceof Error ? err.message : String(err)}`,
       })
     } finally {
-      this.startingAgents.delete(agent)
-      this.pendingSpawns--
+      if (this.startingAgents.has(agent)) {
+        try {
+          await this.stopStartingAgent(agent)
+        } catch (error) {
+          this.logger.error('starting_agent_cleanup_failed', {
+            pid: agent.pid,
+            message: error instanceof Error ? error.message : String(error),
+          })
+          this.scheduleStartingAgentCleanup(agent)
+        }
+      }
     }
+  }
+
+  private async stopStartingAgent(agent: AgentProcess): Promise<void> {
+    const timer = this.startingCleanupTimers.get(agent)
+    if (timer) clearTimeout(timer)
+    this.startingCleanupTimers.delete(agent)
+    await this.stopAgentProcess(agent)
+    this.startingAgents.delete(agent)
+  }
+
+  private scheduleStartingAgentCleanup(agent: AgentProcess): void {
+    if (this.shutdownInProgress || this.serverRestartInProgress ||
+      !this.startingAgents.has(agent) || this.startingCleanupTimers.has(agent)) return
+    this.startingCleanupTimers.set(agent, setTimeout(() => {
+      void this.stopStartingAgent(agent).catch((error: unknown) => {
+        this.logger.error('starting_agent_cleanup_failed', {
+          pid: agent.pid,
+          message: error instanceof Error ? error.message : String(error),
+        })
+        this.scheduleStartingAgentCleanup(agent)
+      })
+    }, 1000))
   }
 
   private async handleStop(requestId: string | number, params: StopParams): Promise<void> {
@@ -793,15 +851,7 @@ export class Agentlet {
     }
 
     // Gracefully stop the agent process
-    managed.agent.closeStdin()
-    await this.waitForAgentExit(managed.agent, 5000)
-    if (managed.agent.running) {
-      managed.agent.terminate()
-      await this.waitForAgentExit(managed.agent, 2000)
-    }
-    if (managed.agent.running) {
-      managed.agent.kill()
-    }
+    await this.stopAgentProcess(managed.agent)
 
     // Send goodbye and close the agent's WS
     if (managed.ws?.connected) {
@@ -850,12 +900,16 @@ export class Agentlet {
     this.handshakeComplete = false
     controlWs?.close()
     try {
-      await Promise.all([
+      const results = await Promise.allSettled([
         ...[...this.agents.values()].map(managed =>
           this.stopOperations.get(managed.sessionId) ?? this.stopManagedAgent(managed),
         ),
-        ...[...this.startingAgents].map(agent => this.stopAgentProcess(agent)),
+        ...[...this.startingAgents].map(agent => this.stopStartingAgent(agent)),
       ])
+      const failures = results.filter(result => result.status === 'rejected')
+      if (failures.length) throw new AggregateError(
+        failures.map(result => result.reason), 'Restart process-tree cleanup failed',
+      )
     } catch (error) {
       this.logger.error('restart_cleanup_failed', {
         message: error instanceof Error ? error.message : String(error),
@@ -868,15 +922,15 @@ export class Agentlet {
     this.startDaemonReconnection()
   }
 
-  private async stopAgentProcess(agent: AgentProcess): Promise<void> {
+  private async stopAgentProcess(agent: AgentProcess, gracefulTimeout = 5000): Promise<void> {
     agent.closeStdin()
-    await this.waitForAgentExit(agent, 5000)
+    await this.waitForAgentExit(agent, gracefulTimeout)
     if (agent.running) {
-      agent.terminate()
+      await agent.terminate()
       await this.waitForAgentExit(agent, 2000)
     }
     if (agent.running) {
-      agent.kill()
+      await agent.kill()
       await this.waitForAgentExit(agent, 2000)
     }
     if (agent.running) {
@@ -887,6 +941,8 @@ export class Agentlet {
   private async shutdown(reason: string, exitCode = 0): Promise<void> {
     if (this.shutdownInProgress) return
     this.shutdownInProgress = true
+    for (const timer of this.startingCleanupTimers.values()) clearTimeout(timer)
+    this.startingCleanupTimers.clear()
 
     this.logger.info('shutting_down', { reason })
 
@@ -908,20 +964,20 @@ export class Agentlet {
   }
 
   private async shutdownDaemon(reason: string, exitCode: number): Promise<void> {
-    await Promise.all([...this.startingAgents].map(agent => this.stopAgentProcess(agent)))
-    // Stop all managed agents
-    for (const [sessionId, managed] of this.agents) {
-      this.logger.info('stopping_agent', { sessionId })
-      managed.status = 'stopping'
-      managed.relay?.stop()
-      managed.agent.closeStdin()
-      await this.waitForAgentExit(managed.agent, 3000)
-      if (managed.agent.running) managed.agent.terminate()
-      await this.waitForAgentExit(managed.agent, 2000)
-      if (managed.agent.running) managed.agent.kill()
-      managed.ws?.close()
-    }
-    this.agents.clear()
+    const results = await Promise.allSettled([
+      ...[...this.startingAgents].map(agent => this.stopStartingAgent(agent)),
+      ...[...this.agents.values()].map(async managed => {
+        this.logger.info('stopping_agent', { sessionId: managed.sessionId })
+        managed.status = 'stopping'
+        try {
+          managed.relay?.stop()
+          await this.stopAgentProcess(managed.agent, 3000)
+          this.agents.delete(managed.sessionId)
+        } finally {
+          managed.ws?.close()
+        }
+      }),
+    ])
 
     // Send goodbye and close daemon control WS
     if (this.controlWs?.readyState === WebSocket.OPEN) {
@@ -934,21 +990,24 @@ export class Agentlet {
       this.controlWs.close()
     }
 
+    const failures = results.filter(result => result.status === 'rejected')
+    if (failures.length) {
+      this.logger.error('shutdown_cleanup_failed', {
+        errors: failures.map(result =>
+          result.reason instanceof Error ? result.reason.message : String(result.reason)),
+      })
+      throw new AggregateError(
+        failures.map(result => result.reason), 'Shutdown process-tree cleanup failed',
+      )
+    }
     process.exit(exitCode)
   }
 
-  private waitForAgentExit(agent: AgentProcess, ms: number): Promise<void> {
-    return new Promise((resolve) => {
-      if (!agent.running) {
-        resolve()
-        return
-      }
-      const timer = setTimeout(resolve, ms)
-      agent.once('exit', () => {
-        clearTimeout(timer)
-        resolve()
-      })
-    })
+  private async waitForAgentExit(agent: AgentProcess, ms: number): Promise<void> {
+    const deadline = Date.now() + ms
+    while (agent.running && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 25))
+    }
   }
 
   private setupSignalHandlers(): void {

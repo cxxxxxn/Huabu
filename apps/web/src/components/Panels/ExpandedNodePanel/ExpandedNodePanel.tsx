@@ -156,6 +156,7 @@ const ConnectedNodeMenu = ({
   return (
     <DropdownMenu
       open={open}
+      contentRole="presentation"
       onOpenChange={onOpenChange}
       align="bottom-left"
       className="min-w-56"
@@ -681,12 +682,16 @@ export const ExpandedNodePanel = ({
           preview document underneath fully visible instead of
           pushing it down with an inline find row. */}
       <div ref={setPreviewBodyEl} className="relative flex-1 overflow-hidden">
-        <PreviewSearchAdapterProvider>
+        <PreviewSearchAdapterProvider key={expandedNodeId}>
           {/* In-preview find bar — renders nothing unless search scope
               is `'node'`. Wires the highlight walk to the body element
               (via state-as-ref) so only the visible preview gets
               `::highlight()` ranges. */}
-          <InPreviewSearchBar scopeEl={previewBodyEl} nodeId={expandedNodeId} />
+          <InPreviewSearchBar
+            scopeEl={previewBodyEl}
+            nodeId={expandedNodeId}
+            requiresAdapter={activeItem.type === 'pdf'}
+          />
           <PreviewHeaderSlotContext.Provider value={headerSlotValue}>
             <NodePreviewContent
               key={expandedNodeId}

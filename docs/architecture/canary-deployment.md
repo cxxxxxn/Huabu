@@ -35,6 +35,8 @@ The owner confirms the effective branch displayed by Settings. The request carri
 
 The runner persists the captured branch with `requested`, `running`, `succeeded`, or `failed` state under `HUABU_DATA_DIR`, appends a local log, and survives the current Server process exiting. It waits briefly before invoking the script so the Server can flush HTTP 202; that response means only that the runner started. Success means the script exited zero after its bounded readiness probe.
 
+The readiness probe receives the Server's effective Basic Auth credentials, including saved setup credentials, through child-only `HUABU_CANARY_BASIC_AUTH_USER` / `HUABU_CANARY_BASIC_AUTH_PASS`. They are not placed in arguments, persisted status, or global `process.env`, and do not become ordinary startup credential overrides for the replacement Server. Direct script invocation still accepts the standard Basic Auth environment variables.
+
 Only one check, configuration write, or redeployment admission may run at a time. A configuration write is rejected while a check or persisted runner is active, concurrent operations receive an explicit conflict, and an admitted redeployment cannot be retargeted. Persisted result status retains its captured branch so a later configuration can never make an older outcome appear to belong to another branch.
 
 ## Script behavior

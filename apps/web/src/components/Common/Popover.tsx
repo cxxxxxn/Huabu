@@ -18,6 +18,7 @@ import {
   useLayoutEffect,
   useMemo,
   type CSSProperties,
+  type HTMLAttributes,
   type MutableRefObject,
   type Ref,
   useRef,
@@ -126,7 +127,10 @@ function assignRef<T>(ref: Ref<T> | undefined, value: T | null) {
   (ref as MutableRefObject<T | null>).current = value;
 }
 
-export type PopoverProps = {
+export type PopoverProps = Pick<
+  HTMLAttributes<HTMLDivElement>,
+  'id' | 'role' | 'aria-labelledby' | 'onKeyDown'
+> & {
   reference?: Element | null;
   placement?: Placement;
   /**
@@ -214,6 +218,10 @@ export type PopoverProps = {
  * - Provides a styled card container (border + shadow + bg) by default.
  */
 export const Popover: FC<PopoverProps> = ({
+  id,
+  role,
+  'aria-labelledby': labelledBy,
+  onKeyDown,
   reference,
   placement = 'bottom',
   position: positionProp,
@@ -244,7 +252,8 @@ export const Popover: FC<PopoverProps> = ({
   );
   const onDismissRef = useRef(onDismiss);
   onDismissRef.current = onDismiss;
-  const canDismissOnEscape = Boolean(onDismiss) && dismissOnEscape;
+  const canDismiss = Boolean(onDismiss);
+  const canDismissOnEscape = canDismiss && dismissOnEscape;
   useLayoutEffect(() => {
     if (!contentElement) return;
     popoverRoots.set(escapeLayer, {
@@ -385,7 +394,7 @@ export const Popover: FC<PopoverProps> = ({
   // React descendants count as inside even when their portal roots are elsewhere.
   // Newly opened dialogs and explicit dismissal-ignore regions also stay inside.
   useEffect(() => {
-    if (!onDismiss) return;
+    if (!canDismiss) return;
 
     const dialogsAtOpen = new Set(document.querySelectorAll('[role="dialog"]'));
 
@@ -408,7 +417,7 @@ export const Popover: FC<PopoverProps> = ({
       ) {
         activeElement.blur();
       }
-      onDismiss('outside-press');
+      onDismissRef.current?.('outside-press');
     };
 
     // Delay listener to avoid catching the triggering event
@@ -421,7 +430,7 @@ export const Popover: FC<PopoverProps> = ({
       clearTimeout(timer);
       document.removeEventListener('pointerdown', handlePointerDown, true);
     };
-  }, [onDismiss, reference, escapeLayer]);
+  }, [canDismiss, reference, escapeLayer]);
 
   // Dismiss on Escape key
   useEffect(() => {
@@ -461,7 +470,13 @@ export const Popover: FC<PopoverProps> = ({
 
   const panel = (
     <PopoverContainerContext.Provider value={contextValue}>
+      {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions -- Callers supply the role and its keyboard contract together. */}
       <div
+        id={id}
+        role={role}
+        aria-labelledby={labelledBy}
+        tabIndex={role === 'menu' || role === 'dialog' ? -1 : undefined}
+        onKeyDown={onKeyDown}
         ref={(node) => {
           containerRef.current = node;
           floating.refs.setFloating(node);

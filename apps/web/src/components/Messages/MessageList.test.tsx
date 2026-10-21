@@ -1116,6 +1116,86 @@ describe('MessageList opening position', () => {
 });
 
 describe('MessageList older history', () => {
+  it('reveals cached turns and pages older history only during an explicit search jump', () => {
+    const onLoadOlderHistory = vi.fn();
+    const recent: ChatMessage[] = [
+      { id: 'user-2', role: 'user', content: 'Recent needle' },
+      { id: 'user-3', role: 'user', content: 'Newest needle' },
+    ];
+    const renderList = (messages: ChatMessage[], loading = false) => (
+      <MessageList
+        messages={messages}
+        recentTurnCount={1}
+        isLoading={false}
+        hasOlderHistory
+        isLoadingOlderHistory={loading}
+        onLoadOlderHistory={onLoadOlderHistory}
+      />
+    );
+    mount(renderList(recent));
+    expect(
+      container?.querySelector('[data-chat-message-id="user-2"]'),
+    ).toBeNull();
+    expect(onLoadOlderHistory).not.toHaveBeenCalled();
+    const thread = container?.querySelector<HTMLElement>(
+      '[data-chat-thread-root]',
+    );
+    act(() =>
+      thread?.dispatchEvent(
+        new Event('chat-reveal-search', { cancelable: true }),
+      ),
+    );
+    expect(
+      container?.querySelector('[data-chat-message-id="user-2"]'),
+    ).not.toBeNull();
+    expect(onLoadOlderHistory).toHaveBeenCalledTimes(1);
+    act(() => root?.render(renderList(recent, true)));
+    expect(onLoadOlderHistory).toHaveBeenCalledTimes(1);
+    const older: ChatMessage[] = [
+      { id: 'user-1', role: 'user', content: 'Older needle' },
+      ...recent,
+    ];
+    act(() => root?.render(renderList(older)));
+    expect(onLoadOlderHistory).toHaveBeenCalledTimes(2);
+    act(() => root?.render(renderList(older)));
+    expect(onLoadOlderHistory).toHaveBeenCalledTimes(2);
+    act(() => thread?.dispatchEvent(new Event('chat-search-finished')));
+    act(() =>
+      root?.render(
+        renderList([
+          { id: 'user-0', role: 'user', content: 'Oldest needle' },
+          ...older,
+        ]),
+      ),
+    );
+    expect(onLoadOlderHistory).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not automatically retry a failed older-history page during search', () => {
+    const onLoadOlderHistory = vi.fn();
+    mount(
+      <MessageList
+        messages={[]}
+        isLoading={false}
+        hasOlderHistory
+        olderHistoryError="History unavailable"
+        onLoadOlderHistory={onLoadOlderHistory}
+      />,
+    );
+    const thread = container?.querySelector<HTMLElement>(
+      '[data-chat-thread-root]',
+    );
+    act(() =>
+      thread?.dispatchEvent(
+        new Event('chat-reveal-search', { cancelable: true }),
+      ),
+    );
+    expect(onLoadOlderHistory).not.toHaveBeenCalled();
+    expect(container?.querySelector('[role="alert"]')?.textContent).toBe(
+      'History unavailable',
+    );
+  });
+
   it('exposes an accessible explicit expansion control', () => {
     const onLoadOlderHistory = vi.fn();
     mount(

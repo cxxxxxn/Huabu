@@ -180,25 +180,19 @@ async function key(target: Element | null, value: string) {
 }
 
 describe('InkAgentDestinationPicker', () => {
-  it('offers built-in Ask and Operate alongside external Agents', async () => {
+  it('offers Operate and external Agents, but not built-in Chat', async () => {
     await render({ conversations: [] });
     await openMenu();
     const items = [...required(menu()).querySelectorAll('[role="menuitem"]')];
     expect(
       items.some((item) => item.textContent?.startsWith(en.chat.modeChat)),
-    ).toBe(true);
+    ).toBe(false);
     expect(newConversationRow(en.chat.modeAgent).disabled).toBe(false);
     expect(newConversationRow('Reviewer').disabled).toBe(false);
     await act(async () => newConversationRow(en.chat.modeAgent).click());
     expect(props.onNewConversation).toHaveBeenCalledWith({
       binding: { kind: 'internal' },
       mode: 'operate',
-    });
-    await openMenu();
-    await act(async () => newConversationRow(en.chat.modeChat).click());
-    expect(props.onNewConversation).toHaveBeenLastCalledWith({
-      binding: { kind: 'internal' },
-      mode: 'ask',
     });
   });
 

@@ -95,6 +95,7 @@ interface AgentMenuOptionsProps {
   currentBinding: AgentBinding;
   currentMode: AgentMode;
   profiles: AgentProfileView[];
+  builtInModes?: readonly AgentMode[];
   /** Grey out every row (e.g. mid-stream) without closing the menu. */
   busy?: boolean;
   /** Tooltip applied to whichever row matches the current binding. */
@@ -115,6 +116,7 @@ export function AgentMenuOptions({
   currentBinding,
   currentMode,
   profiles,
+  builtInModes,
   busy,
   currentRowTitle,
   onSelect,
@@ -142,24 +144,26 @@ export function AgentMenuOptions({
       >
         {heading}
       </div>
-      {modeItems.map((m) => {
-        const isCurrent =
-          currentBinding.kind === 'internal' && currentMode === m.mode;
-        return (
-          <AgentMenuRow
-            key={`mode:${m.mode}`}
-            icon={m.icon}
-            label={m.label}
-            hint={t('settings.builtInPi')}
-            current={isCurrent}
-            disabled={busy}
-            title={isCurrent ? currentRowTitle : undefined}
-            onClick={() =>
-              onSelect({ mode: m.mode, binding: INTERNAL_BINDING })
-            }
-          />
-        );
-      })}
+      {modeItems
+        .filter((m) => !builtInModes || builtInModes.includes(m.mode))
+        .map((m) => {
+          const isCurrent =
+            currentBinding.kind === 'internal' && currentMode === m.mode;
+          return (
+            <AgentMenuRow
+              key={`mode:${m.mode}`}
+              icon={m.icon}
+              label={m.label}
+              hint={t('settings.builtInPi')}
+              current={isCurrent}
+              disabled={busy}
+              title={isCurrent ? currentRowTitle : undefined}
+              onClick={() =>
+                onSelect({ mode: m.mode, binding: INTERNAL_BINDING })
+              }
+            />
+          );
+        })}
       {(() => {
         if (profiles.length === 0) return null;
         return (
