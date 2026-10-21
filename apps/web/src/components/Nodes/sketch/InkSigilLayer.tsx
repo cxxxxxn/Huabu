@@ -21,6 +21,8 @@ import { useTranslation } from 'react-i18next';
 
 import { resolveAccent } from '@huabu/shared';
 import {
+  assignNodeZIndices,
+  getAbsolutePosition,
   getInkSigilStrokes,
   INK_SIGIL_LABEL_MAX_WIDTH,
   INK_SIGIL_LABEL_LINE_HEIGHT,
@@ -52,6 +54,7 @@ import {
 import { useToolStore } from '@/store/toolStore';
 import { INK_HANDWRITING_FONT_FAMILY } from '@/utils/node/nodeFontConfig';
 
+import { useInkSigilHighlightHost } from './InkSigilHighlightHost';
 import { useInkSigilDrag } from './useInkSigilDrag';
 import { useFrameSuppressed } from '../frame/FrameZoomContext';
 
@@ -61,7 +64,7 @@ import type {
   InkSigilProjection,
   InkSigilStroke,
 } from '@huabu/shared/canvas-engine';
-import type { Node } from '@xyflow/react';
+import type { Node, XYPosition } from '@xyflow/react';
 
 const RESOURCE_CATEGORIES = ['pdf', 'web', 'image', 'text'] as const;
 type ResourceCategory = (typeof RESOURCE_CATEGORIES)[number];
@@ -189,9 +192,6 @@ export function InkSigilLayer({ tool = 'select' }: { tool?: CanvasTool }) {
   const geometries = useGesturePreviewStore(
     (state) => state.nodeGeometryPreviews,
   );
-  const [highlightLayer, setHighlightLayer] = useState<HTMLDivElement | null>(
-    null,
-  );
   const canvasId = useCanvasStore((state) => state.canvasId);
   const pending = useInkSigilStore((state) => state.pending);
   const pendingNodeType = useToolStore((state) => state.pendingNodeType);
@@ -201,6 +201,7 @@ export function InkSigilLayer({ tool = 'select' }: { tool?: CanvasTool }) {
     tool === 'select' && (pendingNodeType === null || drawing);
   const drag = useInkSigilDrag(nodes, canvasId, interactive);
   const projections = useMemo(() => projectInkResourceBindings(nodes), [nodes]);
+  const zIndices = useMemo(() => assignNodeZIndices(nodes), [nodes]);
   const displayNodes = useMemo(
     () => applyNodeGeometryPreviews(nodes as CanvasNode[], geometries),
     [nodes, geometries],
@@ -247,15 +248,6 @@ export function InkSigilLayer({ tool = 'select' }: { tool?: CanvasTool }) {
 
   return (
     <>
-      <div className="pointer-events-none absolute inset-0 z-3 overflow-hidden">
-        <div
-          ref={setHighlightLayer}
-          style={{
-            transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`,
-            transformOrigin: '0 0',
-          }}
-        />
-      </div>
       <div className="pointer-events-none absolute inset-0 z-5 overflow-hidden">
         <div
           style={{
@@ -305,6 +297,22 @@ export function InkSigilLayer({ tool = 'select' }: { tool?: CanvasTool }) {
                 ),
               ),
             };
+            const highlightNodeId = projection.sources.reduce(
+              (lowest, source) =>
+                (zIndices.get(source.nodeId) ?? Infinity) <
+                (zIndices.get(lowest.nodeId) ?? Infinity)
+                  ? source
+                  : lowest,
+            ).nodeId;
+            const highlightOrigin = getAbsolutePosition(
+              displayNodes,
+              highlightNodeId,
+            );
+            if (!highlightOrigin) {
+              throw new Error(
+                `[ink-sigil] Missing highlight owner: ${highlightNodeId}`,
+              );
+            }
             return (
               <InkSigilAnnotation
                 key={projection.binding.id}
@@ -313,7 +321,8 @@ export function InkSigilLayer({ tool = 'select' }: { tool?: CanvasTool }) {
                 drag={drag}
                 selected={selectedCount === 4}
                 zoom={viewport.zoom}
-                highlightLayer={highlightLayer}
+                highlightNodeId={highlightNodeId}
+                highlightOrigin={highlightOrigin}
                 picker={
                   pending?.canvasId === canvasId &&
                   pending.bindingId === projection.binding.id
@@ -346,7 +355,8 @@ function InkSigilAnnotation({
   interactive,
   drag,
   zoom,
-  highlightLayer,
+  highlightNodeId,
+  highlightOrigin,
   picker,
 }: {
   projection: InkSigilProjection;
@@ -354,10 +364,12 @@ function InkSigilAnnotation({
   interactive: boolean;
   drag: ReturnType<typeof useInkSigilDrag>;
   zoom: number;
-  highlightLayer: HTMLDivElement | null;
+  highlightNodeId: string;
+  highlightOrigin: XYPosition;
   picker?: { nodes: Node[] };
 }) {
   const { t } = useTranslation();
+  const highlightLayer = useInkSigilHighlightHost(highlightNodeId);
   const frameSuppressed = useFrameSuppressed(
     projection.sources.map((source) => source.nodeId),
   );
@@ -436,8 +448,8 @@ function InkSigilAnnotation({
                   : 'bg-ink-reference-highlight/70 absolute rounded'
               }
               style={{
-                left: layout.semanticBounds.x,
-                top: layout.semanticBounds.y,
+                left: layout.semanticBounds.x - highlightOrigin.x,
+                top: layout.semanticBounds.y - highlightOrigin.y,
                 width: layout.semanticBounds.width,
                 height: layout.semanticBounds.height,
               }}

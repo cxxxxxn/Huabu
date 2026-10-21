@@ -23,6 +23,7 @@ import {
 } from '@/store/inkSigilStore';
 import { useToolStore } from '@/store/toolStore';
 
+import { InkSigilHighlightHost } from './InkSigilHighlightHost';
 import { InkSigilLayer } from './InkSigilLayer';
 import {
   FrameZoomController,
@@ -79,7 +80,20 @@ vi.mock('@/components/Common/CanvasFloatingPopover', () => ({
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 let root: Root;
+let hostRoot: Root;
 let container: HTMLDivElement;
+
+function renderHighlightHost(nodeIds = ['ink']) {
+  hostRoot.render(
+    <>
+      {nodeIds.map((nodeId) => (
+        <InkSigilHighlightHost key={nodeId} nodeId={nodeId}>
+          <svg className="relative" data-test-ink-strokes />
+        </InkSigilHighlightHost>
+      ))}
+    </>,
+  );
+}
 
 function element<T extends HTMLElement = HTMLButtonElement>(
   selector: string,
@@ -211,7 +225,12 @@ beforeEach(async () => {
   });
   container = document.createElement('div');
   document.body.append(container);
-  root = createRoot(container);
+  const layerContainer = document.createElement('div');
+  const hostContainer = document.createElement('div');
+  container.append(layerContainer, hostContainer);
+  root = createRoot(layerContainer);
+  hostRoot = createRoot(hostContainer);
+  await act(async () => renderHighlightHost());
   await act(async () =>
     root.render(
       <I18nextProvider i18n={i18n}>
@@ -226,6 +245,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await act(async () => root.unmount());
+  await act(async () => hostRoot.unmount());
   container.remove();
   resetInkSigilSession();
   resetCanvasGestureForTests();
@@ -302,8 +322,11 @@ describe('Ink resource picker', () => {
         `${Number.parseFloat(initial) + dx + (preview === 'resize' ? 40 : 0)}px`,
       );
       const highlight = element('[data-ink-sigil-highlight]');
-      expect(highlight.style.left).toBe(`${dx}px`);
-      expect(highlight.style.top).toBe(`${dy}px`);
+      expect(highlight.style.left).toBe('0px');
+      expect(highlight.style.top).toBe('0px');
+      expect(highlight.style.width).toBe(
+        `${projection.bounds.width + (preview === 'resize' ? 40 : 0) + 8 + Number(element('[data-ink-sigil]').dataset.inkSigilLabelWidth)}px`,
+      );
       expect(projectInkResourceBindings(mocks.state.nodes)[0]).toMatchObject({
         binding: projection.binding,
         bounds: projection.bounds,
@@ -346,6 +369,7 @@ describe('Ink resource picker', () => {
         },
         ...mocks.state.nodes.slice(1),
       ];
+      await act(async () => renderHighlightHost(['ink', 'other-ink']));
       const render = () =>
         act(async () => {
           frameFlow.setState({
@@ -363,6 +387,10 @@ describe('Ink resource picker', () => {
         });
       await render();
       expect(container.querySelector('[data-ink-sigil-label]')).not.toBeNull();
+      expect(
+        element('[data-ink-sigil-highlight]').parentElement?.dataset
+          .inkSigilHighlights,
+      ).toBe('other-ink');
       await act(async () => element('[data-ink-sigil-label]').click());
       expect(useInkSigilStore.getState().pending).not.toBeNull();
       if (reason === 'suppressed-secondary') {
@@ -396,6 +424,15 @@ describe('Ink resource picker', () => {
       expect(
         container.querySelector('[data-ink-sigil-highlight]'),
       ).not.toBeNull();
+      mocks.state.nodes = [
+        ...mocks.state.nodes.filter((node) => node.id === 'ink'),
+        ...mocks.state.nodes.filter((node) => node.id !== 'ink'),
+      ];
+      await render();
+      expect(
+        element('[data-ink-sigil-highlight]').parentElement?.dataset
+          .inkSigilHighlights,
+      ).toBe('ink');
     },
   );
 
@@ -472,6 +509,30 @@ describe('Ink resource picker', () => {
         ?.querySelector('.overflow-y-auto')
         ?.classList.contains('huabu-scrollbar'),
     ).toBe(true);
+  });
+  it('paints highlights inside the source node before its ink without blending or intercepting input', async () => {
+    await act(async () => element('[role="option"]').click());
+    const layer = element<HTMLDivElement>('[data-ink-sigil-highlights]');
+    expect(layer.dataset.inkSigilHighlights).toBe('ink');
+    expect(layer.className).not.toContain('mix-blend');
+    expect(layer.className).not.toContain('z-');
+    expect(layer.classList.contains('pointer-events-none')).toBe(true);
+    expect(layer.querySelector('[data-ink-sigil-highlight]')).not.toBeNull();
+    expect(layer.nextElementSibling).toBe(element('[data-test-ink-strokes]'));
+    expect(layer.contains(element('[data-ink-sigil-label]'))).toBe(false);
+  });
+  it('restores the highlight when its source node remounts', async () => {
+    await act(async () => element('[role="option"]').click());
+    expect(
+      container.querySelector('[data-ink-sigil-highlight]'),
+    ).not.toBeNull();
+    await act(async () => hostRoot.render(null));
+    expect(container.querySelector('[data-ink-sigil-highlight]')).toBeNull();
+    expect(container.querySelector('[data-ink-sigil-label]')).not.toBeNull();
+    await act(async () => renderHighlightHost());
+    expect(
+      container.querySelector('[data-ink-sigil-highlight]'),
+    ).not.toBeNull();
   });
   it('moves the label with complete strokes and hides it for partial move or erase previews', async () => {
     const option =
