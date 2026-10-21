@@ -2204,8 +2204,11 @@ const useCanvasStore = create<RFState>()(
           .getState()
           .loadForCanvas(targetId, { chatThreadId });
         canvasHistoryManager.activate(targetId, options?.resetHistory);
-        if (canvasId) {
-          set({ canvasId: targetId });
+        if (canvasId && targetId !== get().canvasId) {
+          get()._setStateNoAutosave({
+            canvasId: targetId,
+            canvasTitle: '',
+          });
         }
         const response = await getCanvas(targetId);
         if (!response) {

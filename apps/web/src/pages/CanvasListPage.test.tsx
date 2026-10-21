@@ -14,6 +14,7 @@ import { toast } from '../components/Common/Toast';
 import type { ReactNode } from 'react';
 
 const setCanvasCount = vi.fn();
+const setSpaceTitle = vi.fn();
 
 vi.mock('react-i18next', () => ({
   Trans: ({ i18nKey }: { i18nKey: string }) => i18nKey,
@@ -81,12 +82,14 @@ vi.mock('../store/workspaceStore', () => ({
     selector: (state: {
       capabilities: { canChangeWorkspace: boolean };
       setCanvasCount: typeof setCanvasCount;
+      setSpaceTitle: typeof setSpaceTitle;
       workspacePath: string;
     }) => unknown,
   ) =>
     selector({
       capabilities: { canChangeWorkspace: false },
       setCanvasCount,
+      setSpaceTitle,
       workspacePath: '/tmp/test-workspace',
     }),
 }));
@@ -174,6 +177,10 @@ describe('CanvasListPage navigation', () => {
 
     expect(event.defaultPrevented).toBe(true);
     expect(router.state.location.pathname).toBe('/canvas/space-1');
+    expect(setSpaceTitle).toHaveBeenCalledExactlyOnceWith(
+      'space-1',
+      'Space One',
+    );
   });
 
   it.each([

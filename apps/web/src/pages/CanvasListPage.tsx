@@ -52,6 +52,7 @@ export default function CanvasListPage() {
     (s) => s.capabilities?.canChangeWorkspace ?? true,
   );
   const setCanvasCount = useWorkspaceStore((s) => s.setCanvasCount);
+  const setSpaceTitle = useWorkspaceStore((s) => s.setSpaceTitle);
   const isElectronApp = isElectron();
 
   const fetchCanvases = useCallback(async () => {
@@ -339,6 +340,12 @@ export default function CanvasListPage() {
                 >
                   <Link
                     to={`/canvas/${canvas.canvasId}`}
+                    onClick={() =>
+                      setSpaceTitle(
+                        canvas.canvasId,
+                        canvas.title || t('canvasList.untitled'),
+                      )
+                    }
                     className="flex flex-1 flex-col text-left"
                   >
                     <h3 className="text-fg-default group-hover:text-fg-default truncate text-sm font-semibold">
