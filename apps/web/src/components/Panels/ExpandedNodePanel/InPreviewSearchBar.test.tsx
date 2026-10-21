@@ -6,11 +6,24 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { InPreviewSearchBar } from './InPreviewSearchBar';
+import {
+  PreviewSearchAdapterProvider,
+  useRegisterPreviewSearchAdapter,
+  type PreviewSearchAdapter,
+} from './PreviewSearchAdapterContext';
 import { usePreviewSearchStore } from '../../../store/previewSearchStore';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
+
+const { toast } = vi.hoisted(() => ({ toast: vi.fn() }));
+vi.mock('../../Common/Toast', () => ({ toast }));
+
+function RegisterAdapter({ adapter }: { adapter: PreviewSearchAdapter }) {
+  useRegisterPreviewSearchAdapter(adapter);
+  return null;
+}
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -24,6 +37,7 @@ beforeEach(() => {
   document.body.appendChild(container);
   root = createRoot(container);
   usePreviewSearchStore.getState().close();
+  toast.mockClear();
   vi.spyOn(Range.prototype, 'getBoundingClientRect').mockReturnValue(
     new DOMRect(10, 100, 80, 20),
   );
@@ -36,6 +50,96 @@ afterEach(() => {
 });
 
 describe('InPreviewSearchBar preview-search lifecycle', () => {
+  function mountDelayedAdapter() {
+    const pending: {
+      index: number;
+      complete: (visible: boolean) => void;
+      cancel: ReturnType<typeof vi.fn>;
+    }[] = [];
+    const adapter: PreviewSearchAdapter = {
+      query: 'needle',
+      matchCount: 3,
+      canNavigate: true,
+      isSearching: false,
+      navigateToMatch: (index, complete) => {
+        const cancel = vi.fn();
+        pending.push({ index, complete, cancel });
+        return cancel;
+      },
+    };
+    const renderAdapter = (next = adapter) =>
+      root.render(
+        <PreviewSearchAdapterProvider>
+          <InPreviewSearchBar scopeEl={container} nodeId="note-1" />
+          <RegisterAdapter adapter={next} />
+        </PreviewSearchAdapterProvider>,
+      );
+    usePreviewSearchStore.getState().open('note-1');
+    usePreviewSearchStore.getState().setQuery('needle');
+    act(() => renderAdapter());
+    const next = () =>
+      act(() => container.querySelectorAll('button')[1]?.click());
+    return { pending, adapter, renderAdapter, next };
+  }
+
+  it.each([
+    'query',
+    'close',
+    'reopen',
+    'handoff',
+    'adapter',
+    'unmount',
+  ] as const)(
+    'cancels manual navigation and ignores late completions after %s',
+    async (change) => {
+      const { pending, adapter, renderAdapter, next } = mountDelayedAdapter();
+      next();
+      const request = pending[0];
+      expect(request?.index).toBe(1);
+      await act(async () => {
+        if (change === 'query') {
+          usePreviewSearchStore.getState().setQuery('replacement');
+          expect(request.cancel).toHaveBeenCalledTimes(1);
+        } else if (change === 'close' || change === 'reopen') {
+          usePreviewSearchStore.getState().close();
+          expect(request.cancel).toHaveBeenCalledTimes(1);
+          if (change === 'reopen') {
+            usePreviewSearchStore.getState().open('note-1');
+            usePreviewSearchStore.getState().setQuery('needle');
+          }
+        } else if (change === 'handoff')
+          usePreviewSearchStore.getState().reveal('note-1', 'needle', 0);
+        else if (change === 'adapter') renderAdapter({ ...adapter });
+        else root.unmount();
+      });
+      expect(request.cancel).toHaveBeenCalledTimes(1);
+      const before = container.textContent;
+      act(() => {
+        request.complete(true);
+        request.complete(false);
+      });
+      expect(container.textContent).toBe(before);
+      expect(toast).not.toHaveBeenCalled();
+    },
+  );
+
+  it('cancels a superseded manual jump while accepting only the latest result', () => {
+    const { pending, next } = mountDelayedAdapter();
+    next();
+    next();
+    expect(pending).toHaveLength(2);
+    expect(pending[0].cancel).toHaveBeenCalledTimes(1);
+    act(() => {
+      pending[0].complete(true);
+      pending[0].complete(false);
+    });
+    expect(container.textContent).toContain('1/3');
+    expect(toast).not.toHaveBeenCalled();
+    act(() => pending[1].complete(true));
+    expect(container.textContent).toContain('2/3');
+    expect(pending[1].cancel).not.toHaveBeenCalled();
+  });
+
   it('keeps a newer node search when the previous renderer unmounts', () => {
     usePreviewSearchStore.getState().open('note-1');
     act(() =>

@@ -64,6 +64,14 @@ export const InPreviewSearchBar = ({
   const rendererOwner = usePreviewSearchStore((s) => s.rendererOwner);
   const [rendererId] = useState(() => Symbol('preview-search-renderer'));
   const inputRef = useRef<HTMLInputElement>(null);
+  const manualNavigationRef = useRef<{
+    cancel?: () => void;
+  } | null>(null);
+  const cancelManualNavigation = useCallback(() => {
+    const pending = manualNavigationRef.current;
+    manualNavigationRef.current = null;
+    pending?.cancel?.();
+  }, []);
   const [activeMatchIdx, setActiveMatchIdx] = useState(0);
   const [selectedRange, setSelectedRange] = useState<{
     query: string;
@@ -92,6 +100,23 @@ export const InPreviewSearchBar = ({
       .getState()
       .registerRenderer(nodeId, rendererId);
   }, [nodeId, rendererId]);
+
+  useEffect(() => {
+    const unsubscribe = usePreviewSearchStore.subscribe((state, previous) => {
+      if (
+        state.query !== previous.query ||
+        state.nodeId !== previous.nodeId ||
+        state.isOpen !== previous.isOpen ||
+        state.rendererOwner !== previous.rendererOwner ||
+        state.navigationSequence !== previous.navigationSequence
+      )
+        cancelManualNavigation();
+    });
+    return () => {
+      unsubscribe();
+      cancelManualNavigation();
+    };
+  }, [cancelManualNavigation, isActive, query, nodeId, scopeEl, searchAdapter]);
 
   // Track whether the user has already navigated at least once. The
   // inline highlight visually implies the first match is "current", so
@@ -247,15 +272,32 @@ export const InPreviewSearchBar = ({
       !scopeEl ||
       !query ||
       matchCount === 0 ||
-      (searchAdapter && !searchAdapter.canNavigate)
+      (searchAdapter &&
+        (!searchAdapter.isCurrent() || !searchAdapter.canNavigate))
     )
       return;
+    cancelManualNavigation();
     const normalised = ((idx % matchCount) + matchCount) % matchCount;
     if (navigationRequest)
       usePreviewSearchStore
         .getState()
         .consumeNavigation(navigationRequest.nonce);
+    const pending: { cancel?: () => void } = {};
+    manualNavigationRef.current = pending;
+    const sequence = usePreviewSearchStore.getState().navigationSequence;
     const finish = (visible: boolean, range?: Range): void => {
+      const state = usePreviewSearchStore.getState();
+      if (
+        manualNavigationRef.current !== pending ||
+        !state.isOpen ||
+        state.nodeId !== nodeId ||
+        state.query !== query ||
+        state.rendererOwner !== rendererId ||
+        state.navigationSequence !== sequence ||
+        (searchAdapter && !searchAdapter.isCurrent())
+      )
+        return;
+      manualNavigationRef.current = null;
       if (visible) {
         setActiveMatchIdx(normalised);
         setHasNavigated(true);
@@ -267,7 +309,10 @@ export const InPreviewSearchBar = ({
         });
     };
     if (searchAdapter) {
-      searchAdapter.navigateToMatch(normalised, finish);
+      const cancel = searchAdapter.navigateToMatch(normalised, finish);
+      if (manualNavigationRef.current === pending)
+        pending.cancel = cancel || undefined;
+      else cancel?.();
       return;
     }
     const range = findNthRange(scopeEl, query, normalised);
