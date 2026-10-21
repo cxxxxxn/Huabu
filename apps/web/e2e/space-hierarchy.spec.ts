@@ -16,6 +16,97 @@ test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('huabu.language', 'en'));
 });
 
+test('cancelling child-Space deletion preserves separately selected edges', async ({
+  page,
+}) => {
+  const parent = await create(page, 'Guarded delete parent');
+  const response = await page.request.post(`/api/canvas/${parent}/children`, {
+    data: { title: 'Guarded delete child' },
+  });
+  expect(response.ok()).toBe(true);
+  const child = await response.json();
+  const seeded = await page.request.post(`/api/canvas/${parent}/execute`, {
+    data: {
+      commands: [
+        {
+          type: 'CREATE_NODES',
+          nodes: ['node-a', 'node-b'].map((id, index) => ({
+            id,
+            nodeType: 'text',
+            data: { content: id },
+            position: { x: 500 + index * 300, y: 100 },
+          })),
+        },
+        {
+          type: 'CONNECT_NODES',
+          edges: [{ id: 'edge-selected', source: 'node-a', target: 'node-b' }],
+        },
+      ],
+      originator: { source: 'ui', tabId: 'e2e-guarded-delete' },
+    },
+  });
+  expect(seeded.ok(), await seeded.text()).toBe(true);
+  await page.goto(`/canvas/${parent}`);
+  await expect(page.locator('[data-canvas-root]')).toHaveAttribute(
+    'aria-busy',
+    'false',
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(async (childId) => {
+        const path = '/src/store/workspaceStore.ts';
+        const { useWorkspaceStore } = (await import(
+          path
+        )) as typeof WorkspaceStore;
+        return useWorkspaceStore.getState().spaceSummaries[childId]
+          ?.parentEntryNodeId;
+      }, child.canvasId),
+    )
+    .toBe(child.parentEntryNodeId);
+  await page.evaluate(async (entryId) => {
+    const path = '/src/store/canvasStore.ts';
+    const { default: store } = (await import(path)) as typeof CanvasStore;
+    store.getState()._setStateNoAutosave({
+      nodes: store
+        .getState()
+        .nodes.map((node) => ({ ...node, selected: node.id === entryId })),
+      edges: store
+        .getState()
+        .edges.map((edge) => ({ ...edge, selected: true })),
+    });
+    if (document.activeElement instanceof HTMLElement)
+      document.activeElement.blur();
+  }, child.parentEntryNodeId);
+  await page.keyboard.press('Backspace');
+  const dialog = page.getByRole('dialog', {
+    name: 'Delete Space?',
+    exact: true,
+  });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  const retained = await page.evaluate(async () => {
+    const path = '/src/store/canvasStore.ts';
+    const { default: store } = (await import(path)) as typeof CanvasStore;
+    await store.getState().saveCanvas();
+    return {
+      nodes: store.getState().nodes.map((node) => node.id),
+      edges: store.getState().edges.map((edge) => edge.id),
+    };
+  });
+  expect(retained.nodes).toContain(child.parentEntryNodeId);
+  expect(retained.edges).toEqual(['edge-selected']);
+  const persisted = await (
+    await page.request.get(`/api/canvas/${parent}`)
+  ).json();
+  expect(persisted.state.edges).toEqual([
+    expect.objectContaining({ id: 'edge-selected' }),
+  ]);
+  expect(persisted.state.nodes).toContainEqual(
+    expect.objectContaining({ id: child.parentEntryNodeId }),
+  );
+});
+
 test('immediate Undo after child creation keeps its entry and leaves saves usable', async ({
   page,
 }) => {

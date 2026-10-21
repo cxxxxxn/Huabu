@@ -26,6 +26,8 @@ selection.
 
 `CanvasUiIntent` must not be shared with the agent because it depends on ephemeral frontend state.
 
+The web `DELETE_NODES` intent accepts optional explicit `edgeIds` for a mixed selection and resolves node deletion plus the existing edge-disconnection resolver into one execution. Delete/Backspace uses this combined path whenever whole nodes are selected; ownership refusal or child-Space confirmation defers the entire action, with no edge-only follow-up. Ordinary mixed deletion records one undo snapshot. Edge-only deletion retains its existing intent.
+
 ### UI intent design rules
 
 Resolvers:

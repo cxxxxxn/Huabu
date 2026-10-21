@@ -377,9 +377,8 @@ export function useCanvasShortcuts(
           .filter((edge) => edge.selected)
           .map((edge) => edge.id);
         if (selectedNodeIds.length > 0) {
-          deleteNodes(selectedNodeIds);
-        }
-        if (selectedEdgeIds.length > 0) {
+          deleteNodes(selectedNodeIds, selectedEdgeIds);
+        } else if (selectedEdgeIds.length > 0) {
           disconnectEdges(selectedEdgeIds);
         }
         return;

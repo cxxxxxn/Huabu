@@ -583,7 +583,7 @@ type RFState = {
     targetNodeId: string | null;
     dropPoint: { x: number; y: number };
   }) => void;
-  deleteNodes: (nodeIds: string[]) => void;
+  deleteNodes: (nodeIds: string[], edgeIds?: string[]) => void;
   disconnectEdges: (edgeIds: string[]) => void;
   setNodeGeometry: (
     items: Array<{
@@ -3878,8 +3878,8 @@ const useCanvasStore = create<RFState>()(
       }
     },
 
-    deleteNodes: (nodeIds) => {
-      get().dispatchUiIntent({ type: 'DELETE_NODES', nodeIds });
+    deleteNodes: (nodeIds, edgeIds) => {
+      get().dispatchUiIntent({ type: 'DELETE_NODES', nodeIds, edgeIds });
     },
 
     disconnectEdges: (edgeIds) => {

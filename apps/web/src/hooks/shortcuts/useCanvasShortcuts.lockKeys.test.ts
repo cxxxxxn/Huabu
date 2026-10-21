@@ -212,7 +212,7 @@ describe('useCanvasShortcuts catalog key lock', () => {
           new KeyboardEvent('keydown', { key: 'Delete', cancelable: true }),
         ),
       );
-      expect(canvasActions.deleteNodes).toHaveBeenCalledWith(['shortcut']);
+      expect(canvasActions.deleteNodes).toHaveBeenCalledWith(['shortcut'], []);
       expect(open).toHaveBeenCalledTimes(1);
       canvasActions.nodes = [shortcut, { ...shortcut, id: 'second' }];
       enter();
@@ -224,6 +224,43 @@ describe('useCanvasShortcuts catalog key lock', () => {
     } finally {
       window.removeEventListener(OPEN_SPACE_SHORTCUT_EVENT, open);
     }
+  });
+
+  it.each(['Delete', 'Backspace'])(
+    'routes mixed selections through one guarded deletion on %s',
+    (key) => {
+      canvasActions.nodes = [
+        { id: 'selected', selected: true },
+        { id: 'other' },
+      ];
+      canvasActions.edges = [
+        { id: 'edge-selected', selected: true },
+        { id: 'edge-other' },
+      ];
+      act(() =>
+        window.dispatchEvent(
+          new KeyboardEvent('keydown', { key, cancelable: true }),
+        ),
+      );
+      expect(canvasActions.deleteNodes).toHaveBeenCalledExactlyOnceWith(
+        ['selected'],
+        ['edge-selected'],
+      );
+      expect(canvasActions.disconnectEdges).not.toHaveBeenCalled();
+    },
+  );
+
+  it('retains edge-only deletion', () => {
+    canvasActions.edges = [{ id: 'edge-selected', selected: true }];
+    act(() =>
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Delete', cancelable: true }),
+      ),
+    );
+    expect(canvasActions.deleteNodes).not.toHaveBeenCalled();
+    expect(canvasActions.disconnectEdges).toHaveBeenCalledExactlyOnceWith([
+      'edge-selected',
+    ]);
   });
 
   it.each(['panel', 'menu', 'dialog', 'listbox'])(

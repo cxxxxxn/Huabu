@@ -8,6 +8,7 @@ import useCanvasStore from './canvasStore';
 import { useWorkspaceStore } from './workspaceStore';
 import * as api from '../api';
 import * as notifications from '../components/Common/Toast';
+import { REQUEST_DELETE_SPACE } from '../utils/spaceHierarchy';
 
 import type { Delta } from '@huabu/shared/canvas-engine';
 import type { Node } from '@xyflow/react';
@@ -20,6 +21,18 @@ const entry: Node = {
 };
 const originalRefresh = useWorkspaceStore.getState().refreshSpaceTitles;
 const refresh = vi.fn(async () => undefined);
+const edge = {
+  id: 'edge-other',
+  source: 'node-a',
+  target: 'node-b',
+  selected: true,
+};
+const endpoints: Node[] = ['node-a', 'node-b'].map((id) => ({
+  id,
+  type: 'note',
+  position: { x: 0, y: 0 },
+  data: { content: id },
+}));
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -112,16 +125,71 @@ it.each(['loading', 'error', 'ready'] as const)(
         data: { content: 'Keep' },
       },
     ];
-    useCanvasStore.getState()._setStateNoAutosave({ nodes });
-    useCanvasStore
-      .getState()
-      .dispatchUiIntent({ type: 'DELETE_NODES', nodeIds: ['node-frame'] });
+    nodes.push(...endpoints);
+    useCanvasStore.getState()._setStateNoAutosave({ nodes, edges: [edge] });
+    useCanvasStore.getState().deleteNodes(['node-frame'], [edge.id]);
     expect(useCanvasStore.getState().nodes).toEqual(nodes);
+    expect(useCanvasStore.getState().edges).toEqual([edge]);
     expect(api.deleteNode).not.toHaveBeenCalled();
     expect(canvasHistoryManager.hasPendingDeletes('parent')).toBe(false);
     expect(refresh).toHaveBeenCalledOnce();
   },
 );
+
+it('defers the complete mixed node/edge deletion while child confirmation is pending', () => {
+  knowChild();
+  const nodes = [entry, ...endpoints];
+  useCanvasStore.getState()._setStateNoAutosave({ nodes, edges: [edge] });
+  const confirm = vi.fn();
+  window.addEventListener(REQUEST_DELETE_SPACE, confirm);
+  try {
+    useCanvasStore.getState().deleteNodes([entry.id], [edge.id]);
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(useCanvasStore.getState().nodes).toEqual(nodes);
+    expect(useCanvasStore.getState().edges).toEqual([edge]);
+    expect(api.deleteNode).not.toHaveBeenCalled();
+    expect(canvasHistoryManager.canUndo).toBe(false);
+  } finally {
+    window.removeEventListener(REQUEST_DELETE_SPACE, confirm);
+  }
+});
+
+it('keeps selected edges when deleting a Frame with a known child entry is refused', () => {
+  knowChild();
+  const nodes = [
+    { id: 'node-frame', type: 'frame', position: { x: 0, y: 0 }, data: {} },
+    { ...entry, parentId: 'node-frame' },
+    ...endpoints,
+  ];
+  useCanvasStore.getState()._setStateNoAutosave({ nodes, edges: [edge] });
+  useCanvasStore.getState().deleteNodes(['node-frame'], [edge.id]);
+  expect(useCanvasStore.getState().nodes).toEqual(nodes);
+  expect(useCanvasStore.getState().edges).toEqual([edge]);
+  expect(api.deleteNode).not.toHaveBeenCalled();
+  expect(notifications.toast).toHaveBeenCalled();
+  expect(canvasHistoryManager.canUndo).toBe(false);
+});
+
+it('deletes ordinary nodes and selected edges in one undoable execution', async () => {
+  const note: Node = {
+    id: 'node-note',
+    type: 'note',
+    position: { x: 0, y: 0 },
+    data: { content: 'Ordinary' },
+  };
+  const nodes = [note, ...endpoints];
+  useCanvasStore.getState()._setStateNoAutosave({ nodes, edges: [edge] });
+  useCanvasStore.getState().deleteNodes([note.id], [edge.id]);
+  expect(useCanvasStore.getState().nodes).toEqual(endpoints);
+  expect(useCanvasStore.getState().edges).toEqual([]);
+  await canvasHistoryManager.waitForDeletes('parent');
+  await useCanvasStore.getState().undo();
+  expect(useCanvasStore.getState().nodes).toEqual(nodes);
+  expect(useCanvasStore.getState().edges).toEqual([
+    { id: edge.id, source: edge.source, target: edge.target },
+  ]);
+  expect(canvasHistoryManager.canUndo).toBe(false);
+});
 
 it('also protects direct command deletion instead of relying on UI Delete', () => {
   knowChild();
