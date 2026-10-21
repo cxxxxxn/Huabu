@@ -622,6 +622,8 @@
     "collect": "收纳为子 Space（在这里保留入口）",
     "childEntry": "子 Space",
     "deleteEntrySeparately": "请先逐个确认删除子 Space，再删除这组选中内容。",
+    "ownershipUnavailable": "Space 归属信息尚不可用，正在刷新；请加载完成后重试。",
+    "entryProtected": "此操作会移除或改变子 Space 入口。请使用“删除 Space”或“更改父级”。",
     "deleteWarning": "内容将被永久删除，无法撤销。",
     "deleteCount_one": "删除 Space",
     "deleteCount_other": "删除 {{count}} 个 Space",

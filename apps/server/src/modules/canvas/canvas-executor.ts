@@ -1000,7 +1000,7 @@ async function executePreparedOnServerAlreadyLocked(
       : assertWorldPreviewTopologyAllowed;
   assertResultAllowed(canvasId, prestateNodes, finalNodes, liveCanvasIds);
   if (originator.source !== 'system')
-    await assertChildSpaceEntriesAllowed(canvasId, finalNodes);
+    await assertChildSpaceEntriesAllowed(canvasId, prestateNodes, finalNodes);
 
   const deltas = diffCanvasState(
     { nodes: prestateNodes, edges: prestateEdges },
@@ -1487,7 +1487,7 @@ export async function applyDeltasOnServerAlreadyLocked(input: {
         : assertWorldPreviewTopologyAllowed;
     assertResultAllowed(canvasId, prestateNodes, finalNodes, liveCanvasIds);
     if (originator.source !== 'system')
-      await assertChildSpaceEntriesAllowed(canvasId, finalNodes);
+      await assertChildSpaceEntriesAllowed(canvasId, prestateNodes, finalNodes);
 
     // Recompute the authoritative diff so the log row and broadcast
     // reflect exactly what landed (tolerates already-applied / missing

@@ -189,6 +189,29 @@ afterEach(() => {
 });
 
 describe('CanvasPage node deep-link navigation', () => {
+  it('cleans loaded World selections when metadata was ready before the nodes', async () => {
+    mocks.worldCanvasId = CANVAS_ID;
+    mocks.spaceSummaries = { child: { parentSpaceId: 'parent' } };
+    await renderAt(`/canvas/${CANVAS_ID}`, node('note'), null);
+    await act(async () => {
+      useCanvasStore.getState()._setStateNoAutosave({ isLoading: true });
+    });
+    const entry = {
+      ...node('spacePreview', { targetCanvasId: 'child' }),
+      selected: true,
+    };
+    await act(async () => {
+      useCanvasStore.getState()._setStateNoAutosave({
+        nodes: [entry],
+        edges: [
+          { id: 'edge-1', source: entry.id, target: entry.id, selected: true },
+        ],
+        isLoading: false,
+      });
+    });
+    expect(useCanvasStore.getState().nodes[0].selected).toBe(false);
+    expect(useCanvasStore.getState().edges[0].selected).toBe(false);
+  });
   it('clears hidden World selections in fullscreen Preview without changing geometry or saving', async () => {
     mocks.worldCanvasId = CANVAS_ID;
     mocks.spaceSummaries = { child: { parentSpaceId: null } };

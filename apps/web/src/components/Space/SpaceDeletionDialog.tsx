@@ -4,16 +4,35 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { ApiError } from '@/api/_client';
 import { deleteSpaceTree, getSpaceDeletionPreview } from '@/api/spaceHierarchy';
 import { Button } from '@/components/Common/Button';
 import { Loading } from '@/components/Common/Loading';
 import { Modal } from '@/components/Common/Modal';
+import { toast } from '@/components/Common/Toast';
 import { NODE_ICON } from '@/config/nodeIcons';
 import { drainPendingSaves } from '@/store/canvasStore';
 import { deleteWorkspace } from '@/store/previewWorkspace/persistence';
 import { useWorkspaceStore } from '@/store/workspaceStore';
 
-import type { DeleteSpaceTreePreview } from '@huabu/shared';
+import type {
+  DeleteSpaceTreeFailure,
+  DeleteSpaceTreePreview,
+} from '@huabu/shared';
+
+function isDeletionFailure(value: unknown): value is DeleteSpaceTreeFailure {
+  if (!value || typeof value !== 'object') return false;
+  return (
+    'deletedCanvasIds' in value &&
+    Array.isArray(value.deletedCanvasIds) &&
+    value.deletedCanvasIds.every((id: unknown) => typeof id === 'string') &&
+    'remainingCanvasIds' in value &&
+    Array.isArray(value.remainingCanvasIds) &&
+    value.remainingCanvasIds.every((id: unknown) => typeof id === 'string') &&
+    'cause' in value &&
+    typeof value.cause === 'string'
+  );
+}
 
 export function SpaceDeletionDialog({
   canvasId,
@@ -22,7 +41,7 @@ export function SpaceDeletionDialog({
 }: {
   canvasId: string;
   onClose: () => void;
-  onDeleted: (ids: string[]) => void;
+  onDeleted: (ids: string[], failure?: string) => void;
 }) {
   const { t } = useTranslation();
   const cancelRef = useRef<HTMLButtonElement>(null);
@@ -35,6 +54,7 @@ export function SpaceDeletionDialog({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const [rootDeleted, setRootDeleted] = useState(false);
   const root = preview?.spaces.find((item) => item.canvasId === canvasId);
   const descendants =
     preview?.spaces.filter((item) => item.canvasId !== canvasId) ?? [];
@@ -72,10 +92,27 @@ export function SpaceDeletionDialog({
         .refreshSpaceTitles(result.deletedCanvasIds);
       onDeleted(result.deletedCanvasIds);
     } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : t('spaceHierarchy.failed'),
-      );
+      if (useWorkspaceStore.getState().workspaceId !== workspaceId) return;
+      const message =
+        cause instanceof Error ? cause.message : t('spaceHierarchy.failed');
+      setError(message);
       setPreview(null);
+      const confirmed = new Set(preview.spaces.map((item) => item.canvasId));
+      if (
+        cause instanceof ApiError &&
+        cause.code === 'SPACE_TREE_DELETE_FAILED' &&
+        isDeletionFailure(cause.details) &&
+        [
+          ...cause.details.deletedCanvasIds,
+          ...cause.details.remainingCanvasIds,
+        ].every((id) => confirmed.has(id))
+      ) {
+        const deleted = cause.details.deletedCanvasIds;
+        for (const id of deleted) deleteWorkspace(id);
+        setRootDeleted(deleted.includes(canvasId));
+        toast(message, { tone: 'danger' });
+        onDeleted(deleted, message);
+      }
       await useWorkspaceStore.getState().refreshSpaceTitles();
     } finally {
       setBusy(false);
@@ -176,13 +213,15 @@ export function SpaceDeletionDialog({
       {error && (
         <div role="alert" className="text-danger mt-3 space-y-2 text-sm">
           <p>{error}</p>
-          <Button
-            variant="outline"
-            onClick={() => setAttempt((value) => value + 1)}
-            disabled={busy}
-          >
-            {t('spacePreview.retry')}
-          </Button>
+          {!rootDeleted && (
+            <Button
+              variant="outline"
+              onClick={() => setAttempt((value) => value + 1)}
+              disabled={busy}
+            >
+              {t('spacePreview.retry')}
+            </Button>
+          )}
         </div>
       )}
     </Modal>

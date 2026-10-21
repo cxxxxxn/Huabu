@@ -98,8 +98,8 @@ export function SpaceActions() {
           key={deleting}
           canvasId={deleting}
           onClose={() => setDeleting(null)}
-          onDeleted={(ids) => {
-            setDeleting(null);
+          onDeleted={(ids, failure) => {
+            if (!failure) setDeleting(null);
             if (ids.includes(useCanvasStore.getState().canvasId))
               navigate('/spaces');
           }}

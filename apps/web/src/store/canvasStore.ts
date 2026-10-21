@@ -93,6 +93,7 @@ import {
   writeDragDecision,
 } from '@/handler/snap/snapSession';
 import {
+  changedSpaceEntries,
   isVisibleWorldNode,
   REQUEST_DELETE_SPACE,
 } from '@/utils/spaceHierarchy';
@@ -921,6 +922,35 @@ type RFState = {
   flushCanvasEvents: () => Promise<void>;
 };
 
+function canChangeSpaceEntries(
+  canvasId: string,
+  previous: Node[],
+  next: Node[],
+): boolean {
+  const workspace = useWorkspaceStore.getState();
+  for (const node of changedSpaceEntries(previous, next)) {
+    const target = node.data.targetCanvasId;
+    if (typeof target !== 'string') continue;
+    const summary = workspace.spaceSummaries[target];
+    if (
+      workspace.spaceTitlesStatus !== 'ready' ||
+      (!summary && Object.hasOwn(workspace.spaceTitles, target))
+    ) {
+      toast(t('spaceHierarchy.ownershipUnavailable'), { tone: 'warning' });
+      void workspace.refreshSpaceTitles();
+      return false;
+    }
+    if (
+      summary?.parentSpaceId === canvasId &&
+      summary.parentEntryNodeId === node.id
+    ) {
+      toast(t('spaceHierarchy.entryProtected'), { tone: 'warning' });
+      return false;
+    }
+  }
+  return true;
+}
+
 /**
  * Module-scoped structure-save scheduler. Owns the debounce timer
  * for `PUT /api/canvas/:id`; the actual save action lives on the
@@ -1582,6 +1612,10 @@ const useCanvasStore = create<RFState>()(
 
       // Only commit if at least one command was applied.
       if (!commandResults.some((r) => r.applied)) return;
+      if (
+        !canChangeSpaceEntries(state.canvasId, state.nodes, writeResult.nodes)
+      )
+        return;
 
       const createdQuestions = writeResult.nodes.filter(
         (node) =>
@@ -1905,6 +1939,17 @@ const useCanvasStore = create<RFState>()(
       const prevNodes = get().nodes;
       const prevEdges = get().edges;
       const canvasId = get().canvasId;
+      const insertedSpaceTargets = safeDeltas.flatMap((delta) =>
+        delta.type === 'INSERT_NODE' &&
+        delta.node.type === 'spacePreview' &&
+        typeof delta.node.data.targetCanvasId === 'string'
+          ? [delta.node.data.targetCanvasId]
+          : [],
+      );
+      if (insertedSpaceTargets.length)
+        void useWorkspaceStore
+          .getState()
+          .refreshSpaceTitles(insertedSpaceTargets);
       if (agentNodeProjection) {
         canvasHistoryManager.rebaseAgentInitialContent(safeDeltas);
       } else if (
@@ -4451,7 +4496,9 @@ const useCanvasStore = create<RFState>()(
 
     undo: async () => {
       const { nodes, edges, canvasId } = get();
-      const snapshot = canvasHistoryManager.undo(nodes, edges);
+      const snapshot = canvasHistoryManager.undo(nodes, edges, (candidate) =>
+        canChangeSpaceEntries(canvasId, nodes, candidate.nodes),
+      );
       if (!snapshot) return;
       // Undo swaps in authoritative geometry, so any retained stroke
       // selection / polygon may no longer describe it (e.g. the classic
@@ -4488,7 +4535,9 @@ const useCanvasStore = create<RFState>()(
 
     redo: async () => {
       const { nodes, edges, canvasId } = get();
-      const snapshot = canvasHistoryManager.redo(nodes, edges);
+      const snapshot = canvasHistoryManager.redo(nodes, edges, (candidate) =>
+        canChangeSpaceEntries(canvasId, nodes, candidate.nodes),
+      );
       if (!snapshot) return;
       // See `undo`: a redo is the same authoritative geometry swap, so
       // discard the floating stroke selection for the same reason.

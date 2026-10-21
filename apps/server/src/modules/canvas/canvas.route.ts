@@ -721,19 +721,6 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
   }>('/:canvasId/nodes/:nodeId', async function (request, reply) {
     const { canvasId, nodeId } = request.params;
     return withCanvasMutex(canvasId, async () => {
-      if (
-        (await getStructuredStore().spaces().list()).some(
-          (child) =>
-            child.parentSpaceId === canvasId &&
-            child.parentEntryNodeId === nodeId,
-        )
-      ) {
-        return reply.code(409).send({
-          code: 'SPACE_ENTRY_PROTECTED',
-          message:
-            'Use confirmed Space deletion or change the parent before removing a child entry',
-        });
-      }
       const handle = getStructuredStore().space(canvasId);
       const canvas = await handle.read();
       if (!canvas) {
@@ -741,6 +728,22 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
           code: 'CANVAS_NOT_FOUND',
           message: 'Canvas not found',
         });
+      }
+
+      try {
+        const nodes = canvas.state.nodes as NodeLike[];
+        await assertChildSpaceEntriesAllowed(
+          canvasId,
+          nodes,
+          nodes.filter((node) => node.id !== nodeId),
+        );
+      } catch (error) {
+        if (error instanceof WorldPreviewMutationError)
+          return reply.code(409).send({
+            code: 'SPACE_ENTRY_PROTECTED',
+            message: error.message,
+          });
+        throw error;
       }
 
       try {
@@ -1366,15 +1369,24 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
         }
       }
 
+      const identityNodes = (incomingState.nodes ?? []).map((node) => {
+        const current = currentById.get(node.id);
+        return {
+          ...current,
+          ...node,
+          data: { ...current?.data, ...node.data },
+        };
+      });
       try {
         await assertChildSpaceEntriesAllowed(
           canvasId,
-          incomingState.nodes ?? [],
+          existing?.state.nodes ?? [],
+          identityNodes,
         );
         assertWorldPreviewTopologyAllowed(
           canvasId,
           (existing?.state.nodes ?? []) as NodeLike[],
-          incomingState.nodes ?? [],
+          identityNodes,
           isWorldCanvasId(canvasId)
             ? await readLiveSpaceIds()
             : new Set<string>(),

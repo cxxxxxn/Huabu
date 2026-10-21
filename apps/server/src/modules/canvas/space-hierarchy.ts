@@ -29,6 +29,7 @@ import type {
   CanvasSummary,
   CreateChildSpaceBody,
   DeleteSpaceTreePreview,
+  DeleteSpaceTreeFailure,
   SpaceParentBody,
   SpaceHierarchyResponse,
 } from '@huabu/shared';
@@ -342,7 +343,7 @@ export async function deleteSpaceTree(
               deletedCanvasIds: deleted,
               remainingCanvasIds: ids.filter((id) => !deleted.includes(id)),
               cause: error instanceof Error ? error.message : String(error),
-            },
+            } satisfies DeleteSpaceTreeFailure,
           );
         } finally {
           for (const release of releaseThreads.reverse()) release();

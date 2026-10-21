@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { executeOnServer } from './canvas-executor.js';
 import * as canvasSync from './canvas-sync.js';
+import canvasRoutes from './canvas.route.js';
 import {
   createChildSpace,
   deleteSpaceTree,
@@ -18,6 +19,7 @@ import {
 } from './space-hierarchy.js';
 import { registerSpaceHierarchyRoutes } from './space-hierarchy.route.js';
 import { moveCanvasSelection } from './space-move.service.js';
+import { assertChildSpaceEntriesAllowed } from './world-preview-policy.js';
 import { acquireAgentTurn } from '../agent/turn-lease.js';
 import * as storage from '../storage/index.js';
 import { setWorkspacePath } from '../workspace.js';
@@ -290,6 +292,76 @@ describe('Mixed selection Space migration', () => {
 });
 
 describe('Space ownership', () => {
+  it('accepts geometry-only PUTs but rejects removed or retargeted canonical entries', async () => {
+    const child = await createChildSpace('root', 'Child');
+    const app = Fastify();
+    await app.register(canvasRoutes);
+    try {
+      const before = await storage.space('root').read();
+      if (!before) throw new Error('Missing parent');
+      const moved = await app.inject({
+        method: 'PUT',
+        url: '/root',
+        payload: {
+          version: before.version,
+          state: {
+            nodes: [
+              { id: child.parentEntryNodeId, position: { x: 20, y: 30 } },
+            ],
+            edges: [],
+          },
+        },
+      });
+      expect(moved.statusCode, moved.body).toBe(200);
+      const saved = await storage.space('root').read();
+      expect(saved?.state.nodes[0]).toMatchObject({
+        type: 'spacePreview',
+        data: { targetCanvasId: child.canvasId },
+        position: { x: 20, y: 30 },
+      });
+      for (const nodes of [
+        [],
+        [
+          {
+            id: child.parentEntryNodeId,
+            position: { x: 20, y: 30 },
+            data: { targetCanvasId: 'elsewhere' },
+          },
+        ],
+      ]) {
+        const rejected = await app.inject({
+          method: 'PUT',
+          url: '/root',
+          payload: { version: saved?.version, state: { nodes, edges: [] } },
+        });
+        expect(rejected.statusCode, rejected.body).toBe(409);
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('does not list the Workspace or read targets when entry identities are unchanged', async () => {
+    const child = await createChildSpace('root', 'Child');
+    const before = await storage.space('root').read();
+    if (!before) throw new Error('Missing parent');
+    const repository = storage.getStructuredStore().spaces();
+    const listing = vi
+      .spyOn(Object.getPrototypeOf(repository) as typeof repository, 'list')
+      .mockRejectedValue(new Error('An unrelated Space is unreadable'));
+    const readTarget = vi.spyOn(storage, 'space');
+    await assertChildSpaceEntriesAllowed(
+      'root',
+      before.state.nodes,
+      before.state.nodes,
+    );
+    expect(readTarget).not.toHaveBeenCalled();
+    await expect(
+      assertChildSpaceEntriesAllowed('root', before.state.nodes, []),
+    ).rejects.toThrow('child Space entry');
+    expect(readTarget).toHaveBeenCalledWith(child.canvasId);
+    expect(listing).not.toHaveBeenCalled();
+  });
   it('places the canonical child entry at the requested canvas coordinates', async () => {
     const app = Fastify();
     registerSpaceHierarchyRoutes(app);

@@ -50,3 +50,12 @@ export const deleteSpaceTreeResponseSchema = z.object({
 export type DeleteSpaceTreeResponse = z.infer<
   typeof deleteSpaceTreeResponseSchema
 >;
+
+export const deleteSpaceTreeFailureSchema = z.object({
+  deletedCanvasIds: z.array(spaceId),
+  remainingCanvasIds: z.array(spaceId),
+  cause: z.string(),
+});
+export type DeleteSpaceTreeFailure = z.infer<
+  typeof deleteSpaceTreeFailureSchema
+>;

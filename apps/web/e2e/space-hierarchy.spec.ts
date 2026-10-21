@@ -16,6 +16,95 @@ test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('huabu.language', 'en'));
 });
 
+test('immediate Undo after child creation keeps its entry and leaves saves usable', async ({
+  page,
+}) => {
+  const parent = await create(page, 'Undo parent');
+  await page.goto(`/canvas/${parent}`);
+  await expect(page.locator('[data-canvas-root]')).toHaveAttribute(
+    'aria-busy',
+    'false',
+  );
+  const response = await page.request.post(`/api/canvas/${parent}/children`, {
+    data: { title: 'Undo child' },
+  });
+  expect(response.ok()).toBe(true);
+  const child = await response.json();
+  await expect
+    .poll(() =>
+      page.evaluate(async (entryId) => {
+        const path = '/src/store/canvasStore.ts';
+        const { default: store } = (await import(path)) as typeof CanvasStore;
+        return store.getState().nodes.some((node) => node.id === entryId);
+      }, child.parentEntryNodeId),
+    )
+    .toBe(true);
+  await page.evaluate(async () => {
+    const path = '/src/store/canvasStore.ts';
+    const { default: store } = (await import(path)) as typeof CanvasStore;
+    await store.getState().undo();
+    await store.getState().saveCanvas();
+  });
+  const record = await (await page.request.get(`/api/canvas/${parent}`)).json();
+  expect(record.state.nodes).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ id: child.parentEntryNodeId }),
+    ]),
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        const path = '/src/store/canvasStore.ts';
+        const { default: store } = (await import(path)) as typeof CanvasStore;
+        return store.getState().versionConflict;
+      }),
+    )
+    .toBe(false);
+});
+
+test('leaves a deleted current Space and keeps the partial-cleanup error visible', async ({
+  page,
+}) => {
+  const id = await create(page, 'Partial cleanup');
+  await page.goto(`/canvas/${id}`);
+  await expect(page.locator('[data-canvas-root]')).toHaveAttribute(
+    'aria-busy',
+    'false',
+  );
+  await page.route(`**/api/canvas/${id}/delete-tree`, async (route) => {
+    const response = await route.fetch();
+    expect(response.ok()).toBe(true);
+    await route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        code: 'SPACE_TREE_DELETE_FAILED',
+        message: 'Parent cleanup failed',
+        details: {
+          deletedCanvasIds: [id],
+          remainingCanvasIds: [],
+          cause: 'Cleanup failed',
+        },
+      }),
+    });
+  });
+  await page.getByRole('button', { name: 'Space menu', exact: true }).click();
+  await page
+    .getByRole('menuitem', { name: 'Delete Space', exact: true })
+    .click();
+  const dialog = page.getByRole('dialog', {
+    name: 'Delete Space?',
+    exact: true,
+  });
+  await dialog
+    .getByRole('button', { name: 'Delete Space', exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/spaces$/);
+  await expect(
+    page.getByText('Parent cleanup failed', { exact: true }),
+  ).toBeVisible();
+});
+
 test('change-parent dialog initializes from metadata arriving after opening', async ({
   page,
 }) => {

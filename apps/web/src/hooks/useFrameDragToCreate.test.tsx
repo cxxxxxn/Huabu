@@ -16,6 +16,7 @@ const click = vi.fn();
 const end = vi.fn();
 let host: HTMLDivElement;
 let root: Root;
+let zoom = 1;
 
 function Harness({
   active = true,
@@ -28,7 +29,10 @@ function Harness({
 }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const rfInstanceRef = useRef({
-    screenToFlowPosition: (point: { x: number; y: number }) => point,
+    screenToFlowPosition: (point: { x: number; y: number }) => ({
+      x: point.x / zoom,
+      y: point.y / zoom,
+    }),
   } as ReactFlowInstance);
   const { pointerHandlers } = useFrameDragToCreate({
     active,
@@ -71,6 +75,7 @@ function pointer(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  zoom = 1;
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
@@ -113,8 +118,26 @@ it('commits a rectangle rather than a click and normalizes reverse drags', () =>
     width: 150,
     height: 120,
   });
+
   expect(click).not.toHaveBeenCalled();
   expect(end).toHaveBeenCalledOnce();
+});
+
+it('treats a small touch movement as a tap even at 10% zoom', () => {
+  zoom = 0.1;
+  pointer('pointerdown', 50, 60, 'touch');
+  pointer('pointerup', 53, 63, 'touch');
+  expect(click).toHaveBeenCalledWith({ x: 530, y: 630 });
+  expect(create).not.toHaveBeenCalled();
+  act(() => root.render(<Harness child={false} />));
+  pointer('pointerdown', 50, 60, 'touch');
+  pointer('pointerup', 53, 63, 'touch');
+  expect(create).toHaveBeenCalledWith({
+    x: 500,
+    y: 600,
+    width: 30,
+    height: 30,
+  });
 });
 
 it.each(['escape', 'cancel', 'tool-switch', 'frame-switch'])(

@@ -169,9 +169,8 @@ export function useFrameDragToCreate({
         const width = Math.abs(endFlow.x - startFlow.x);
         const height = Math.abs(endFlow.y - startFlow.y);
 
-        if (width >= MIN_FRAME_SIZE && height >= MIN_FRAME_SIZE) {
-          onCreate({ x, y, width, height });
-        } else if (
+        if (
+          onClick &&
           drag.clickAllowed &&
           isNodePlacementTap(
             drag.start.x,
@@ -181,7 +180,9 @@ export function useFrameDragToCreate({
             getDragActivationDistance(drag.pointerType),
           )
         ) {
-          onClick?.(endFlow);
+          onClick(endFlow);
+        } else if (width >= MIN_FRAME_SIZE && height >= MIN_FRAME_SIZE) {
+          onCreate({ x, y, width, height });
         }
       }
       cancel();

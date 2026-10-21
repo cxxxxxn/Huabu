@@ -101,7 +101,7 @@ export default function CanvasPage() {
   // `loadCanvas` and flips `isLoading` on.
   const storeCanvasId = useStore((s) => s.canvasId);
   useEffect(() => {
-    if (storeCanvasId !== worldId) return;
+    if (isLoading || storeCanvasId !== worldId) return;
     const canvas = useStore.getState();
     if (canvas.canvasId !== storeCanvasId) return;
     const hidden = new Set(
@@ -133,7 +133,7 @@ export default function CanvasPage() {
           : edge,
       ),
     });
-  }, [spaceSummaries, storeCanvasId, worldId]);
+  }, [isLoading, spaceSummaries, storeCanvasId, worldId]);
   const rfInstance = useStore((s) => s.rfInstance);
   const previewCanvasId = usePreviewWorkspaceStore((s) => s.canvasId);
   const isPreviewFullscreen = usePanelStore((s) => s.isPreviewFullscreen);

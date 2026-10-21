@@ -622,6 +622,8 @@
     "collect": "Collect as a child Space (keeps an entry here)",
     "childEntry": "Child Space",
     "deleteEntrySeparately": "Delete child Spaces individually with confirmation before deleting this selection.",
+    "ownershipUnavailable": "Space ownership is not available yet. Refreshing; retry once it has loaded.",
+    "entryProtected": "This change would remove or retarget a child Space entry. Use Delete Space or Change parent instead.",
     "deleteWarning": "Contents will be permanently deleted. This cannot be undone.",
     "deleteCount_one": "Delete Space",
     "deleteCount_other": "Delete {{count}} Spaces",

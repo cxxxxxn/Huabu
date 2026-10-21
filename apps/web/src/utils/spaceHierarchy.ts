@@ -6,6 +6,22 @@ import type { CanvasSummary } from '@huabu/shared';
 type ParentSummary = Pick<CanvasSummary, 'parentSpaceId'>;
 type LinkNode = { type?: string; data: Record<string, unknown> };
 
+/** Compare identity only; geometry and content edits do not affect ownership. */
+export function changedSpaceEntries<T extends LinkNode & { id: string }>(
+  previous: readonly T[],
+  next: readonly T[],
+): T[] {
+  const byId = new Map(next.map((node) => [node.id, node]));
+  return previous.filter((node) => {
+    if (node.type !== 'spacePreview') return false;
+    const after = byId.get(node.id);
+    return (
+      after?.type !== 'spacePreview' ||
+      after.data.targetCanvasId !== node.data.targetCanvasId
+    );
+  });
+}
+
 export function isVisibleWorldNode(
   node: LinkNode,
   canvasId: string,

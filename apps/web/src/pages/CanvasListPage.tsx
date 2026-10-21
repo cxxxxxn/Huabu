@@ -142,8 +142,8 @@ export default function CanvasListPage() {
             setPendingDelete(null);
             void fetchCanvases();
           }}
-          onDeleted={() => {
-            setPendingDelete(null);
+          onDeleted={(_ids, failure) => {
+            if (!failure) setPendingDelete(null);
             void fetchCanvases();
           }}
         />
