@@ -5,7 +5,7 @@ import '@fontsource/caveat/latin-400.css';
 import 'lxgw-wenkai-lite-webfont/lxgwwenkailite-regular.css';
 import '@/components/Common/scrollbar.css';
 
-import { useViewport } from '@xyflow/react';
+import { useViewport, ViewportPortal } from '@xyflow/react';
 import { X } from 'lucide-react';
 import {
   useEffect,
@@ -21,7 +21,6 @@ import { useTranslation } from 'react-i18next';
 
 import { resolveAccent } from '@huabu/shared';
 import {
-  assignNodeZIndices,
   getAbsolutePosition,
   getInkSigilStrokes,
   INK_SIGIL_LABEL_MAX_WIDTH,
@@ -40,6 +39,7 @@ import { cn } from '@/components/Common/cn';
 import { TabGroup } from '@/components/Common/TabGroup';
 import { toast } from '@/components/Common/Toast';
 import { applyNodeGeometryPreviews } from '@/components/Panels/Canvas/applyNodeGeometryPreview';
+import { canvasNodeZOrder } from '@/components/Panels/Canvas/selectionZOrder';
 import { getNodeIcon } from '@/config/nodeIcons';
 import useCanvasStore from '@/store/canvasStore';
 import { useGesturePreviewStore } from '@/store/gesturePreviewStore';
@@ -201,7 +201,10 @@ export function InkSigilLayer({ tool = 'select' }: { tool?: CanvasTool }) {
     tool === 'select' && (pendingNodeType === null || drawing);
   const drag = useInkSigilDrag(nodes, canvasId, interactive);
   const projections = useMemo(() => projectInkResourceBindings(nodes), [nodes]);
-  const zIndices = useMemo(() => assignNodeZIndices(nodes), [nodes]);
+  const zIndices = useMemo(
+    () => canvasNodeZOrder(nodes, tool, pendingNodeType),
+    [nodes, tool, pendingNodeType],
+  );
   const displayNodes = useMemo(
     () => applyNodeGeometryPreviews(nodes as CanvasNode[], geometries),
     [nodes, geometries],
@@ -323,6 +326,7 @@ export function InkSigilLayer({ tool = 'select' }: { tool?: CanvasTool }) {
                 zoom={viewport.zoom}
                 highlightNodeId={highlightNodeId}
                 highlightOrigin={highlightOrigin}
+                highlightZ={zIndices.get(highlightNodeId) ?? 0}
                 picker={
                   pending?.canvasId === canvasId &&
                   pending.bindingId === projection.binding.id
@@ -357,6 +361,7 @@ function InkSigilAnnotation({
   zoom,
   highlightNodeId,
   highlightOrigin,
+  highlightZ,
   picker,
 }: {
   projection: InkSigilProjection;
@@ -366,6 +371,7 @@ function InkSigilAnnotation({
   zoom: number;
   highlightNodeId: string;
   highlightOrigin: XYPosition;
+  highlightZ: number;
   picker?: { nodes: Node[] };
 }) {
   const { t } = useTranslation();
@@ -426,6 +432,30 @@ function InkSigilAnnotation({
     };
   }, [zoom, projection.label, layout.fontSize, broken, frameSuppressed, t]);
   if (frameSuppressed) return null;
+  const highlight = (
+    <div
+      inert
+      data-ink-sigil-highlight
+      data-canvas-grounding-exclude={
+        projection.target && selected ? undefined : ''
+      }
+      className={
+        broken
+          ? 'bg-warning-bg-hover/70 pointer-events-none absolute rounded'
+          : 'bg-ink-reference-highlight/70 pointer-events-none absolute rounded'
+      }
+      style={{
+        left:
+          layout.semanticBounds.x - (highlightLayer ? highlightOrigin.x : 0),
+        top: layout.semanticBounds.y - (highlightLayer ? highlightOrigin.y : 0),
+        width: layout.semanticBounds.width,
+        height: layout.semanticBounds.height,
+        // ViewportPortal follows the node renderer in DOM order, so a tie
+        // paints above the preceding node and below the absent source.
+        zIndex: highlightLayer ? undefined : highlightZ - 1,
+      }}
+    />
+  );
   return (
     <div
       data-ink-sigil={projection.binding.id}
@@ -435,28 +465,11 @@ function InkSigilAnnotation({
         projection.target && selected ? undefined : ''
       }
     >
-      {highlightLayer
-        ? createPortal(
-            <div
-              data-ink-sigil-highlight
-              data-canvas-grounding-exclude={
-                projection.target && selected ? undefined : ''
-              }
-              className={
-                broken
-                  ? 'bg-warning-bg-hover/70 absolute rounded'
-                  : 'bg-ink-reference-highlight/70 absolute rounded'
-              }
-              style={{
-                left: layout.semanticBounds.x - highlightOrigin.x,
-                top: layout.semanticBounds.y - highlightOrigin.y,
-                width: layout.semanticBounds.width,
-                height: layout.semanticBounds.height,
-              }}
-            />,
-            highlightLayer,
-          )
-        : null}
+      {highlightLayer ? (
+        createPortal(highlight, highlightLayer)
+      ) : (
+        <ViewportPortal>{highlight}</ViewportPortal>
+      )}
       <Button
         variant="ghost"
         data-ink-sigil-hit-target

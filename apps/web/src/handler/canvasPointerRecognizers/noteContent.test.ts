@@ -11,6 +11,7 @@ import {
   resetCanvasGestureForTests,
 } from '@/handler/canvasGestureSession';
 import { useGesturePreviewStore } from '@/store/gesturePreviewStore';
+import { resetInkSigilSession, useInkSigilStore } from '@/store/inkSigilStore';
 
 import { createNoteContentRecognizer } from './noteContent';
 
@@ -106,11 +107,31 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetInkSigilSession();
   wrapper.remove();
   resetCanvasGestureForTests();
 });
 
 describe('Note content pointer ownership', () => {
+  it('yields an active reader tap to a pending resource binding under Sketch', () => {
+    ctx.explicitToolActive = true;
+    ctx.inkToolActive = true;
+    useGesturePreviewStore.setState({ noteReadingNodeId: 'note' });
+    const recognizer = createNoteContentRecognizer();
+    expect(recognizer.canClaim(pointer('pointerdown', 50, 75), ctx)).toBe(true);
+    useInkSigilStore.setState({
+      pending: {
+        canvasId: 'space',
+        fingerprint: 'hash',
+        strokeIds: ['a', 'b', 'c', 'd'],
+      },
+    });
+    expect(recognizer.canClaim(pointer('pointerdown', 50, 75), ctx)).toBe(
+      false,
+    );
+    expect(useGesturePreviewStore.getState().noteReadingNodeId).toBe('note');
+    expect(mocks.selectNodes).not.toHaveBeenCalled();
+  });
   it.each(['lasso', 'sketch'])(
     'lets a finger enter and scroll reading under the %s tool in Pen mode',
     (tool) => {

@@ -40,6 +40,7 @@ export function InkSigilHighlightHost({
       <div
         ref={register}
         data-ink-sigil-highlights={nodeId}
+        inert
         className="pointer-events-none absolute inset-0"
       />
       {children}

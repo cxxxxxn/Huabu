@@ -16,6 +16,7 @@ import { canTouchClaimViewport } from '@/handler/canvasInteractionOwner';
 import { nodeIdAtScreenPoint } from '@/handler/canvasNodeAtPoint';
 import useCanvasStore from '@/store/canvasStore';
 import { useGesturePreviewStore } from '@/store/gesturePreviewStore';
+import { useInkSigilStore } from '@/store/inkSigilStore';
 
 import { createNodeDragRecognizer } from './nodeDrag';
 
@@ -155,6 +156,7 @@ export function createNoteContentRecognizer(): PointerRecognizer<
     id: 'note-content',
     canClaim: (event, ctx) =>
       pointerId === null &&
+      !useInkSigilStore.getState().pending &&
       canTouchClaimViewport() &&
       targetViewport(event, ctx) !== null,
     onDown: (event, ctx) => {

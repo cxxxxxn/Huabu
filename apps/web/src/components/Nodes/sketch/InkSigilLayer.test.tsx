@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { act } from 'react';
+import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { I18nextProvider } from 'react-i18next';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -60,6 +60,9 @@ vi.mock('@/store/canvasStore', () => ({
   saveCanvasForSubmission: mocks.save,
 }));
 vi.mock('@xyflow/react', () => ({
+  ViewportPortal: ({ children }: { children: ReactNode }) => (
+    <div data-test-viewport-portal>{children}</div>
+  ),
   useStoreApi: () => frameFlow,
   useViewport: () => ({ x: 0, y: 0, zoom: 1 }),
   useReactFlow: () => ({ screenToFlowPosition: mocks.screenToFlowPosition }),
@@ -517,23 +520,77 @@ describe('Ink resource picker', () => {
     expect(layer.className).not.toContain('mix-blend');
     expect(layer.className).not.toContain('z-');
     expect(layer.classList.contains('pointer-events-none')).toBe(true);
+    expect(layer.hasAttribute('inert')).toBe(true);
     expect(layer.querySelector('[data-ink-sigil-highlight]')).not.toBeNull();
     expect(layer.nextElementSibling).toBe(element('[data-test-ink-strokes]'));
     expect(layer.contains(element('[data-ink-sigil-label]'))).toBe(false);
   });
-  it('restores the highlight when its source node remounts', async () => {
+  it('keeps the highlight in world coordinates below its culled source and restores the local host', async () => {
     await act(async () => element('[role="option"]').click());
     expect(
       container.querySelector('[data-ink-sigil-highlight]'),
     ).not.toBeNull();
     await act(async () => hostRoot.render(null));
-    expect(container.querySelector('[data-ink-sigil-highlight]')).toBeNull();
+    const fallback = element(
+      '[data-test-viewport-portal] [data-ink-sigil-highlight]',
+    );
+    expect(fallback.style.zIndex).toBe('-1');
+    expect(fallback.hasAttribute('inert')).toBe(true);
     expect(container.querySelector('[data-ink-sigil-label]')).not.toBeNull();
     await act(async () => renderHighlightHost());
     expect(
       container.querySelector('[data-ink-sigil-highlight]'),
     ).not.toBeNull();
+    expect(container.querySelector('[data-test-viewport-portal]')).toBeNull();
   });
+  it.each(['ink', 'source-frame'])(
+    'moves a split binding below the other source when %s is elevated',
+    async (selectedId) => {
+      await act(async () => element('[role="option"]').click());
+      const ink = mocks.state.nodes[0];
+      const strokes = ink.data.strokes as unknown[];
+      mocks.state.nodes = [
+        {
+          id: 'source-frame',
+          type: 'frame',
+          position: { x: 0, y: 0 },
+          data: {},
+        },
+        {
+          ...ink,
+          parentId: 'source-frame',
+          data: { ...ink.data, strokes: strokes.slice(0, 2) },
+        },
+        {
+          ...ink,
+          id: 'other-ink',
+          data: { ...ink.data, strokes: strokes.slice(2) },
+        },
+        ...mocks.state.nodes.slice(1),
+      ];
+      await act(async () => {
+        renderHighlightHost(['ink', 'other-ink']);
+        useToolStore.setState({ pendingNodeType: null });
+      });
+      for (const selected of [false, true, false]) {
+        mocks.state.nodes = mocks.state.nodes.map((node) => ({
+          ...node,
+          selected: selected && node.id === selectedId,
+        }));
+        await act(async () =>
+          root.render(
+            <I18nextProvider i18n={i18n}>
+              <InkSigilLayer />
+            </I18nextProvider>,
+          ),
+        );
+        expect(
+          element('[data-ink-sigil-highlight]').parentElement?.dataset
+            .inkSigilHighlights,
+        ).toBe(selected ? 'other-ink' : 'ink');
+      }
+    },
+  );
   it('moves the label with complete strokes and hides it for partial move or erase previews', async () => {
     const option =
       container.querySelector<HTMLButtonElement>('[role="option"]');

@@ -24,11 +24,7 @@ import React, {
 import { createPortal } from 'react-dom';
 import '@xyflow/react/dist/style.css';
 
-import {
-  assignNodeZIndices,
-  edgeZIndex,
-  indexById,
-} from '@huabu/shared/canvas-engine';
+import { edgeZIndex, indexById } from '@huabu/shared/canvas-engine';
 
 import { resolveArtifactUrl } from '@/api/artifact';
 import { cn } from '@/components/Common/cn';
@@ -111,7 +107,7 @@ import { StrokeSelectionToolbar } from './FloatingToolbars/StrokeSelectionToolba
 import { MoveSelectionPopover } from './MoveSelectionPopover.tsx';
 import { MultiSelectResizer } from './MultiSelectResizer.tsx';
 import { SelectionOutlines } from './SelectionOutlines.tsx';
-import { selectionZOrder, withoutNodeStyleZIndex } from './selectionZOrder';
+import { canvasNodeZOrder, withoutNodeStyleZIndex } from './selectionZOrder';
 import { SnapGuidesOverlay } from './SnapGuidesOverlay.tsx';
 import { StrokeSelectionRegion } from './StrokeSelectionRegion.tsx';
 import { StructuredDropOverlay } from './StructuredDropOverlay.tsx';
@@ -685,18 +681,11 @@ const CanvasContent: React.FC<CanvasProps> = ({
     cancelLasso();
     window.dispatchEvent(new Event(CANCEL_SKETCH_GESTURE_EVENT));
   }, [cancelLasso]);
-  // Forest order remains authoritative at rest and throughout Lasso, where
-  // partial Ink is not a selected node. Select-tool sole selection temporarily
-  // raises a node/subtree without changing store order or persisted z.
+  // Ink tools retain forest order so selected readers cannot cover new strokes.
   const nodesById = useMemo(() => indexById(nodes as NestableNode[]), [nodes]);
   const zByNode = useMemo(
-    () =>
-      selectionZOrder(
-        nodes as NestableNode[],
-        assignNodeZIndices(nodes as NestableNode[]),
-        { elevateSelectedNode: tool !== 'lasso' },
-      ),
-    [nodes, tool],
+    () => canvasNodeZOrder(nodes as NestableNode[], tool, pendingNodeType),
+    [nodes, tool, pendingNodeType],
   );
 
   // Cache of the wrapped node objects emitted last render, keyed by their
