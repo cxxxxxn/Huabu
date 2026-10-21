@@ -63,6 +63,7 @@ export function PDFZoomControls({
       </PreviewHeaderButton>
       <DropdownMenu
         floating
+        contentRole="presentation"
         align="bottom-right"
         triggerWrapperClassName="flex"
         open={open && !disabled}

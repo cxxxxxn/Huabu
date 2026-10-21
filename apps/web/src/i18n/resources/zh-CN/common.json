@@ -532,7 +532,19 @@
     "previousMatch": "上一个匹配项",
     "nextMatch": "下一个匹配项",
     "clear": "清除搜索",
-    "searching": "正在搜索"
+    "searching": "正在搜索",
+    "noMatches": "没有匹配结果",
+    "searchingNoteContents": "正在搜索笔记正文…",
+    "resultsTruncated": "当前仅显示部分匹配结果，请使用更具体的搜索内容缩小范围。",
+    "conversationMatchNotVisible": "无法在当前对话中精确定位此匹配；它可能仅存在于源码中，或内容已更新。",
+    "previewMatchNotVisible": "无法在当前预览中精确定位此匹配；它可能仅存在于源码中，或内容已更新。",
+    "fields": {
+      "label": "标题",
+      "summary": "摘要",
+      "keywords": "关键词",
+      "content": "正文",
+      "conversation": "对话"
+    }
   },
   "editor": {
     "readOnlyContent": "只读内容",

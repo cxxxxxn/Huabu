@@ -1081,7 +1081,19 @@ describe('POST /api/rfs/:canvasId/query', () => {
         result: {
           count: 1,
           truncated: false,
-          matches: [{ tier: 'content', match: { nodeId: 'node-1' } }],
+          matches: [
+            {
+              tier: 'content',
+              match: {
+                nodeId: 'node-1',
+                source: {
+                  hash: expect.stringMatching(/^[a-f0-9]{64}$/),
+                  offset: 6,
+                  length: 10,
+                },
+              },
+            },
+          ],
         },
       });
     } finally {

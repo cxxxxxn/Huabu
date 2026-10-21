@@ -3,7 +3,7 @@
 > Structure, dependency rules, and conventions for the frontend. The point of
 > this doc is the **layering rules** below — not an exhaustive file listing
 > (those rot fast; `ls` the dir for the current files).
-> Last updated: 2026-10-09
+> Last updated: 2026-10-20
 
 ---
 
@@ -67,11 +67,31 @@ What stays in `apps/web/src/handler/canvasCommand/`:
 
 ## 4. Conventions
 
+Common DropdownMenu action lists expose a labelled `menu` linked to their trigger. Opening focuses the first enabled item; ArrowDown/ArrowUp on the trigger open at the first/last enabled item, and ArrowDown/ArrowUp/Home/End inside the menu move focus while skipping disabled items. Tab dismisses without blocking native traversal, Escape returns focus to the trigger, and ArrowRight/ArrowLeft enter/leave submenus. Hover-opened submenus do not steal focus. Menu items retain native button/link activation. Form and layout panels declare `contentRole="dialog"` so text editing and ordinary tab order remain native; consumers that already own their menu/dialog semantics and keyboard navigation declare `contentRole="presentation"` to avoid nested menus or duplicate handlers. Popover forwards the root DOM semantics and keyboard handler without adding layout wrappers.
+
+Focusing the first or last enabled menu item also scrolls it into view, including ArrowUp opening a long, scrollable menu at its last option.
+
+CanvasZoomMenu owns a mixed input/action dialog rather than an arrow-only action menu. Its five action items explicitly retain native Tab stops; Tab traverses enabled controls and the dialog dismisses at its first/last boundary.
+
+On submenu triggers, ArrowDown and ArrowUp continue moving through the parent menu rather than opening the child. ArrowRight enters the child and focuses its first enabled item, including when hover has already opened it without moving focus.
+
+Canvas search synchronizes its active row when a result receives DOM focus. Arrow navigation from a result moves focus to the newly active row after Virtuoso reveals it, so Enter activates the same row that has focus. Navigation from the search input retains input focus and uses the active row for confirmation; browsing continues to reveal Canvas nodes without opening Preview tabs until explicit activation.
+
+Virtualized search navigation captures result-focus ownership before scrolling. When the focused row is unmounted, completion restores focus to the destination only if focus fell to the document body; it does not override focus deliberately moved to another control, and superseded scroll completions cannot restore stale focus.
+
+Canvas search groups matches by node and then by field in first-seen order. Each field has one localized heading above its contiguous matches, rather than a repeated label on every match. Field headings are not extra keyboard stops; each snippet remains independently focusable and activatable, with its field included in its accessible name. Node counts continue to count matches rather than fields.
+
+Canvas search uses the shared `search` translation keys for empty, streaming, truncated-result, and conversation-match timeout messages. Result-field identifiers remain unchanged in the wire data and map to localized display labels for title, summary, keywords, content, and conversation. Switching language updates result labels and status messages without resetting the search.
+
 Common Select menus use Popover's element-anchored Floating UI positioning instead of snapshot coordinates. The panel remains hidden until positioning completes, follows its trigger during scrolling and layout changes, and flips to the opposite side when space is insufficient rather than clamping over the trigger. Opening refresh callbacks run in the event handler, not a React state updater, so Strict Mode does not duplicate discovery requests. Agent Settings retain the loaded Profile catalogue during refresh; only the initial load replaces it with a loading row, preventing selector-trigger layout shifts when opening the Utility Agent menu.
 
 The chat input surface uses 12px top and horizontal padding and 8px bottom padding to keep the selector/send row compact while aligning the source area and textarea to the same content edges. The Agent selector below the input omits its decorative chevron in both editable and locked states without changing menu interaction; session selectors inside the input retain their chevrons.
 
 Lucide UI icons use the shared `--icon-stroke-width: 2` token in `index.css`. A low-specificity base-layer rule targets only `svg.lucide[stroke-width='2']`, the attribute Lucide emits by default; ordinary callers omit `strokeWidth`. Non-default `strokeWidth` props, component-specific CSS, and inline styles remain overrides, and non-Lucide SVG artwork is unaffected. To explicitly retain Lucide's original width of 2 independently of future token changes, use `style={{ strokeWidth: 2 }}` because its DOM attribute is indistinguishable from the library default. Shared menus inherit this default rather than forcing a separate stroke width. Icon sizes and semantic foreground/hover colors remain owned by each surface.
+
+Canvas toolbar icon strokes intentionally use two visual tiers: the main toolbar uses the shared 2px stroke, while node and selection context toolbars use the lighter 1.65px stroke defined in `NodeToolbar.css`. This is a deliberate hierarchy, not a consistency defect. Text-format controls retain their explicit 2px normal and 2.25px pressed strokes, and custom line-style previews retain strokes that illustrate the underlying content.
+
+Main Canvas navigation and node-placement controls expose `aria-pressed` from the same active-tool or pending-placement state that drives their visual highlight. SplitSelect accepts an optional `primaryPressed` state for its primary action without changing the menu trigger's disclosure semantics; ordinary SplitSelect consumers omit it. Touch and pen Sketch mode controls retain their existing draw/erase pressed states.
 
 The Space-menu chevron and Layers disclosure icons in the Canvas header share 16px dimensions, the shared Lucide stroke width, and the existing `text-fg-subtle` theme color in both light and dark modes; hovering a control uses `fg-default`. Layers uses PanelLeft to expand and PanelLeftClose to collapse. No additional color token is introduced, and the existing text hierarchy and other icon surfaces are unchanged.
 

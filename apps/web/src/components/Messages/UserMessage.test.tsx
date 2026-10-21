@@ -78,6 +78,10 @@ describe('UserMessage', () => {
       expect(container.querySelector('svg.lucide-quote')).toBeNull();
       expect(container.textContent).toContain('Explain this.');
       expect(container.textContent).toContain('Compare it.');
+      expect(
+        container.querySelector('[data-chat-prompt-content]')?.textContent ??
+          '',
+      ).toBe(content);
       if (content) expect(container.textContent).toContain(content);
       expect(container.textContent).not.toContain(
         'Quote from an earlier reply:',
@@ -157,6 +161,9 @@ describe('UserMessage', () => {
       container.querySelector('.text-fg-muted, .text-fg-subtle'),
     ).toBeNull();
     expect(container.textContent).toContain('My original words');
+    expect(
+      container.querySelector('[data-chat-prompt-content]')?.textContent,
+    ).toBe('My original words');
     expect(
       container.querySelector('[data-source="sketch-1"]')?.textContent,
     ).toBe('sketch-1 2');

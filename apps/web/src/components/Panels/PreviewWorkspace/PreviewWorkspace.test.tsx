@@ -204,6 +204,26 @@ afterEach(() => {
   });
 });
 
+describe('search-result preview opening', () => {
+  it('suppresses stale editor focus for search without changing normal Note opening', () => {
+    useCanvasStore.setState({
+      canvasId: CANVAS_ID,
+      nodes: [canvasNode('a', 'Alpha')],
+    });
+    const tabId = openPreviewNode('a');
+    const originalRequest = store().nodeFocusRequest;
+    expect(originalRequest?.tabId).toBe(tabId);
+    expect(openPreviewNode('a', { transient: true, focusEditor: false })).toBe(
+      tabId,
+    );
+    expect(store().nodeFocusRequest).toBeNull();
+    openPreviewNode('a');
+    expect(store().nodeFocusRequest?.nonce).toBeGreaterThan(
+      originalRequest?.nonce ?? 0,
+    );
+  });
+});
+
 describe('tab-owned titles', () => {
   const titleInput = () =>
     container?.querySelector<HTMLInputElement>(

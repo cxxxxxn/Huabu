@@ -100,6 +100,35 @@ afterEach(() => {
 });
 
 describe('NodeToolbar', () => {
+  it('updates pressed states when placement changes and navigation resumes', () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    for (const pendingNodeType of ['note', 'text', null]) {
+      toolState.pendingNodeType = pendingNodeType;
+      act(() =>
+        root?.render(
+          <NodeToolbar activeTool="select" onToolChange={vi.fn()} />,
+        ),
+      );
+      expect(
+        container
+          .querySelector('button[aria-label^="toolbar.tools.select"]')
+          ?.getAttribute('aria-pressed'),
+      ).toBe(String(pendingNodeType === null));
+      for (const nodeType of ['note', 'text']) {
+        expect(
+          container
+            .querySelector(`button[aria-label^="toolbar.nodes.${nodeType}"]`)
+            ?.getAttribute('aria-pressed'),
+        ).toBe(String(pendingNodeType === nodeType));
+      }
+      expect(
+        container.querySelectorAll('button[aria-pressed="true"]'),
+      ).toHaveLength(1);
+    }
+  });
+
   it('uses roomier primary buttons without enlarging icons or compact dropdowns', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -178,6 +207,10 @@ describe('NodeToolbar', () => {
       expect(selected?.classList.contains('enabled:hover:bg-info-bg')).toBe(
         true,
       );
+      expect(selected?.getAttribute('aria-pressed')).toBe('true');
+      expect(
+        container.querySelectorAll('button[aria-pressed="true"]'),
+      ).toHaveLength(1);
       expect(container.querySelectorAll('button.bg-info-bg')).toHaveLength(1);
     },
   );
@@ -261,9 +294,25 @@ describe('NodeToolbar', () => {
         true,
       );
       expect(container.querySelectorAll('button.bg-info-bg')).toHaveLength(1);
-      if (nodeType === 'question') {
-        expect(selected?.getAttribute('aria-pressed')).toBe('true');
+      expect(selected?.getAttribute('aria-pressed')).toBe('true');
+      expect(
+        container.querySelectorAll('button[aria-pressed="true"]'),
+      ).toHaveLength(1);
+      for (const otherType of ['note', 'text', 'frame', 'sketch', 'addAgent']) {
+        const button = container.querySelector<HTMLButtonElement>(
+          `button[aria-label^="toolbar.nodes.${otherType}"]`,
+        );
+        expect(button?.getAttribute('aria-pressed')).toBe(
+          otherType === (nodeType === 'question' ? 'addAgent' : nodeType)
+            ? 'true'
+            : 'false',
+        );
       }
+      expect(
+        container
+          .querySelector('button[aria-label^="toolbar.tools.select"]')
+          ?.getAttribute('aria-pressed'),
+      ).toBe('false');
     },
   );
 

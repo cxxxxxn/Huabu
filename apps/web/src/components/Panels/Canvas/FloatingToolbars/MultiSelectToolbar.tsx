@@ -248,6 +248,7 @@ export const MultiSelectToolbar = () => {
       <DropdownMenu
         floating
         placement="bottom"
+        contentRole="dialog"
         className={`${FLOATING_TOOLBAR_POPOVER_CLASS} node-toolbar-size-panel flex-row items-center gap-2`}
         trigger={
           <Button variant="ghost" iconOnly title={t('toolbar.size.title')}>

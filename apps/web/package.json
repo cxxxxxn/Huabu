@@ -37,6 +37,7 @@
     "@milkdown/prose": "^7.21.1",
     "@milkdown/react": "^7.21.1",
     "@milkdown/utils": "^7.21.1",
+    "@noble/hashes": "^1.8.0",
     "@xyflow/react": "^12.10.0",
     "axios": "^1.13.4",
     "clsx": "^2.1.1",

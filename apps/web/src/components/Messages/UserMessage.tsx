@@ -2,10 +2,11 @@
 // Licensed under the MIT license.
 
 import { PenLine } from 'lucide-react';
-import { memo, useMemo } from 'react';
+import { memo, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/components/Common/cn';
+import { useSearchSource } from '@/hooks/useSearchSource';
 import { useGesturePreviewStore } from '@/store/gesturePreviewStore';
 
 import { QuotedCommentCard } from './QuotedCommentCard';
@@ -53,6 +54,14 @@ export const UserMessage = memo(function UserMessage({
   invokedSkills,
 }: UserMessageProps) {
   const { t } = useTranslation();
+  const contentRef = useRef<HTMLSpanElement>(null);
+  const interpretationRef = useRef<HTMLSpanElement>(null);
+  useSearchSource(contentRef, content, 'text');
+  useSearchSource(
+    interpretationRef,
+    inkInterpretation?.state === 'reported' ? inkInterpretation.text : '',
+    'text',
+  );
   const setStrokeHighlight = useGesturePreviewStore(
     (s) => s.setSketchStrokeHighlight,
   );
@@ -99,6 +108,7 @@ export const UserMessage = memo(function UserMessage({
               )}
               {inputKind === 'ink-intent' && (
                 <span
+                  ref={interpretationRef}
                   data-ink-interpretation
                   aria-description={t('messages.inkInterpretation.agent')}
                   role={
@@ -126,7 +136,11 @@ export const UserMessage = memo(function UserMessage({
                   </span>
                 ))}
               {inputKind === 'ink-intent' && content ? ' ' : null}
-              {content}
+              {content && (
+                <span ref={contentRef} data-chat-prompt-content>
+                  {content}
+                </span>
+              )}
             </div>
           </div>
         ) : null}
