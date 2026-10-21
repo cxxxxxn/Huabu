@@ -30,6 +30,7 @@ import {
   putNodeContentBodySchema,
   stripLegacyPortalTopology,
   recentCanvasConversationParamsSchema,
+  deleteNodeParamsSchema,
 } from '@huabu/shared';
 import { nodeRevisionOf } from '@huabu/shared/canvas-engine';
 import {
@@ -100,6 +101,7 @@ import {
   type UpdateNodeOutcome,
   updateNode,
 } from '../storage/index.js';
+import { acquireWorkspaceOperationLease } from '../workspace.js';
 
 import type { CanvasNodeType } from '@huabu/shared';
 import type {
@@ -108,6 +110,7 @@ import type {
   CanvasConflictResponse,
   CanvasSearchEvent,
   CreateCanvasRequest,
+  DeleteNodeParams,
   CreateCanvasResponse,
   DeleteCanvasResponse,
   DeleteNodeResponse,
@@ -716,60 +719,68 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
   // `<canvasId>/nodes/<nodeId>.md`, since that file is invisible to
   // the client's `state` payload.
   fastify.delete<{
-    Params: { canvasId: string; nodeId: string };
+    Params: DeleteNodeParams;
     Reply: ApiResult<DeleteNodeResponse>;
   }>('/:canvasId/nodes/:nodeId', async function (request, reply) {
-    const { canvasId, nodeId } = request.params;
-    return withCanvasMutex(canvasId, async () => {
+    const params = deleteNodeParamsSchema.safeParse(request.params);
+    if (!params.success)
+      return reply.code(400).send({ message: 'Invalid Canvas or node ID' });
+    const { canvasId, nodeId } = params.data;
+    const lease = acquireWorkspaceOperationLease();
+    try {
       const handle = getStructuredStore().space(canvasId);
-      const canvas = await handle.read();
-      if (!canvas) {
-        return reply.code(404).send({
-          code: 'CANVAS_NOT_FOUND',
-          message: 'Canvas not found',
-        });
-      }
-
-      try {
-        const nodes = canvas.state.nodes as NodeLike[];
-        await assertChildSpaceEntriesAllowed(
-          canvasId,
-          nodes,
-          nodes.filter((node) => node.id !== nodeId),
-        );
-      } catch (error) {
-        if (error instanceof WorldPreviewMutationError)
-          return reply.code(409).send({
-            code: 'SPACE_ENTRY_PROTECTED',
-            message: error.message,
+      return await withCanvasMutex(canvasId, async () => {
+        const canvas = await handle.read();
+        if (!canvas) {
+          return reply.code(404).send({
+            code: 'CANVAS_NOT_FOUND',
+            message: 'Canvas not found',
           });
-        throw error;
-      }
+        }
 
-      try {
-        await handle.nodes.delete(nodeId);
-      } catch (error) {
-        // CanvasStoreIOError (unlink rejected by the OS, e.g. EPERM /
-        // EACCES). Surface the failure so the client can revert its
-        // optimistic delete (or at least toast). Silently returning
-        // success here would leave structural state with no reference to
-        // the node but its `.md` orphaned on disk forever.
-        //
-        // `code` is the stable contract — the client maps it to a
-        // localised toast. `message` is the English fallback used for
-        // server logs and unknown-code situations.
-        request.log.error(
-          { canvasId, nodeId, err: toMessage(error) },
-          'Failed to delete node sidecar',
-        );
-        return reply.code(500).send({
-          code: 'NODE_FILE_DELETE_FAILED',
-          message: `Failed to delete node file for "${nodeId}"`,
-        });
-      }
+        try {
+          const nodes = canvas.state.nodes as NodeLike[];
+          await assertChildSpaceEntriesAllowed(
+            canvasId,
+            nodes,
+            nodes.filter((node) => node.id !== nodeId),
+          );
+        } catch (error) {
+          if (error instanceof WorldPreviewMutationError)
+            return reply.code(409).send({
+              code: 'SPACE_ENTRY_PROTECTED',
+              message: error.message,
+            });
+          throw error;
+        }
 
-      return reply.send({ success: true });
-    });
+        try {
+          await handle.nodes.delete(nodeId);
+        } catch (error) {
+          // CanvasStoreIOError (unlink rejected by the OS, e.g. EPERM /
+          // EACCES). Surface the failure so the client can revert its
+          // optimistic delete (or at least toast). Silently returning
+          // success here would leave structural state with no reference to
+          // the node but its `.md` orphaned on disk forever.
+          //
+          // `code` is the stable contract — the client maps it to a
+          // localised toast. `message` is the English fallback used for
+          // server logs and unknown-code situations.
+          request.log.error(
+            { canvasId, nodeId, err: toMessage(error) },
+            'Failed to delete node sidecar',
+          );
+          return reply.code(500).send({
+            code: 'NODE_FILE_DELETE_FAILED',
+            message: `Failed to delete node file for "${nodeId}"`,
+          });
+        }
+
+        return reply.send({ success: true });
+      });
+    } finally {
+      lease.release();
+    }
   });
 
   // --- Per-node content endpoints --------------------------------------

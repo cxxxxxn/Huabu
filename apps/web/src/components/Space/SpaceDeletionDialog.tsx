@@ -90,6 +90,7 @@ export function SpaceDeletionDialog({
       await useWorkspaceStore
         .getState()
         .refreshSpaceTitles(result.deletedCanvasIds);
+      if (useWorkspaceStore.getState().workspaceId !== workspaceId) return;
       onDeleted(result.deletedCanvasIds);
     } catch (cause) {
       if (useWorkspaceStore.getState().workspaceId !== workspaceId) return;

@@ -26,9 +26,9 @@ import {
   applyDeltasOnServerAlreadyLocked,
   executeOnServerAlreadyLocked,
   hydrateCanvasNodes,
+  publishCanvasExecution,
   type ExecuteOnServerOutput,
 } from './canvas-executor.js';
-import { publishCanvasUpdate } from './canvas-sync.js';
 import { hierarchyAncestors } from './space-hierarchy.js';
 import {
   buildSpaceMovePlan,
@@ -259,19 +259,6 @@ async function cloneArtifacts(
       return { ...node, data };
     }),
   );
-}
-
-function publishExecution(output: ExecuteOnServerOutput): void {
-  if (output.toVersion === output.fromVersion) return;
-  publishCanvasUpdate(output.canvasId, {
-    type: 'update',
-    data: {
-      fromVersion: output.fromVersion,
-      toVersion: output.toVersion,
-      deltas: output.deltas,
-      pendingEffects: output.pendingEffects,
-    },
-  });
 }
 
 export async function moveCanvasSelection(
@@ -602,8 +589,8 @@ async function moveCanvasSelectionUnlocked(
               await changeParent(child.canvasId, destinationCanvasId, entryId);
             }
             phase = 'publication';
-            publishExecution(destinationWrite);
-            publishExecution(sourceWrite);
+            publishCanvasExecution(destinationWrite);
+            publishCanvasExecution(sourceWrite);
             const create = plan.commands.find(
               (command) => command.type === 'CREATE_NODES',
             );

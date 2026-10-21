@@ -59,9 +59,13 @@ export interface PutCanvasResponse {
   version: number;
 }
 
-export interface DeleteNodeResponse {
-  success: boolean;
-}
+export const deleteNodeParamsSchema =
+  recentCanvasConversationParamsSchema.extend({
+    nodeId: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid node ID'),
+  });
+export type DeleteNodeParams = z.infer<typeof deleteNodeParamsSchema>;
+export const deleteNodeResponseSchema = z.object({ success: z.boolean() });
+export type DeleteNodeResponse = z.infer<typeof deleteNodeResponseSchema>;
 
 // ─── Per-node content endpoints ───────────────────────────────────────────
 

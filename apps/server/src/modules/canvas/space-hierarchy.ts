@@ -9,7 +9,11 @@ import {
   type CanvasNode,
 } from '@huabu/shared/canvas-engine';
 
-import { executeOnServerAlreadyLocked } from './canvas-executor.js';
+import {
+  executeOnServerAlreadyLocked,
+  publishCanvasExecution,
+  type ExecuteOnServerOutput,
+} from './canvas-executor.js';
 import {
   withCanvasMutexes,
   withSpaceHierarchyLock,
@@ -163,6 +167,7 @@ export async function setSpaceParent(
       [canvasId, ...(input.parentSpaceId ? [input.parentSpaceId] : [])],
       async () => {
         let entryId: CanvasNodeId | null = null;
+        let entryWrite: ExecuteOnServerOutput | undefined;
         if (input.parentSpaceId) {
           entryId = createId('node');
           const parent = await space(input.parentSpaceId).read();
@@ -193,24 +198,31 @@ export async function setSpaceParent(
               },
             ],
             originator: { source: 'system' },
+            publish: false,
           });
           if (!result.results.every((item) => item.applied))
             throw new SpaceHierarchyError(
               'SPACE_ENTRY_FAILED',
               'Could not create the child Space entry',
             );
+          entryWrite = result;
         }
-        if (
-          !(await repository.setParent({
-            canvasId,
-            parentSpaceId: input.parentSpaceId,
-            parentEntryNodeId: entryId,
-          }))
-        )
-          throw new SpaceHierarchyError(
-            'SPACE_PARENT_FAILED',
-            'Could not save Space parent',
-          );
+        try {
+          if (
+            !(await repository.setParent({
+              canvasId,
+              parentSpaceId: input.parentSpaceId,
+              parentEntryNodeId: entryId,
+            }))
+          )
+            throw new SpaceHierarchyError(
+              'SPACE_PARENT_FAILED',
+              'Could not save Space parent',
+            );
+        } finally {
+          // A failed attachment retains the card; publish only after ownership settles.
+          if (entryWrite) publishCanvasExecution(entryWrite);
+        }
         return {
           canvasId,
           parentSpaceId: input.parentSpaceId,

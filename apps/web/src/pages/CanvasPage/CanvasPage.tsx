@@ -202,10 +202,22 @@ export default function CanvasPage() {
       !('workspaceId' in state) ||
       state.workspaceId !== workspaceId ||
       storeCanvasId !== canvasId ||
-      isLoading ||
-      !rfInstance
+      isLoading
     )
       return;
+    const consumeIntent = () => {
+      const remainingState = { ...state };
+      delete remainingState.focusNodeIds;
+      navigate(`${location.pathname}${location.search}${location.hash}`, {
+        replace: true,
+        state: remainingState,
+      });
+    };
+    if (isPreviewFullscreen) {
+      consumeIntent();
+      return;
+    }
+    if (!rfInstance) return;
     const frame = requestAnimationFrame(() => {
       const canvas = useStore.getState();
       if (canvas.canvasId !== canvasId) return;
@@ -218,17 +230,13 @@ export default function CanvasPage() {
       } else {
         toast(t('canvasPage.nodeTargetUnavailable'), { tone: 'warning' });
       }
-      const remainingState = { ...state };
-      delete remainingState.focusNodeIds;
-      navigate(`${location.pathname}${location.search}${location.hash}`, {
-        replace: true,
-        state: remainingState,
-      });
+      consumeIntent();
     });
     return () => cancelAnimationFrame(frame);
   }, [
     canvasId,
     isLoading,
+    isPreviewFullscreen,
     location,
     navigate,
     rfInstance,

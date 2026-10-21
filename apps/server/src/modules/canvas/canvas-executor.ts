@@ -682,6 +682,20 @@ export class CanvasNotFoundError extends Error {
   }
 }
 
+/** Publish a system lifecycle batch after its related metadata has settled. */
+export function publishCanvasExecution(output: ExecuteOnServerOutput): void {
+  if (output.toVersion === output.fromVersion) return;
+  publishCanvasUpdate(output.canvasId, {
+    type: 'update',
+    data: {
+      fromVersion: output.fromVersion,
+      toVersion: output.toVersion,
+      deltas: output.deltas,
+      pendingEffects: output.pendingEffects,
+    },
+  });
+}
+
 /**
  * Execute a batch of canvas commands against `canvasId`'s authoritative
  * state. Atomic per-canvas (mutex-guarded). On success the canvas

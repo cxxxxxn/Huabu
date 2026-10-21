@@ -294,6 +294,73 @@ describe('Mixed selection Space migration', () => {
 });
 
 describe('Space ownership', () => {
+  it.each(['success', 'refused', 'failed', 'failed-after-commit'])(
+    'publishes the retained entry only after parent persistence settles (%s)',
+    async (outcome) => {
+      await storage.createSpace('child', 'Child');
+      const repository = storage.getStructuredStore().spaces();
+      const original = repository.setParent.bind(repository);
+      let entered!: () => void;
+      let release!: () => void;
+      const waiting = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      vi.spyOn(
+        Object.getPrototypeOf(repository) as typeof repository,
+        'setParent',
+      ).mockImplementationOnce(async (input) => {
+        entered();
+        await gate;
+        if (outcome === 'refused') return false;
+        if (outcome === 'failed') throw new Error('Parent write failed');
+        const result = await original(input);
+        if (outcome === 'failed-after-commit')
+          throw new Error('Parent outcome uncertain');
+        return result;
+      });
+      const publish = vi.spyOn(canvasSync, 'publishCanvasUpdate');
+      const snapshots: Array<Promise<storage.CanvasFile | null>> = [];
+      const unsubscribe = canvasSync.subscribeCanvasUpdates('root', () => {
+        snapshots.push(storage.space('child').read());
+      });
+      const pending = setSpaceParent('child', {
+        parentSpaceId: 'root',
+        expectedParentSpaceId: null,
+      }).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      try {
+        await waiting;
+        expect(publish).not.toHaveBeenCalled();
+        expect(
+          (await storage.space('child').read())?.parentSpaceId ?? null,
+        ).toBeNull();
+        release();
+        const error = await pending;
+        if (outcome === 'success') expect(error).toBeNull();
+        else expect(error).toBeInstanceOf(Error);
+        expect(publish).toHaveBeenCalledOnce();
+        const [snapshot] = await Promise.all(snapshots);
+        expect(snapshot?.parentSpaceId ?? null).toBe(
+          outcome === 'success' || outcome === 'failed-after-commit'
+            ? 'root'
+            : null,
+        );
+        expect((await storage.space('root').read())?.state.nodes).toHaveLength(
+          1,
+        );
+      } finally {
+        release();
+        await pending;
+        unsubscribe();
+      }
+    },
+  );
+
   it.each(['commands', 'deltas', 'structure', 'sidecar'])(
     'allows malformed dangling shortcut cleanup through %s',
     async (path) => {

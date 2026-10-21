@@ -34,7 +34,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 let host: HTMLDivElement;
 let root: Root;
 const onDeleted = vi.fn();
-const refresh = vi.fn(async () => undefined);
+const refresh = vi.fn(async (): Promise<void> => undefined);
 const originalRefresh = useWorkspaceStore.getState().refreshSpaceTitles;
 
 beforeEach(async () => {
@@ -130,4 +130,33 @@ it('does not reconcile malformed or unconfirmed deletion IDs', async () => {
   expect(document.querySelector('[role="alert"]')?.textContent).toContain(
     'Cleanup failed',
   );
+});
+
+it('does not call the old deletion callback after switching Workspace during refresh', async () => {
+  vi.mocked(deleteSpaceTree).mockResolvedValue({
+    deletedCanvasIds: ['parent'],
+  });
+  let finishRefresh!: () => void;
+  refresh.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finishRefresh = resolve;
+      }),
+  );
+  await remove();
+  expect(refresh).toHaveBeenCalledOnce();
+  expect(onDeleted).not.toHaveBeenCalled();
+  await act(async () => {
+    useWorkspaceStore.setState({ workspaceId: 'another-workspace' });
+    finishRefresh();
+  });
+  expect(onDeleted).not.toHaveBeenCalled();
+});
+
+it('notifies the parent after refresh when the Workspace is unchanged', async () => {
+  vi.mocked(deleteSpaceTree).mockResolvedValue({
+    deletedCanvasIds: ['parent'],
+  });
+  await remove();
+  expect(onDeleted).toHaveBeenCalledExactlyOnceWith(['parent']);
 });

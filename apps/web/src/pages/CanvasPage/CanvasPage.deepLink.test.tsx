@@ -289,6 +289,34 @@ describe('CanvasPage node deep-link navigation', () => {
     expect(mocks.refreshSpaceTitles).toHaveBeenCalledTimes(3);
   });
 
+  it('consumes destination focus in fullscreen without selecting, fitting, or replaying it on exit', async () => {
+    usePanelStore.setState({ isPreviewFullscreen: true });
+    const { router, selectNodes } = await renderAt(
+      `/canvas/${CANVAS_ID}`,
+      node('note'),
+      null,
+      {
+        focusNodeIds: ['node-1'],
+        returnToSpace: 'source',
+        workspaceId: undefined,
+      },
+    );
+    expect(usePanelStore.getState().isPreviewFullscreen).toBe(true);
+    expect(router.state.location.state).toEqual({
+      returnToSpace: 'source',
+      workspaceId: undefined,
+    });
+    expect(useCanvasStore.getState().nodes[0].id).toBe('node-1');
+    expect(selectNodes).not.toHaveBeenCalled();
+    await act(async () => {
+      usePanelStore.setState({ isPreviewFullscreen: false });
+      useCanvasStore.setState({ rfInstance: {} as never });
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(selectNodes).not.toHaveBeenCalled();
+    expect(mocks.fitNodesOnCanvas).not.toHaveBeenCalled();
+  });
+
   it('selects, focuses, and permanently opens a hydrated preview once', async () => {
     const { selectNodes } = await renderAt(
       `/canvas/${CANVAS_ID}?node=node-1`,

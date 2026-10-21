@@ -41,7 +41,13 @@ Structural saves merge omitted node identity fields with the current server reco
 
 Before local destructive command effects, the client requires settled ownership metadata for affected Space cards, including descendants of deleted Frames. Unknown ownership blocks the change, starts a metadata refresh, and asks the user to retry; it never permits partial sidecar deletion. Received Space-card insertions invalidate/refetch metadata before exposing the new nodes. Undo and redo validate restored identities before consuming history or scheduling sidecar effects: a snapshot that would remove or retarget a live child entry is refused with an explicit lifecycle-action message, while geometry undo/redo remains available.
 
+Child creation and reparenting defer entry-insertion publication until the parent metadata write settles, using the same deferred executor publication as Space Move. A failed parent write still publishes the retained card after settling, so clients refresh against the resulting authoritative ownership rather than caching the pre-write parent. The operation continues to report failure; publication does not turn an incomplete attachment into success.
+
+The move-success Open destination action keeps fullscreen Preview active. In fullscreen mode it consumes the one-shot destination focus intent without selecting nodes or fitting the Canvas viewport; it does not replay that intent on leaving fullscreen. Destination data loading, realtime synchronization, and the Layers panel continue normally.
+
 Partial subtree deletion failures reconcile the server-confirmed deleted IDs from the shared error-details contract against the confirmed preview. Deleted Preview persistence is removed, affected lists refresh, and a deleted current Space navigates to Home. The failure remains visible in a toast and, where still mounted, the dialog; a deleted root does not offer a retry that can only return 404. Partial completion is never reported as full success.
+
+Successful deletion rechecks the captured Workspace after awaiting the metadata refresh, before invoking navigation callbacks. An old dialog's asynchronous completion cannot navigate a newly active Workspace.
 
 Hierarchy operations share a process-local serialization queue and hold a Workspace-operation lease. Canvas mutexes guard entry creation and deletion alongside content writes, and the existing per-Space storage deletion fence protects cleanup. This is not a distributed transaction or crash-atomic multi-Space mutation; failed child attachment retains the created Space and reports its identity, and a refresh resolves uncertain ownership writes. No directory relocation or automatic Prompt/Memory inheritance follows ownership.
 
