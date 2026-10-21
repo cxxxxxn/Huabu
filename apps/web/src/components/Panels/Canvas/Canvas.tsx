@@ -276,6 +276,7 @@ const CanvasGestures: React.FC<{
   rfInstanceRef: React.MutableRefObject<ReactFlowInstance | null>;
   inputMode: 'mouse' | 'pen' | 'finger';
   explicitToolActive: boolean;
+  inkToolActive: boolean;
   mouseMarqueeEnabled: boolean;
   canvasId: string | null;
   onMarqueeActiveChange: (active: boolean) => void;
@@ -291,6 +292,7 @@ const CanvasGestures: React.FC<{
   rfInstanceRef,
   inputMode,
   explicitToolActive,
+  inkToolActive,
   mouseMarqueeEnabled,
   canvasId,
   onMarqueeActiveChange,
@@ -317,6 +319,7 @@ const CanvasGestures: React.FC<{
     {
       inputMode,
       explicitToolActive,
+      inkToolActive,
       onTouchTakeover: () => {
         marquee.cancel();
         onTouchTakeover();
@@ -1445,6 +1448,10 @@ const CanvasContent: React.FC<CanvasProps> = ({
             rfInstanceRef={rfInstanceRef}
             inputMode={inputMode}
             explicitToolActive={tool === 'lasso' || Boolean(pendingNodeType)}
+            inkToolActive={
+              pendingNodeType === 'sketch' ||
+              (!pendingNodeType && tool === 'lasso')
+            }
             mouseMarqueeEnabled={mouseMarqueeEnabled}
             canvasId={canvasId}
             onMarqueeActiveChange={setIsMouseMarqueeSelecting}

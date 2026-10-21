@@ -27,6 +27,8 @@ Inline text and background colors persist as HTML spans with `data-huabu-text-co
 
 ## 3. Lifecycle
 
+In Pen input mode, finger reading is also available while Pen, Eraser, or Lasso is active. Switching among these tools and Select preserves the reading state and scroll offset; the active tool still owns pen-tip input. This is limited to the existing fixed-height, overflowing Note document reading cycle, not inline Text editing or other embedded readers.
+
 The shared NoteContentViewport keeps its `h-full` constraint in both scrollbar modes. Native scrollbar visibility adds the separate `huabu-scrollbar` class through the shared class-name helper; it never replaces or concatenates with the height token.
 
 **Creation** — notes have no creation path of their own. They go through the generic `ADD_NODES` UI intent, which resolves to a `CREATE_NODES` command; paste, canvas drop and agent-issued creation all funnel through it. See [canvas-command-architecture.md](./canvas-command-architecture.md).
