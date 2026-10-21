@@ -47,6 +47,10 @@ Child creation and reparenting defer entry-insertion publication until the paren
 
 The move-success Open destination action keeps fullscreen Preview active. In fullscreen mode it consumes the one-shot destination focus intent without selecting nodes or fitting the Canvas viewport; it does not replay that intent on leaving fullscreen. Destination data loading, realtime synchronization, and the Layers panel continue normally.
 
+Move-success toasts belong to the source Space page: navigating Home, entering another Space, or switching Workspace dismisses them and invalidates late success feedback from in-flight moves. Closing the move popover or entering fullscreen Preview does not dismiss them. Failure toasts remain visible across navigation. The destination action records the captured source Space, never a stale store value from a different route.
+
+Area-selection preview and cancellation apply current World hierarchy visibility before selecting nodes or edges. Restoring the pre-gesture selection cannot reselect a now-hidden child entry or any edge whose endpoint is no longer visible.
+
 Partial subtree deletion failures reconcile the server-confirmed deleted IDs from the shared error-details contract against the confirmed preview. Deleted Preview persistence is removed, affected lists refresh, and a deleted current Space navigates to Home. The failure remains visible in a toast and, where still mounted, the dialog; a deleted root does not offer a retry that can only return 404. Partial completion is never reported as full success.
 
 Successful deletion rechecks the captured Workspace after awaiting the metadata refresh, before invoking navigation callbacks. An old dialog's asynchronous completion cannot navigate a newly active Workspace.

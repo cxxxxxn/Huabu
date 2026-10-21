@@ -7,7 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from '@/api/_client';
 import { dismissToast, toast, ToastContainer } from '@/components/Common/Toast';
-import { moveNodesToSpace } from '@/components/Space/moveNodesToSpace';
+import {
+  dismissMoveSuccessToasts,
+  moveNodesToSpace,
+} from '@/components/Space/moveNodesToSpace';
 import en from '@/i18n/resources/en/common.json';
 import zhCN from '@/i18n/resources/zh-CN/common.json';
 import useCanvasStore from '@/store/canvasStore';
@@ -125,6 +128,7 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => root?.unmount());
+  dismissMoveSuccessToasts();
   for (const result of vi.mocked(toast).mock.results) {
     if (result.type === 'return') dismissToast(result.value);
   }
@@ -205,6 +209,66 @@ function expectSafeFailure(key: string, rawCode?: string) {
 }
 
 describe('MoveSelectionPopover', () => {
+  it('dismisses source-page success feedback without dismissing errors or allowing stale actions', async () => {
+    useCanvasStore.setState({ canvasId: 'source', version: 3 });
+    listCanvases.mockResolvedValue({ canvases: [] });
+    moveCanvasSelection.mockResolvedValue(moveResult);
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root?.render(<ToastContainer />);
+      await moveNodesToSpace(
+        'source',
+        ['node-selected'],
+        { kind: 'existing', canvasId: 'destination' },
+        navigate,
+      );
+      toast('Keep this error', { tone: 'danger', duration: 0 });
+    });
+    const action = vi
+      .mocked(toast)
+      .mock.calls.find(([, opts]) => opts?.tone === 'success')?.[1]?.action;
+    expect(action).toBeDefined();
+    expect(document.body.textContent).toContain(
+      'moveSelection.openDestination',
+    );
+    act(() => dismissMoveSuccessToasts());
+    expect(useCanvasStore.getState().canvasId).toBe('source');
+    expect(document.body.textContent).not.toContain(
+      'moveSelection.openDestination',
+    );
+    expect(document.body.textContent).toContain('Keep this error');
+    act(() => action?.onClick());
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('does not show late success feedback after leaving the source even when its store ID remains', async () => {
+    useCanvasStore.setState({ canvasId: 'source', version: 3 });
+    listCanvases.mockResolvedValue({ canvases: [] });
+    let finish!: (value: typeof moveResult) => void;
+    moveCanvasSelection.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const pending = moveNodesToSpace(
+      'source',
+      ['node-selected'],
+      { kind: 'existing', canvasId: 'destination' },
+      navigate,
+    );
+    await vi.waitFor(() => expect(moveCanvasSelection).toHaveBeenCalledOnce());
+    dismissMoveSuccessToasts();
+    finish(moveResult);
+    expect(await pending).toBe(true);
+    expect(useCanvasStore.getState().canvasId).toBe('source');
+    expect(toast).not.toHaveBeenCalled();
+    expect(useWorkspaceStore.getState().spaceTitles.destination).toBe(
+      'Server destination title',
+    );
+  });
+
   it('uses the same migration path for child collection and ignores duplicate requests', async () => {
     useCanvasStore.setState({ canvasId: 'source', version: 3 });
     listCanvases.mockResolvedValue({ canvases: [] });

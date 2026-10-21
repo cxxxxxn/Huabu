@@ -27,6 +27,8 @@ const mocks = vi.hoisted(() => ({
   requestChatOpen: vi.fn(),
   connect: vi.fn(),
   disconnect: vi.fn(),
+  dismissMoveSuccessToasts: vi.fn(),
+  workspaceId: undefined as string | undefined,
   refreshSpaceTitles: vi.fn(async () => undefined),
   worldCanvasId: null as string | null,
   spaceSummaries: {} as Record<string, Pick<CanvasSummary, 'parentSpaceId'>>,
@@ -40,6 +42,10 @@ vi.mock('../../components/Common/Loading', () => ({
   Loading: () => <div>loading</div>,
 }));
 vi.mock('../../components/Common/Toast', () => ({ toast: mocks.toast }));
+vi.mock('../../components/Space/moveNodesToSpace', () => ({
+  dismissMoveSuccessToasts: mocks.dismissMoveSuccessToasts,
+  moveNodesToSpace: vi.fn(),
+}));
 vi.mock('../../components/Nodes/previews', () => ({
   hasNodePreview: (type: string) => type === 'note',
 }));
@@ -91,12 +97,14 @@ vi.mock('../../store/toolStore', () => ({
 vi.mock('../../store/workspaceStore', () => ({
   useWorkspaceStore: (
     selector: (state: {
+      workspaceId: string | undefined;
       worldCanvasId: string | null;
       spaceSummaries: typeof mocks.spaceSummaries;
       refreshSpaceTitles: () => Promise<void>;
     }) => unknown,
   ) =>
     selector({
+      workspaceId: mocks.workspaceId,
       worldCanvasId: mocks.worldCanvasId,
       spaceSummaries: mocks.spaceSummaries,
       refreshSpaceTitles: mocks.refreshSpaceTitles,
@@ -133,6 +141,7 @@ async function renderAt(
     canvasWrapper: document.createElement('div'),
     selectNodes,
     loadCanvas,
+    switchCanvas: vi.fn(async () => undefined),
   });
   usePreviewWorkspaceStore.setState({
     canvasId: CANVAS_ID,
@@ -141,7 +150,10 @@ async function renderAt(
   });
 
   const router = createMemoryRouter(
-    [{ path: '/canvas/:canvasId', element: <CanvasPage /> }],
+    [
+      { path: '/canvas/:canvasId', element: <CanvasPage /> },
+      { path: '/spaces', element: <div>Home</div> },
+    ],
     {
       initialEntries: [
         {
@@ -168,6 +180,8 @@ beforeEach(() => {
   mocks.refreshSpaceTitles.mockClear();
   mocks.worldCanvasId = null;
   mocks.spaceSummaries = {};
+  mocks.workspaceId = undefined;
+  mocks.dismissMoveSuccessToasts.mockClear();
   usePanelStore.setState({ isPreviewFullscreen: false });
 });
 
@@ -189,6 +203,31 @@ afterEach(() => {
 });
 
 describe('CanvasPage node deep-link navigation', () => {
+  it.each(['/spaces', '/canvas/other'])(
+    'dismisses move feedback when navigating to %s despite the stale canvas store',
+    async (destination) => {
+      const { router } = await renderAt(`/canvas/${CANVAS_ID}`, node('note'));
+      mocks.dismissMoveSuccessToasts.mockClear();
+      await act(async () => {
+        await router.navigate(destination);
+      });
+      expect(mocks.dismissMoveSuccessToasts).toHaveBeenCalledOnce();
+      expect(useCanvasStore.getState().canvasId).toBe(CANVAS_ID);
+    },
+  );
+
+  it('keeps move feedback through fullscreen and clears it on Workspace change', async () => {
+    const { router } = await renderAt(`/canvas/${CANVAS_ID}`, node('note'));
+    mocks.dismissMoveSuccessToasts.mockClear();
+    act(() => usePanelStore.setState({ isPreviewFullscreen: true }));
+    expect(mocks.dismissMoveSuccessToasts).not.toHaveBeenCalled();
+    mocks.workspaceId = 'other-workspace';
+    await act(async () => {
+      await router.navigate(`/canvas/${CANVAS_ID}?refresh=1`);
+    });
+    expect(mocks.dismissMoveSuccessToasts).toHaveBeenCalledOnce();
+  });
+
   it('cleans loaded World selections when metadata was ready before the nodes', async () => {
     mocks.worldCanvasId = CANVAS_ID;
     mocks.spaceSummaries = { child: { parentSpaceId: 'parent' } };

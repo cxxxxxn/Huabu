@@ -12,8 +12,35 @@ import type { SelectionArea } from '@/utils/selectionGeometry';
 
 function applySelection(nodeIds: string[], edgeIds: string[]) {
   const state = useCanvasStore.getState();
-  const nodes = new Set(nodeIds);
-  const edges = new Set(edgeIds);
+  const workspace = useWorkspaceStore.getState();
+  const visible = new Set(
+    state.nodes
+      .filter(
+        (node) =>
+          !node.hidden &&
+          isVisibleWorldNode(
+            node,
+            state.canvasId,
+            workspace.worldCanvasId,
+            workspace.spaceSummaries,
+          ),
+      )
+      .map((node) => node.id),
+  );
+  const nodes = new Set(nodeIds.filter((id) => visible.has(id)));
+  const requestedEdges = new Set(edgeIds);
+  const edges = new Set(
+    state.edges
+      .filter(
+        (edge) =>
+          requestedEdges.has(edge.id) &&
+          !edge.hidden &&
+          edge.selectable !== false &&
+          visible.has(edge.source) &&
+          visible.has(edge.target),
+      )
+      .map((edge) => edge.id),
+  );
   state.onNodesChange(
     state.nodes.flatMap((node) =>
       Boolean(node.selected) === nodes.has(node.id)

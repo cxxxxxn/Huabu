@@ -3,7 +3,7 @@
 
 import { ApiError } from '@/api/_client';
 import { moveCanvasSelection } from '@/api/canvas';
-import { toast } from '@/components/Common/Toast';
+import { dismissToast, toast } from '@/components/Common/Toast';
 import { i18n } from '@/i18n';
 import useCanvasStore, { drainPendingSaves } from '@/store/canvasStore';
 import { useWorkspaceStore } from '@/store/workspaceStore';
@@ -36,6 +36,15 @@ const MOVE_ERROR_MESSAGES = {
 } as const satisfies Record<MoveSelectionErrorCode, string>;
 
 const pendingSources = new Set<string>();
+const successToastIds = new Set<string>();
+let feedbackGeneration = 0;
+
+/** Leaving the source page also invalidates feedback from in-flight moves. */
+export function dismissMoveSuccessToasts() {
+  feedbackGeneration++;
+  for (const id of successToastIds) dismissToast(id);
+  successToastIds.clear();
+}
 
 export async function moveNodesToSpace(
   canvasId: string,
@@ -46,10 +55,12 @@ export async function moveNodesToSpace(
   if (pendingSources.has(canvasId)) return false;
   pendingSources.add(canvasId);
   const workspaceId = useWorkspaceStore.getState().workspaceId;
+  const generation = feedbackGeneration;
   let moveRequested = false;
   try {
     await drainPendingSaves();
     if (
+      generation !== feedbackGeneration ||
       useCanvasStore.getState().canvasId !== canvasId ||
       useWorkspaceStore.getState().workspaceId !== workspaceId
     ) {
@@ -74,8 +85,12 @@ export async function moveNodesToSpace(
     void useWorkspaceStore
       .getState()
       .refreshSpaceTitles([canvasId, result.destination.canvasId]);
-    if (useCanvasStore.getState().canvasId !== canvasId) return true;
-    toast(
+    if (
+      generation !== feedbackGeneration ||
+      useCanvasStore.getState().canvasId !== canvasId
+    )
+      return true;
+    const toastId = toast(
       i18n.t('moveSelection.success', {
         count: result.movedNodeCount,
         conversations: result.movedConversationCount,
@@ -86,6 +101,7 @@ export async function moveNodesToSpace(
         action: {
           label: i18n.t('moveSelection.openDestination'),
           onClick: () => {
+            if (generation !== feedbackGeneration) return;
             if (useWorkspaceStore.getState().workspaceId !== workspaceId) {
               toast(i18n.t('spaceHierarchy.workspaceChanged'), {
                 tone: 'warning',
@@ -96,7 +112,7 @@ export async function moveNodesToSpace(
               `/canvas/${encodeURIComponent(result.destination.canvasId)}`,
               {
                 state: {
-                  returnToSpace: useCanvasStore.getState().canvasId,
+                  returnToSpace: canvasId,
                   workspaceId,
                   focusNodeIds: result.roots.map(
                     (root) => root.destinationNodeId,
@@ -108,6 +124,7 @@ export async function moveNodesToSpace(
         },
       },
     );
+    successToastIds.add(toastId);
     return true;
   } catch (error) {
     const code =

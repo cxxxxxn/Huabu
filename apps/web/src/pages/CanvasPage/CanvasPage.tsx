@@ -2,10 +2,11 @@
 // Licensed under the MIT license.
 
 import { ArrowLeft } from 'lucide-react';
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
 
+import { dismissMoveSuccessToasts } from '@/components/Space/moveNodesToSpace';
 import { SpaceActions } from '@/components/Space/SpaceActions';
 import { CenterArea } from '@/pages/CanvasPage/CenterArea.tsx';
 import { MainLayout } from '@/pages/CanvasPage/MainLayout.tsx';
@@ -91,6 +92,7 @@ export default function CanvasPage() {
   const canvasNotFound = useStore((s) => s.canvasNotFound);
   const refreshSpaceTitles = useWorkspaceStore((s) => s.refreshSpaceTitles);
   const workspaceId = useWorkspaceStore((s) => s.workspaceId);
+  useLayoutEffect(() => dismissMoveSuccessToasts, [canvasId, workspaceId]);
   const worldId = useWorkspaceStore((s) => s.worldCanvasId);
   const spaceSummaries = useWorkspaceStore((s) => s.spaceSummaries);
   const nodeCount = useStore((s) => s.nodes.length);
