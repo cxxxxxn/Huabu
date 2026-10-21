@@ -33,6 +33,7 @@ export * from './skills.js';
 export * from './rfs.js';
 export * from './space-operations.js';
 export * from './space-preview.js';
+export * from './space-card.js';
 export * from './space-move.js';
 export * from './space-hierarchy.js';
 export * from './agent-profile.js';

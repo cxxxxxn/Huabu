@@ -56,6 +56,7 @@ import {
 } from './canvas-executor.js';
 import { searchCanvas } from './canvas-search.js';
 import { publishCanvasUpdate } from './canvas-sync.js';
+import { registerSpaceCardRoutes } from './space-card.route.js';
 import {
   deletionPreview,
   deleteSpaceTree,
@@ -596,6 +597,7 @@ async function hydrateNodeContent(
 
 const canvasRoutes: FastifyPluginAsync = async (fastify) => {
   registerSpaceHierarchyRoutes(fastify);
+  registerSpaceCardRoutes(fastify);
   fastify.get<{
     Params: RecentCanvasConversationParams;
     Reply: ApiResult<RecentCanvasConversationResponse>;

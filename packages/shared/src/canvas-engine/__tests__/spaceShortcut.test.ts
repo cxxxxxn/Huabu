@@ -22,6 +22,34 @@ const legacy: CanvasNode = {
 };
 
 describe('Space Shortcut geometry', () => {
+  it.each([0.1, 0.5, 1.5, 2])(
+    'preserves authored content scale %s on creation and reload',
+    (scale) => {
+      const result = executeCanvasCommands(
+        {
+          commands: [
+            {
+              type: 'CREATE_NODES',
+              nodes: [
+                {
+                  id,
+                  nodeType: 'spacePreview',
+                  position: legacy.position,
+                  data: { ...legacy.data, style: { fontSize: 24 * scale } },
+                  size: { width: 360 * scale, height: 800 },
+                },
+              ],
+            },
+          ],
+        },
+        { canvasId: 'host', nodes: [], edges: [] },
+      );
+      const node = normalizeSpaceShortcut(result.writeResult.nodes[0]);
+      expect(node.style?.width).toBe(360 * scale);
+      expect(node.style?.height).toBeUndefined();
+      expect(node.data.style).toEqual({ fontSize: 24 * scale });
+    },
+  );
   it.each([undefined, 1200])(
     'creates a shortcut with width %s without pinning a nominal height',
     (width) => {

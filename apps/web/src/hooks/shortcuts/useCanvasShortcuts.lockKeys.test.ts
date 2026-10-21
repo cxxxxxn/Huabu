@@ -207,6 +207,17 @@ describe('useCanvasShortcuts catalog key lock', () => {
       enter();
       expect(open).toHaveBeenCalledTimes(1);
       expect(open.mock.calls[0][0].detail).toEqual({ nodeId: 'shortcut' });
+      const button = document.createElement('button');
+      container.appendChild(button);
+      const event = new KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => button.dispatchEvent(event));
+      expect(event.defaultPrevented).toBe(false);
+      expect(open).toHaveBeenCalledTimes(1);
+      button.remove();
       act(() =>
         window.dispatchEvent(
           new KeyboardEvent('keydown', { key: 'Delete', cancelable: true }),

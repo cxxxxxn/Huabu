@@ -43,7 +43,7 @@ import { requestCreateChildSpace } from '@/components/Space/createChildSpaceActi
 import { NODE_ICON } from '@/config/nodeIcons';
 import { nodeToolbarOffset } from '@/config/nodeInteractionChrome';
 import { formatShortcutById } from '@/config/shortcuts';
-import { QUESTION_CARD_SCALE_RANGE } from '@/handler/canvasCommand/resolvers/resolveSetQuestionCardScale';
+import { CARD_SCALE_RANGE } from '@/handler/canvasCommand/resolvers/resolveSetCardScale';
 import { resolveUiIntent } from '@/handler/canvasCommand/uiIntent';
 import { handleCanvasNavigationKey } from '@/hooks/shortcuts/handleCanvasNavigationKey';
 import { handleCanvasFocusEscape } from '@/hooks/useCanvasFocusEscape';
@@ -352,18 +352,17 @@ export const NodeFloatingToolbar = memo(
     // controls.
     const dispatchUiIntent = useCanvasStore((s) => s.dispatchUiIntent);
     const authoredFont = data.style?.fontSize;
-    const questionFont =
+    const cardFont =
       typeof authoredFont === 'number' &&
       Number.isFinite(authoredFont) &&
       authoredFont > 0
         ? authoredFont
         : QUESTION_NODE_DEFAULT_FONT_SIZE;
-    const questionScale =
-      (questionFont / QUESTION_NODE_DEFAULT_FONT_SIZE) * 100;
-    const applyQuestionScale = (percent: number) => {
+    const cardScale = (cardFont / QUESTION_NODE_DEFAULT_FONT_SIZE) * 100;
+    const applyCardScale = (percent: number) => {
       const state = useCanvasStore.getState();
       const intent = {
-        type: 'SET_QUESTION_CARD_SCALE' as const,
+        type: 'SET_CARD_SCALE' as const,
         nodeId: id,
         percent,
       };
@@ -422,7 +421,7 @@ export const NodeFloatingToolbar = memo(
         <div className="bg-edge-default mx-0.5 h-4 w-px" />
 
         {/* ── Group 2: Style — color + size ── */}
-        {type !== 'question' && type !== 'sketch' && (
+        {type !== 'sketch' && (
           <FloatingToolbar.ColorPicker
             floating
             triggerClassName="node-toolbar-color"
@@ -470,7 +469,9 @@ export const NodeFloatingToolbar = memo(
             height={isTextFlowNode ? null : currentHeight}
             showHeight={!isTextFlowNode}
             minSize={
-              type === 'spacePreview' ? SPACE_SHORTCUT_SIZE.minWidth : undefined
+              type === 'spacePreview'
+                ? (SPACE_SHORTCUT_SIZE.minWidth * cardScale) / 100
+                : undefined
             }
             onApply={({ width, height }) => {
               if (!internalNode) return;
@@ -523,22 +524,22 @@ export const NodeFloatingToolbar = memo(
                 : undefined
             }
           />
-          {type === 'question' && (
+          {(type === 'question' || type === 'spacePreview') && (
             <FloatingToolbar.NumberInput
               label={t('toolbar.cardScale')}
               ariaLabel={t('toolbar.cardScale')}
               title={t('toolbar.cardScale')}
-              name="question-card-scale"
-              value={questionScale}
-              min={QUESTION_CARD_SCALE_RANGE.min}
-              max={QUESTION_CARD_SCALE_RANGE.max}
+              name="node-card-scale"
+              value={cardScale}
+              min={CARD_SCALE_RANGE.min}
+              max={CARD_SCALE_RANGE.max}
               inputClassName="w-9"
               endAdornment={
                 <span aria-hidden="true" className="text-fg-subtle text-xs">
                   %
                 </span>
               }
-              onApply={applyQuestionScale}
+              onApply={applyCardScale}
             />
           )}
         </DropdownMenu>

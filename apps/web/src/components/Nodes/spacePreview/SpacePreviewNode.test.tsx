@@ -6,12 +6,24 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SpacePreviewNode } from './SpacePreviewNode';
-import { OPEN_SPACE_SHORTCUT_EVENT } from './spaceShortcutEvents';
+import {
+  OPEN_SPACE_SHORTCUT_EVENT,
+  RENAME_SPACE_SHORTCUT_EVENT,
+} from './spaceShortcutEvents';
 
+import type { SpaceAgentActivity } from '@huabu/shared';
 import type { Node } from '@xyflow/react';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
+  rename: vi.fn(),
+  setSpaceTitle: vi.fn(),
+  refreshTitles: vi.fn(),
+  activity: {
+    status: 'ready',
+    activity: [] as SpaceAgentActivity,
+    updatedAt: 0,
+  },
   spaceSummaries: {} as Record<
     string,
     { parentSpaceId: string; parentEntryNodeId: string }
@@ -31,11 +43,28 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
 }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
 vi.mock('./useSpaceShortcutTarget', () => ({
   useSpaceShortcutTarget: () => mocks.target,
+}));
+vi.mock('@/api/spaceCard', () => ({ renameSpace: mocks.rename }));
+vi.mock('@/store/acpProfilesStore', () => ({
+  useAcpProfilesStore: (
+    selector: (state: { profiles: never[]; init: () => void }) => unknown,
+  ) => selector({ profiles: [], init: vi.fn() }),
+}));
+vi.mock('./useSpaceCardActivity', () => ({
+  useSpaceCardActivity: () => mocks.activity,
+  refreshSpaceCardActivity: vi.fn(),
+}));
+vi.mock('./useSpaceAgentFit', () => ({
+  useSpaceAgentFit: () => ({
+    rowRef: { current: null },
+    probesRef: { current: null },
+    visibleCount: 2,
+  }),
 }));
 vi.mock('@/store/canvasStore', () => ({
   default: Object.assign(
@@ -44,18 +73,28 @@ vi.mock('@/store/canvasStore', () => ({
   ),
 }));
 vi.mock('@/store/workspaceStore', () => ({
-  useWorkspaceStore: (
-    selector: (state: {
-      spaceSummaries: typeof mocks.spaceSummaries;
-      workspaceId: string;
-      worldCanvasId: string;
-    }) => unknown,
-  ) =>
-    selector({
-      spaceSummaries: mocks.spaceSummaries,
-      workspaceId: 'workspace',
-      worldCanvasId: 'world',
-    }),
+  useWorkspaceStore: Object.assign(
+    (
+      selector: (state: {
+        spaceSummaries: typeof mocks.spaceSummaries;
+        workspaceId: string;
+        worldCanvasId: string;
+      }) => unknown,
+    ) =>
+      selector({
+        spaceSummaries: mocks.spaceSummaries,
+        workspaceId: 'workspace',
+        worldCanvasId: 'world',
+      }),
+    {
+      getState: () => ({
+        workspaceId: 'workspace',
+        spaceTitles: { target: mocks.target.title },
+        setSpaceTitle: mocks.setSpaceTitle,
+        refreshSpaceTitles: mocks.refreshTitles,
+      }),
+    },
+  ),
 }));
 vi.mock('@xyflow/react', () => ({
   useStore: (selector: (state: { nodeLookup: Map<string, Node> }) => unknown) =>
@@ -96,6 +135,12 @@ beforeEach(() => {
   mocks.target.updatedAt = undefined;
   mocks.target.status = 'ready';
   mocks.target.error = null;
+  mocks.rename.mockResolvedValue({ title: 'Renamed', updatedAt: 1 });
+  mocks.activity = {
+    status: 'ready',
+    activity: [],
+    updatedAt: 0,
+  };
   mocks.state.nodes = [
     {
       id: 'shortcut',
@@ -160,6 +205,20 @@ function open() {
   );
 }
 
+function editTitle(value: string) {
+  const input = host.querySelector('input');
+  const setter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    'value',
+  )?.set;
+  if (!input || !setter) throw new Error('Title editor is unavailable');
+  act(() => {
+    setter.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  return input;
+}
+
 it('leaves canonical entry deletion to the shared More menu instead of adding a toolbar button', () => {
   mocks.spaceSummaries = {
     target: { parentSpaceId: 'source', parentEntryNodeId: 'shortcut' },
@@ -168,22 +227,104 @@ it('leaves canonical entry deletion to the shared More menu instead of adding a 
   expect(
     host.querySelector('button[aria-label="canvasList.deleteCanvas"]'),
   ).toBeNull();
-  expect(host.querySelectorAll('button')).toHaveLength(1);
+  expect(host.querySelectorAll('button')).toHaveLength(3);
   expect(
     host.querySelector('button[aria-label="spacePreview.openSpace"]'),
   ).not.toBeNull();
 });
 describe('Space Shortcut production node', () => {
-  it('omits the large Space icon without changing card width', () => {
-    mocks.target.title = 'Medium Space Name';
-    render();
-    expect(
-      host.querySelector('[data-space-shortcut] .lucide-layers-2'),
-    ).toBeNull();
-    expect(mocks.state.nodes[0].style?.width).toBe(360);
-  });
+  it.each(['ready', 'loading', 'error'])(
+    'opens the Space from activity-row whitespace while activity is %s',
+    (status) => {
+      mocks.activity.status = status;
+      mocks.activity.activity = Array.from({ length: 3 }, (_, index) => ({
+        nodeId: `node-${index}`,
+        threadId: `thread-${index}`,
+        title: `Session ${index}`,
+        status: 'running',
+      }));
+      render();
+      const row = host.querySelector('[data-space-agent-activity]');
+      if (!row) throw new Error('Missing activity row');
+      for (const control of row.querySelectorAll('button')) {
+        act(() =>
+          (control.querySelector('svg') ?? control).dispatchEvent(
+            new MouseEvent('dblclick', { bubbles: true }),
+          ),
+        );
+      }
+      expect(mocks.navigate).not.toHaveBeenCalled();
+      act(() =>
+        (row.querySelector('[role="status"]') ?? row).dispatchEvent(
+          new MouseEvent('dblclick', { bubbles: true }),
+        ),
+      );
+      expect(mocks.navigate).toHaveBeenCalledExactlyOnceWith('/canvas/target', {
+        state: { returnToSpace: 'source', workspaceId: 'workspace' },
+      });
+    },
+  );
 
-  it('shows known summaries without treating unknown counts as zero', () => {
+  it('opens the chosen conversation through the existing node deep link, retaining return navigation', () => {
+    mocks.activity.activity = [
+      {
+        nodeId: 'node-agent-1',
+        threadId: 'thread-1',
+        title: 'First review',
+        status: 'running',
+        agentBinding: { kind: 'internal' },
+      },
+      {
+        nodeId: 'node-agent-2',
+        threadId: 'thread-2',
+        title: 'Second review',
+        status: 'unread',
+        agentBinding: { kind: 'internal' },
+      },
+    ];
+    render();
+    const button = host.querySelector<HTMLElement>(
+      'button[data-space-agent-thread="thread-2"]',
+    );
+    expect(button).not.toBeNull();
+    act(() => button?.click());
+    expect(mocks.navigate).toHaveBeenCalledExactlyOnceWith(
+      '/canvas/target?node=node-agent-2',
+      {
+        state: { returnToSpace: 'source', workspaceId: 'workspace' },
+      },
+    );
+    expect(host.querySelector('input')).toBeNull();
+  });
+  it.each(['shortcut', 'child', 'world'])(
+    'shows a small leading Space icon on %s cards without changing width',
+    (kind) => {
+      if (kind === 'child')
+        mocks.spaceSummaries = {
+          target: { parentSpaceId: 'source', parentEntryNodeId: 'shortcut' },
+        };
+      if (kind === 'world') mocks.state.canvasId = 'world';
+      mocks.target.title = 'Medium Space Name';
+      render();
+      const marker = host.querySelector('[data-space-type-icon]');
+      expect(marker?.getAttribute('aria-hidden')).toBe('true');
+      expect(marker?.querySelector('svg')?.getAttribute('width')).toBe('22');
+      expect(marker?.nextElementSibling?.textContent).toBe('Medium Space Name');
+      expect(marker?.parentElement?.firstElementChild).toBe(marker);
+      act(() =>
+        window.dispatchEvent(
+          new CustomEvent(RENAME_SPACE_SHORTCUT_EVENT, {
+            detail: { nodeId: 'shortcut' },
+          }),
+        ),
+      );
+      expect(host.querySelector('input')).not.toBeNull();
+      expect(host.querySelector('[data-space-type-icon]')).toBe(marker);
+      expect(mocks.state.nodes[0].style?.width).toBe(360);
+    },
+  );
+
+  it('shows update time but never node counts', () => {
     mocks.spaceSummaries = {
       target: { parentSpaceId: 'source', parentEntryNodeId: 'shortcut' },
     };
@@ -191,10 +332,99 @@ describe('Space Shortcut production node', () => {
     expect(host.querySelector('[data-space-shortcut-summary]')).toBeNull();
     mocks.target.nodeCount = 0;
     render();
+    expect(host.querySelector('[data-space-shortcut-summary]')).toBeNull();
+    mocks.activity.updatedAt = Date.now();
+    render();
     expect(host.querySelector('[data-space-shortcut-summary]')).not.toBeNull();
     mocks.target.status = 'missing';
     render();
     expect(host.querySelector('[data-space-shortcut-summary]')).toBeNull();
+  });
+
+  it('edits the target title with F2 event, ignores IME Enter and saves once', async () => {
+    render();
+    act(() =>
+      window.dispatchEvent(
+        new CustomEvent(RENAME_SPACE_SHORTCUT_EVENT, {
+          detail: { nodeId: 'shortcut' },
+        }),
+      ),
+    );
+    expect(host.querySelector('input')?.value).toBe('Research');
+    const input = editTitle('Renamed');
+    act(() =>
+      input.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Enter',
+          isComposing: true,
+          bubbles: true,
+        }),
+      ),
+    );
+    expect(mocks.rename).not.toHaveBeenCalled();
+    await act(async () =>
+      input.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+      ),
+    );
+    expect(mocks.rename).toHaveBeenCalledWith('target', {
+      title: 'Renamed',
+      expectedTitle: 'Research',
+    });
+    expect(mocks.setSpaceTitle).toHaveBeenCalledWith('target', 'Renamed');
+    expect(host.querySelector('input')).toBeNull();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  it('blocks navigation and renaming when activity refresh discovers a deleted target', () => {
+    mocks.activity.status = 'missing';
+    render();
+    expect(
+      host
+        .querySelector('[data-space-shortcut]')
+        ?.getAttribute('data-target-status'),
+    ).toBe('missing');
+    expect(host.textContent).toContain('spacePreview.missingTarget');
+    expect(host.querySelector('[data-space-shortcut-summary]')).toBeNull();
+    open();
+    act(() =>
+      window.dispatchEvent(
+        new CustomEvent(RENAME_SPACE_SHORTCUT_EVENT, {
+          detail: { nodeId: 'shortcut' },
+        }),
+      ),
+    );
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    expect(host.querySelector('input')).toBeNull();
+  });
+
+  it('keeps the draft and displays save failures; Escape does not save', async () => {
+    mocks.rename.mockRejectedValue(new Error('offline'));
+    render();
+    act(() =>
+      window.dispatchEvent(
+        new CustomEvent(RENAME_SPACE_SHORTCUT_EVENT, {
+          detail: { nodeId: 'shortcut' },
+        }),
+      ),
+    );
+    const input = editTitle('New title');
+    await act(async () =>
+      input.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+      ),
+    );
+    expect(host.querySelector('input')?.value).toBe('New title');
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(
+      'spacePreview.renameFailed',
+    );
+    act(() =>
+      input.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+      ),
+    );
+    expect(mocks.rename).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('input')).toBeNull();
   });
 
   it('marks ordinary shortcuts after the name, not in the summary or on owned entries', () => {
@@ -292,6 +522,35 @@ describe('Space Shortcut production node', () => {
         ?.click(),
     );
     expect(mocks.target.retry).toHaveBeenCalledOnce();
+  });
+
+  it('combines concurrent activity and metadata failures into one visible message', () => {
+    mocks.target.error = 'Failed to fetch';
+    mocks.activity.status = 'error';
+    render();
+    const messages = host.querySelectorAll('[role="status"]');
+    expect(messages).toHaveLength(1);
+    expect(messages[0].textContent).toBe('spacePreview.activityUnavailable');
+    expect(messages[0].getAttribute('aria-label')).toBe(
+      'spacePreview.activityUnavailable: Failed to fetch',
+    );
+    expect(host.textContent).not.toContain('Failed to fetch');
+    open();
+    expect(mocks.navigate).toHaveBeenCalledTimes(3);
+    act(() =>
+      host
+        .querySelector<HTMLButtonElement>('[aria-label="spacePreview.retry"]')
+        ?.click(),
+    );
+    expect(mocks.target.retry).toHaveBeenCalledOnce();
+    mocks.activity.status = 'ready';
+    render();
+    expect(host.querySelector('[role="status"]')?.textContent).toBe(
+      'Failed to fetch',
+    );
+    mocks.target.error = null;
+    render();
+    expect(host.querySelector('[role="status"]')).toBeNull();
   });
 
   it.each(['loading', 'missing', 'error'])(

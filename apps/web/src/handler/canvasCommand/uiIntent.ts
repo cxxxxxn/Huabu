@@ -26,7 +26,7 @@ import {
   resolvePasteClipboard,
   resolveSelectNodes,
 } from './resolvers';
-import { resolveSetQuestionCardScale } from './resolvers/resolveSetQuestionCardScale';
+import { resolveSetCardScale } from './resolvers/resolveSetCardScale';
 import {
   computeNodeEditDiff,
   extractNodeRef,
@@ -202,7 +202,7 @@ export type CanvasUiIntent =
   | { type: 'UPDATE_NODE_DATA'; nodeId: string; patch: Record<string, unknown> }
   | {
       /** Absolute percentage of QUESTION_NODE_DEFAULT_FONT_SIZE, in [10, 1000]. */
-      type: 'SET_QUESTION_CARD_SCALE';
+      type: 'SET_CARD_SCALE';
       nodeId: string;
       percent: number;
     }
@@ -410,8 +410,8 @@ export function resolveUiIntent(
       return resolveDeleteNodes(intent, ui);
     case 'UPDATE_NODE_DATA':
       return resolveUpdateNodeData(intent, ui);
-    case 'SET_QUESTION_CARD_SCALE':
-      return resolveSetQuestionCardScale(intent, ui);
+    case 'SET_CARD_SCALE':
+      return resolveSetCardScale(intent, ui);
     case 'CONNECT_EDGE':
       return resolveConnectEdge(intent, ui);
     case 'DISCONNECT_EDGE':

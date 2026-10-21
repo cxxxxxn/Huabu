@@ -50,6 +50,8 @@ export const routes = {
 
   // ── Canvas ────────────────────────────────────────────────────────
   canvasList: '/canvas',
+  spaceCardQuery: '/canvas/cards/query',
+  spaceTitle: (canvasId: string) => `/canvas/${enc(canvasId)}/title`,
   canvasImport: '/canvas/import',
   canvas: (canvasId: string) => `/canvas/${enc(canvasId)}`,
   canvasChildren: (canvasId: string) => `/canvas/${enc(canvasId)}/children`,

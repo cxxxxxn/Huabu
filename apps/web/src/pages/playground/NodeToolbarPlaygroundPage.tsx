@@ -352,7 +352,7 @@ function Specimen({ type: initialType }: { type: CanvasNodeType }) {
                   onMove={setPosition}
                 />
                 <span className="nt-divider" />
-                {type !== 'question' && type !== 'sketch' && (
+                {type !== 'sketch' && (
                   <FloatingToolbar.ColorPicker
                     floating
                     colors={colors}

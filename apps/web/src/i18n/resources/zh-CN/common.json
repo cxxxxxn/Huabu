@@ -688,6 +688,22 @@
     "openWorld": "打开 World"
   },
   "spacePreview": {
+    "rename": "重命名 Space",
+    "nameRequired": "请输入 Space 名称。",
+    "nameConflict": "已有其他 Space 使用此名称。",
+    "nameChanged": "名称已在其他位置修改，请取消后编辑最新名称。",
+    "renameFailed": "无法确认重命名，已保留输入，请刷新后重试。",
+    "timeNow": "刚刚",
+    "unknownAgent": "未知 Agent",
+    "openConversation": "{{agent}} · {{title}} · {{status}} — 打开对话",
+    "moreConversations_one": "展开另外 {{count}} 个对话",
+    "moreConversations_other": "展开另外 {{count}} 个对话",
+    "sessionStatus": {
+      "unknown": "状态未知",
+      "idle": "无活动"
+    },
+    "activityLoading": "正在加载 Agent 活动…",
+    "activityUnavailable": "无法获取 Agent 活动",
     "add": "添加空间快捷入口",
     "chooseTarget": "选择 Space",
     "chooseTargetDescription": "选择此快捷入口要打开的 Space。",
@@ -784,6 +800,7 @@
     "viewConversation": "查看对话",
     "openConversation": "打开对话",
     "questionCard": {
+      "lastActivity": "最近会话活动：{{time}}",
       "idle": "待开始",
       "open": "对话已打开",
       "running": "进行中",

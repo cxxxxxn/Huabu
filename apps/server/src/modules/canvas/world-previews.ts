@@ -10,6 +10,7 @@ import {
 import {
   getNodeDefaultSize,
   SPACE_SHORTCUT_SIZE,
+  spaceShortcutScale,
 } from '@huabu/shared/canvas-engine';
 
 import { executeOnServer } from './canvas-executor.js';
@@ -161,7 +162,7 @@ async function planWorldPreviewReconciliation(): Promise<WorldPreviewReconciliat
       ),
       height:
         node.type === 'spacePreview'
-          ? PREVIEW_HEIGHT
+          ? PREVIEW_HEIGHT * spaceShortcutScale(node.data ?? {})
           : dimension(node.style?.height, 100),
     };
   });

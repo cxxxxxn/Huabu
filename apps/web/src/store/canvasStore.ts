@@ -32,6 +32,7 @@ import {
   autoHeightContentWidth,
   preserveAgentNodeOwnedData,
   projectAgentNodeEditableData,
+  replayAgentNodeEditableData,
   stripTransientNodeFields,
   applyDeltas,
   applySharedPostEffects,
@@ -1829,6 +1830,35 @@ const useCanvasStore = create<RFState>()(
       const localNodesById = new Map(
         get().nodes.map((node) => [node.id, node]),
       );
+      if (agentNodeProjection) {
+        deltas = deltas.map((delta) => {
+          if (
+            delta.type !== 'REPLACE_NODE' ||
+            delta.prev.type !== 'question' ||
+            delta.next.type !== 'question'
+          )
+            return delta;
+          const live = localNodesById.get(delta.next.id);
+          if (live?.type !== 'question') return delta;
+          // Lifecycle/title projections carry stale geometry in coarse deltas.
+          // Apply their data effects without replacing local resize/undo state.
+          return {
+            ...delta,
+            prev: live,
+            next: {
+              ...live,
+              data: preserveAgentNodeOwnedData(
+                replayAgentNodeEditableData(
+                  live.data,
+                  delta.prev.data,
+                  delta.next.data,
+                ),
+                delta.next.data,
+              ),
+            },
+          };
+        });
+      }
       const safeDeltas =
         dirty.size === 0
           ? deltas

@@ -199,7 +199,7 @@ test('collection and movement stay in place, with animated explicit navigation',
   await expect(page.locator('.react-flow__node-spacePreview')).toBeVisible();
   await expect(page.locator('.react-flow__node-text')).toHaveCount(0);
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.locator('[data-space-shortcut]').dblclick();
+  await page.locator('[data-space-shortcut-summary]').dblclick();
   await expect(page).toHaveURL(new RegExp(`/canvas/${childId}$`));
   await expect(page.locator('.react-flow__node-text')).toBeVisible();
   await expect(page.locator('.space-canvas-enter')).toHaveCSS(
@@ -496,7 +496,7 @@ test('Add Space Shortcut browses the shared tree and preserves target ownership'
     parentSpaceId: parent,
     parentEntryNodeId: child.parentEntryNodeId,
   });
-  await shortcut.dblclick();
+  await shortcut.locator('[data-space-shortcut-summary]').dblclick();
   await expect(page).toHaveURL(new RegExp(`/canvas/${child.canvasId}$`));
   await page
     .getByRole('button', { name: 'Back to Shortcut picker host', exact: true })
@@ -523,16 +523,14 @@ test('real shortcuts keep fixed widths, undo, resize, and navigate without scene
   await page.getByRole('button', { name: /Canvas zoom/ }).click();
   await page.getByRole('menuitem', { name: /Reset.*100%/ }).click();
   await expect(body).toContainText('Research');
-  await expect(body.locator('[data-space-shortcut-summary]')).toHaveText(
-    'No nodes · Updated now',
-  );
+  await expect(body.locator('[data-space-shortcut-summary]')).toHaveText('now');
   await expect(body.locator('[data-space-shortcut-summary]')).toHaveCSS(
     'font-size',
-    '16px',
+    '18px',
   );
   await expect(node).toHaveCSS('width', '360px');
   expect(await node.evaluate((element) => element.clientHeight)).toBeLessThan(
-    102,
+    120,
   );
 
   await body.click();
@@ -567,12 +565,12 @@ test('real shortcuts keep fixed widths, undo, resize, and navigate without scene
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(body).toContainText(title);
   await expect(body.locator('[data-space-shortcut-summary]')).toContainText(
-    '1 node',
+    'now',
   );
   await expect(node).toHaveCSS('width', '320px');
   expect(
     await node.evaluate((element) => element.clientHeight),
-  ).toBeLessThanOrEqual(138);
+  ).toBeLessThanOrEqual(152);
   expect(
     await node.evaluate((element) => element.clientHeight),
   ).toBeGreaterThan(126);
@@ -596,7 +594,7 @@ test('real shortcuts keep fixed widths, undo, resize, and navigate without scene
 
   await body.click();
   await expect(node.locator('.node-resize-edge')).toHaveCount(2);
-  await expect(node.locator('.node-resize-corner')).toHaveCount(0);
+  await expect(node.locator('.node-resize-corner')).toHaveCount(4);
   const edge = node.locator('.node-resize-edge.right');
   const bounds = await edge.boundingBox();
   if (!bounds) throw new Error('Missing shortcut resize edge');
@@ -623,10 +621,10 @@ test('real shortcuts keep fixed widths, undo, resize, and navigate without scene
     'box-shadow',
     'none',
   );
-  await expect(body).toHaveCSS('font-size', '28px');
+  await expect(body).toHaveCSS('font-size', '24px');
   await expect(node.locator('.semantic-lod-node')).toHaveCSS(
     'border-top-width',
-    '3px',
+    '2px',
   );
   await history(page, 'undo');
   await expect(node).toHaveCSS('width', '320px');
@@ -697,11 +695,11 @@ test('moving to a new Space leaves an immediately usable shortcut without refres
   await expect(shortcut).toHaveAttribute('data-target-status', 'ready');
   await expect(shortcut).toContainText('Untitled');
   await expect(shortcut.locator('[data-space-shortcut-summary]')).toContainText(
-    '1 node',
+    'now',
   );
   const destinationId = await shortcut.getAttribute('data-space-shortcut');
   expect(destinationId).toBeTruthy();
-  await shortcut.dblclick();
+  await shortcut.locator('[data-space-shortcut-summary]').dblclick();
   await expect(page).toHaveURL(`/canvas/${destinationId}`);
 });
 
@@ -832,7 +830,7 @@ test('a known shortcut can navigate while focus-triggered metadata refresh is pe
     await page.evaluate(() => window.dispatchEvent(new Event('focus')));
     await expect.poll(() => requested).toBe(true);
     await expect(shortcut).toHaveAttribute('data-target-status', 'ready');
-    await shortcut.dblclick();
+    await shortcut.locator('[data-space-shortcut-summary]').dblclick();
     await expect(page).toHaveURL(`/canvas/${targetId}`);
   } finally {
     release();

@@ -24,6 +24,7 @@ export {
 export {
   SPACE_SHORTCUT_SIZE,
   clampSpaceShortcutWidth,
+  spaceShortcutScale,
   normalizeSpaceShortcut,
 } from './utils/spaceShortcut.js';
 export {

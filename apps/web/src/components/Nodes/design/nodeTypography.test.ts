@@ -17,6 +17,7 @@ describe('shared node typography', () => {
     expect(FAR_ZOOM_DESIGN.labelWeight).toBe(500);
     expect(NODE_TYPOGRAPHY.cardTitle.weight).toBe(500);
     expect(NODE_TYPOGRAPHY.title.size).toBe(28);
+    expect(NODE_TYPOGRAPHY.cardTitle.size).toBe(24);
     expect(NODE_TYPOGRAPHY.cardTitle.size).toBeGreaterThan(
       NODE_TYPOGRAPHY.body.size,
     );

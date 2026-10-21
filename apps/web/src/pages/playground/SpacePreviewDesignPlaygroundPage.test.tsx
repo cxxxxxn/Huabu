@@ -8,8 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { nodeBoundaryForAccent } from '@/components/Nodes/design/nodeBoundary';
 import { nodeMetricsForSize } from '@/components/Nodes/design/nodeDesign';
-import { NODE_CONTENT_SPACING } from '@/components/Nodes/design/nodeSpacing';
-import { NODE_TYPOGRAPHY } from '@/components/Nodes/design/nodeTypography';
+import { CONVERSATION_CARD_SPACING } from '@/components/Nodes/design/nodeSpacing';
+import { SPACE_CARD_TYPOGRAPHY } from '@/components/Nodes/design/nodeTypography';
 
 import SpacePreviewDesignPlaygroundPage from './SpacePreviewDesignPlaygroundPage';
 
@@ -33,6 +33,11 @@ vi.mock('react-i18next', () => {
   };
 });
 vi.mock('lottie-react', () => ({ default: () => null }));
+vi.mock('@/store/acpProfilesStore', () => ({
+  useAcpProfilesStore: (
+    selector: (state: { profiles: never[]; init: () => void }) => unknown,
+  ) => selector({ profiles: [], init: vi.fn() }),
+}));
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -133,7 +138,9 @@ describe('Space shortcut design playground', () => {
     expect(container.querySelectorAll('.sp-design-shortcut')).toHaveLength(2);
     expect(container.querySelector('img')).toBeNull();
     expect(container.querySelector('[role="application"]')).toBeNull();
-    expect(card().querySelector('.lucide-layers-2')).toBeNull();
+    expect(
+      card().querySelector('[data-space-type-icon] svg')?.getAttribute('width'),
+    ).toBe('22');
     expect(card().querySelector('.lucide-arrow-up-right')).not.toBeNull();
     expect(card().getAttribute('aria-pressed')).toBe('false');
     expect(card('reference').getAttribute('aria-pressed')).toBe('true');
@@ -160,21 +167,21 @@ describe('Space shortcut design playground', () => {
     expect(document.querySelector('input[aria-label*="高度"]')).toBeNull();
   });
 
-  it('shares the count and relative update summary without changing width ownership', async () => {
+  it('shares relative update time without changing width ownership', async () => {
     const summaries = container.querySelectorAll(
       '[data-space-shortcut-summary]',
     );
     expect(summaries).toHaveLength(2);
-    expect(summaries[0].textContent).toBe('24 nodes · Updated 2 days ago');
+    expect(summaries[0].textContent).toBe('2d ago');
     expect(summaries[1].textContent).toBe(summaries[0].textContent);
-    expect(summaries[0].getAttribute('aria-label')).toContain('24 nodes');
+    expect(summaries[0].getAttribute('aria-label')).not.toContain('nodes');
     expect(summaries[0].getAttribute('aria-label')).not.toContain('days ago');
     expect(
       card().querySelector('.sp-design-copy .sp-design-title'),
     ).not.toBeNull();
     await choose('测试短标题');
     expect(shell().style.width).toBe('360px');
-    expect(summaries[0].textContent).toBe('24 nodes · Updated 2 days ago');
+    expect(summaries[0].textContent).toBe('2d ago');
     await choose('空间失效');
     expect(container.querySelector('[data-space-shortcut-summary]')).toBeNull();
     expect(shell().style.width).toBe('360px');
@@ -222,7 +229,7 @@ describe('Space shortcut design playground', () => {
       ),
     );
     expect(shell().style.width).toBe('736px');
-    expect(card('reference').style.fontSize).toBe('28px');
+    expect(card('reference').style.fontSize).toBe('24px');
   });
 
   it('keeps width controls usable for missing targets and records the experiment contract', async () => {
@@ -242,20 +249,38 @@ describe('Space shortcut design playground', () => {
     expect(shell().style.width).toBe('360px');
   });
 
-  it('uses production boundary, radius, spacing, and typography values', () => {
+  it('uses production boundary, radius, spacing, and typography values', async () => {
+    // Happy DOM drops color-mix border values; inspect the assigned CSS.
+    const borderColor = vi.spyOn(
+      CSSStyleDeclaration.prototype,
+      'borderColor',
+      'set',
+    );
+    await act(async () =>
+      root.render(
+        <MemoryRouter key="boundary">
+          <SpacePreviewDesignPlaygroundPage />
+        </MemoryRouter>,
+      ),
+    );
     const boundary = nodeBoundaryForAccent(null);
-    const typography = NODE_TYPOGRAPHY.cardTitle;
+    const typography = SPACE_CARD_TYPOGRAPHY.title;
     expect(card().style.borderWidth).toBe(`${boundary.borderWidth}px`);
-    expect(card().style.borderColor).toBe(boundary.borderColor);
-    expect(card().style.padding).toBe(`${NODE_CONTENT_SPACING.padding}px`);
+    expect(
+      borderColor.mock.calls.filter(
+        (_, index) => borderColor.mock.contexts[index] === card().style,
+      ),
+    ).toEqual([[boundary.borderColor]]);
+    borderColor.mockRestore();
+    expect(card().style.padding).toBe(`${CONVERSATION_CARD_SPACING.padding}px`);
     expect(card().style.fontSize).toBe(`${typography.size}px`);
     expect(card().style.fontWeight).toBe(`${typography.weight}`);
     expect(card().style.lineHeight).toBe(`${typography.lineHeight}`);
     const height =
-      2 * (NODE_CONTENT_SPACING.padding + boundary.borderWidth) +
+      2 * (CONVERSATION_CARD_SPACING.padding + boundary.borderWidth) +
       typography.size * typography.lineHeight +
-      4 +
-      NODE_TYPOGRAPHY.metadata.size * NODE_TYPOGRAPHY.metadata.lineHeight;
+      CONVERSATION_CARD_SPACING.rowGap +
+      CONVERSATION_CARD_SPACING.footerHeight;
     expect(card().parentElement?.style.borderRadius).toBe(
       `${nodeMetricsForSize(420, height).radius}px`,
     );
@@ -355,7 +380,7 @@ describe('Space shortcut design playground', () => {
     );
     expect(
       card().querySelector('[data-space-shortcut-summary]')?.textContent,
-    ).toBe('24 nodes · Updated 2 days ago');
+    ).toBe('2d ago');
     expect(entryButton().disabled).toBe(false);
     expect(card('reference').getAttribute('aria-pressed')).toBe('true');
   });

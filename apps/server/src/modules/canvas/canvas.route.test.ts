@@ -152,6 +152,88 @@ afterEach(() => {
 });
 
 describe('POST /api/canvas lifecycle', () => {
+  it('queries only requested Space cards and validates bounded input', async () => {
+    const app = await buildApp();
+    try {
+      await createCanvas('card-target', 'Target');
+      const response = await app.inject({
+        method: 'POST',
+        url: '/canvas/cards/query',
+        payload: { canvasIds: ['card-target', 'missing'] },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().spaces).toMatchObject({
+        'card-target': {
+          status: 'ready',
+          title: 'Target',
+          activity: [],
+        },
+        missing: { status: 'missing' },
+      });
+      for (const canvasIds of [
+        ['../escape'],
+        Array(51).fill('card-target'),
+        [],
+      ]) {
+        expect(
+          (
+            await app.inject({
+              method: 'POST',
+              url: '/canvas/cards/query',
+              payload: { canvasIds },
+            })
+          ).statusCode,
+        ).toBe(400);
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('renames an inactive Space without replacing topology and rejects stale or duplicate names', async () => {
+    const app = await buildApp();
+    try {
+      await createCanvas('card-target', 'Before');
+      await createCanvas('other-target', 'Taken');
+      const before = await space('card-target').read();
+      const renamed = await app.inject({
+        method: 'PATCH',
+        url: '/canvas/card-target/title',
+        payload: { title: ' After ', expectedTitle: 'Before' },
+      });
+      expect(renamed.statusCode).toBe(200);
+      expect(renamed.json().title).toBe('After');
+      const after = await space('card-target').read();
+      expect(after?.version).toBe((before?.version ?? 0) + 1);
+      expect(after?.state).toEqual(before?.state);
+      const stale = await app.inject({
+        method: 'PATCH',
+        url: '/canvas/card-target/title',
+        payload: { title: 'Stale', expectedTitle: 'Before' },
+      });
+      expect(stale.statusCode).toBe(409);
+      expect(stale.json().code).toBe('SPACE_TITLE_CHANGED');
+      const duplicate = await app.inject({
+        method: 'PATCH',
+        url: '/canvas/card-target/title',
+        payload: { title: 'Taken', expectedTitle: 'After' },
+      });
+      expect(duplicate.statusCode).toBe(409);
+      expect((await space('card-target').read())?.title).toBe('After');
+      expect(
+        (
+          await app.inject({
+            method: 'PATCH',
+            url: '/canvas/card-target/title',
+            payload: { title: ' ', expectedTitle: 'After' },
+          })
+        ).statusCode,
+      ).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('allocates concurrent default titles without skipping a suffix', async () => {
     const app = await buildApp();
     try {

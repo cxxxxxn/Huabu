@@ -688,6 +688,22 @@
     "openWorld": "Open World"
   },
   "spacePreview": {
+    "rename": "Rename Space",
+    "nameRequired": "Enter a Space name.",
+    "nameConflict": "Another Space already uses this name.",
+    "nameChanged": "The name changed elsewhere. Cancel and edit the latest name.",
+    "renameFailed": "Could not confirm the rename. Your input is kept; refresh and retry.",
+    "timeNow": "now",
+    "unknownAgent": "Unknown Agent",
+    "openConversation": "{{agent}} · {{title}} · {{status}} — Open conversation",
+    "moreConversations_one": "Show {{count}} more conversation",
+    "moreConversations_other": "Show {{count}} more conversations",
+    "sessionStatus": {
+      "unknown": "Status unknown",
+      "idle": "No activity"
+    },
+    "activityLoading": "Loading Agent activity…",
+    "activityUnavailable": "Agent activity unavailable",
     "add": "Add Space Shortcut",
     "chooseTarget": "Choose a Space",
     "chooseTargetDescription": "Select the Space this shortcut opens.",
@@ -784,6 +800,7 @@
     "viewConversation": "View conversation",
     "openConversation": "Open conversation",
     "questionCard": {
+      "lastActivity": "Last conversation activity: {{time}}",
       "idle": "Not started",
       "open": "Conversation open",
       "running": "Running",

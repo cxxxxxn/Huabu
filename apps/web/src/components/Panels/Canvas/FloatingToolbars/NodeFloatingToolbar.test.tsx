@@ -9,7 +9,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSubmenu,
 } from '@/components/Common/DropdownMenu';
-import { resolveSetQuestionCardScale } from '@/handler/canvasCommand/resolvers/resolveSetQuestionCardScale';
+import { resolveSetCardScale } from '@/handler/canvasCommand/resolvers/resolveSetCardScale';
 import { QUESTION_NODE_DEFAULT_FONT_SIZE } from '@/utils/node/nodeFontConfig';
 
 import { NodeFloatingToolbar } from './NodeFloatingToolbar';
@@ -311,20 +311,20 @@ describe('NodeFloatingToolbar type-icon drag surface', () => {
       data: { type: 'question', content: 'Question' },
     });
     expect(container.querySelector('[aria-label="Font size"]')).toBeNull();
-    expect(container.querySelector('[name="question-card-scale"]')).toBeNull();
+    expect(container.querySelector('[name="node-card-scale"]')).toBeNull();
     openPanel('toolbar.size.title');
     const scaleInput = document.querySelector<HTMLInputElement>(
-      '[name="question-card-scale"]',
+      '[name="node-card-scale"]',
     );
     expect(scaleInput?.min).toBe('10');
     expect(scaleInput?.max).toBe('1000');
     expect(scaleInput?.step).toBe('1');
     expect(
-      document.querySelector<HTMLInputElement>('[name="question-card-scale"]')
+      document.querySelector<HTMLInputElement>('[name="node-card-scale"]')
         ?.value,
     ).toBe('100');
     const scaleLabel = document
-      .querySelector('[name="question-card-scale"]')
+      .querySelector('[name="node-card-scale"]')
       ?.closest('label');
     expect(scaleLabel?.textContent).toContain('toolbar.cardScale');
     expect(scaleLabel?.textContent).toContain('%');
@@ -333,7 +333,7 @@ describe('NodeFloatingToolbar type-icon drag surface', () => {
     ).toBeNull();
     expect(container.querySelector('.lucide-rotate-ccw')).toBeNull();
     render({ type: 'text', data: { type: 'text', content: 'Text' } });
-    expect(container.querySelector('[name="question-card-scale"]')).toBeNull();
+    expect(container.querySelector('[name="node-card-scale"]')).toBeNull();
     expect(container.querySelector('[name="font-size"]')).not.toBeNull();
   });
 
@@ -354,7 +354,7 @@ describe('NodeFloatingToolbar type-icon drag surface', () => {
     });
     openPanel('toolbar.size.title');
     const input = document.querySelector<HTMLInputElement>(
-      '[name="question-card-scale"]',
+      '[name="node-card-scale"]',
     );
     if (!input) throw new Error('Missing card scale input');
     expect(input.value).toBe('123');
@@ -385,8 +385,8 @@ describe('NodeFloatingToolbar type-icon drag surface', () => {
           style: { fontSize: QUESTION_NODE_DEFAULT_FONT_SIZE * 1.5 },
         },
       };
-      const resolution = resolveSetQuestionCardScale(
-        { type: 'SET_QUESTION_CARD_SCALE', nodeId: node.id, percent },
+      const resolution = resolveSetCardScale(
+        { type: 'SET_CARD_SCALE', nodeId: node.id, percent },
         { nodes: [node], edges: [] },
       );
       const command = resolution.commands[0];
@@ -398,7 +398,7 @@ describe('NodeFloatingToolbar type-icon drag surface', () => {
       });
       openPanel('toolbar.size.title');
       expect(
-        document.querySelector<HTMLInputElement>('[name="question-card-scale"]')
+        document.querySelector<HTMLInputElement>('[name="node-card-scale"]')
           ?.value,
       ).toBe(String(percent));
     },

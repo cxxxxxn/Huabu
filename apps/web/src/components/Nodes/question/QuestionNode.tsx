@@ -40,7 +40,6 @@ import {
 import { getQuestionDisplayText } from '@/utils/node/questionDisplayText';
 import { resolveQuestionAgentPresentation } from '@/utils/questionAgentPresentation.ts';
 
-import { NODE_TYPOGRAPHY } from '../design/nodeTypography';
 import { useFrameSuppressed } from '../frame/FrameZoomContext';
 import { MissingFileBanner } from '../MissingFileBanner';
 import { NodeWrapper } from '../NodeWrapper';
@@ -78,6 +77,17 @@ export const QuestionNode = memo(
   ({ id, data, selected, width }: NodeProps<QuestionNodeType>) => {
     const { t } = useTranslation();
     const frameSuppressed = useFrameSuppressed(id);
+    const inLayoutFrame = useCanvasStore((state) => {
+      const parentId = state.nodes.find((node) => node.id === id)?.parentId;
+      const parent = parentId
+        ? state.nodes.find((node) => node.id === parentId)
+        : undefined;
+      return (
+        parent?.type === 'frame' &&
+        (parent.data.layoutMode === 'column' ||
+          parent.data.layoutMode === 'row')
+      );
+    });
 
     // On-canvas anchor text. Prefer the generated `label` (a concise
     // title) once preprocessing produced one; fall back to a truncated
@@ -102,12 +112,8 @@ export const QuestionNode = memo(
       baseFontSize: QUESTION_NODE_DEFAULT_FONT_SIZE,
       fontSizing: 'proportional',
       minAutoWidth: getNodeDefaultSize('question').width,
-      paddingX:
-        NODE_PADDING *
-        (QUESTION_NODE_DEFAULT_FONT_SIZE / NODE_TYPOGRAPHY.cardTitle.size),
-      paddingY:
-        (QUESTION_NODE_PADDING_Y + QUESTION_NODE_HEADER_INSET) *
-        (QUESTION_NODE_DEFAULT_FONT_SIZE / NODE_TYPOGRAPHY.cardTitle.size),
+      paddingX: NODE_PADDING,
+      paddingY: QUESTION_NODE_PADDING_Y + QUESTION_NODE_HEADER_INSET,
       fontOpts,
       placeholder: QUESTION_NODE_PLACEHOLDER,
     });
@@ -365,7 +371,7 @@ export const QuestionNode = memo(
           isContentMissing || isForkPending ? undefined : handleActivate
         }
         takeover={
-          isContentMissing
+          isContentMissing || inLayoutFrame
             ? undefined
             : {
                 fontSize: surface.bodyProps.effectiveFontSize,
@@ -425,6 +431,8 @@ export const QuestionNode = memo(
             unread={isDoneUnviewed || isErrorUnviewed}
             conflictCount={status === 'done' ? conflictCount : 0}
             errorMessage={data.errorMessage}
+            lastActivityAt={data.lastActivityAt}
+            accent={data.style?.accent}
             text={surface.draft}
             placeholder={QUESTION_NODE_PLACEHOLDER}
           />

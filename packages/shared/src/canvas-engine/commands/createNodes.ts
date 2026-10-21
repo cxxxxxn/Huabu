@@ -109,6 +109,7 @@ const createNodes: CommandDefinition<Cmd> = {
       const explicitSize = input.size;
       const size = explicitSize ?? getNodeDefaultSize(nodeType);
       const geometryStyle = getNodeCreationStyle(nodeType, size, {
+        data: input.data,
         heightIsExplicit: typeof explicitSize?.height === 'number',
       });
 

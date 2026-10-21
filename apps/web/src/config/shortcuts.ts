@@ -274,6 +274,12 @@ export const SHORTCUTS: ShortcutDef[] = [
 
   // Layering & grouping
   {
+    id: 'space.rename',
+    combo: { key: 'F2' },
+    descriptionKey: 'spacePreview.rename',
+    section: SECTION.layeringGrouping,
+  },
+  {
     id: 'layer.sendBack',
     combo: { key: ['[', '【'] },
     descriptionKey: 'shortcuts.items.sendBack',

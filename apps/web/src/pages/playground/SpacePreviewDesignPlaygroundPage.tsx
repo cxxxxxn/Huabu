@@ -26,12 +26,16 @@ import { Modal } from '@/components/Common/Modal';
 import { Popover } from '@/components/Common/Popover';
 import { TextInput } from '@/components/Common/TextInput';
 import { Tooltip } from '@/components/Common/Tooltip';
-import { nodeBoundaryForAccent } from '@/components/Nodes/design/nodeBoundary';
+import {
+  NODE_BORDER_WIDTH,
+  nodeBoundaryForAccent,
+} from '@/components/Nodes/design/nodeBoundary';
 import { nodeMetricsForSize } from '@/components/Nodes/design/nodeDesign';
-import { NODE_CONTENT_SPACING } from '@/components/Nodes/design/nodeSpacing';
-import { NODE_TYPOGRAPHY } from '@/components/Nodes/design/nodeTypography';
+import { CONVERSATION_CARD_SPACING } from '@/components/Nodes/design/nodeSpacing';
+import { SPACE_CARD_TYPOGRAPHY } from '@/components/Nodes/design/nodeTypography';
 import { noteSurfaceStyle } from '@/components/Nodes/note/noteDesign';
-import { SpaceShortcutSummary } from '@/components/Nodes/spacePreview/SpaceShortcutSummary';
+import { NodeActivityTime } from '@/components/Nodes/shared/NodeActivityTime';
+import { SpaceAgentActivity } from '@/components/Nodes/spacePreview/SpaceAgentActivity';
 import { getNodeIcon } from '@/config/nodeIcons';
 import { translateColorOptions } from '@/i18n/colors';
 
@@ -41,8 +45,7 @@ import './SpacePreviewDesignPlaygroundPage.css';
 
 const SpaceIcon = getNodeIcon('spacePreview');
 const MIN_WIDTH = SPACE_SHORTCUT_SIZE.minWidth;
-const titleTypography = NODE_TYPOGRAPHY.cardTitle;
-const DEMO_NODE_COUNT = 24;
+const titleTypography = SPACE_CARD_TYPOGRAPHY.title;
 const DEMO_UPDATED_AT = Date.now() - 2 * 86_400_000;
 const specimens = [
   {
@@ -119,12 +122,12 @@ function SpaceShortcutSpecimen({
   const accent = color === 'none' ? null : resolveAccent(color);
   const boundary = nodeBoundaryForAccent(accent);
   const height =
-    2 * (NODE_CONTENT_SPACING.padding + boundary.borderWidth) +
+    2 * (CONVERSATION_CARD_SPACING.padding + boundary.borderWidth) +
     titleTypography.size * titleTypography.lineHeight +
     (unavailable
       ? 0
-      : 4 +
-        NODE_TYPOGRAPHY.metadata.size * NODE_TYPOGRAPHY.metadata.lineHeight);
+      : CONVERSATION_CARD_SPACING.rowGap +
+        CONVERSATION_CARD_SPACING.footerHeight);
   const openSpace = () => {
     if (!unavailable) onOpen();
   };
@@ -181,7 +184,9 @@ function SpaceShortcutSpecimen({
               style={{
                 ...noteSurfaceStyle(accent),
                 ...boundary,
-                padding: NODE_CONTENT_SPACING.padding,
+                padding: CONVERSATION_CARD_SPACING.padding,
+                paddingInline:
+                  CONVERSATION_CARD_SPACING.padding - boundary.borderWidth,
                 fontSize: titleTypography.size,
                 fontWeight: titleTypography.weight,
                 lineHeight: titleTypography.lineHeight,
@@ -208,27 +213,61 @@ function SpaceShortcutSpecimen({
               }}
             >
               <span className="sp-design-copy">
-                <span className="flex items-start gap-1">
-                  <span className="sp-design-title" title={title}>
-                    {title}
-                  </span>
-                  <Tooltip
-                    content={t('spacePreview.shortcutLabel')}
-                    wrapperClassName="inline-flex h-[1lh] shrink-0 items-center"
+                <span className="flex items-start gap-2">
+                  <span
+                    className="text-fg-muted inline-flex h-[1lh] shrink-0 items-center justify-center"
+                    style={{ width: CONVERSATION_CARD_SPACING.iconSlotWidth }}
+                    data-space-type-icon
+                    aria-hidden
                   >
-                    <ArrowUpRight
-                      size="1em"
-                      style={{ width: '1em', height: '1em' }}
-                      aria-label={t('spacePreview.shortcutLabel')}
+                    <SpaceIcon
+                      size={CONVERSATION_CARD_SPACING.spaceIconSize}
+                      style={{
+                        width: CONVERSATION_CARD_SPACING.spaceIconSize,
+                        height: CONVERSATION_CARD_SPACING.spaceIconSize,
+                      }}
                     />
-                  </Tooltip>
+                  </span>
+                  <span className="flex min-w-0 flex-1 items-start gap-1">
+                    <span className="sp-design-title" title={title}>
+                      {title}
+                    </span>
+                    <Tooltip
+                      content={t('spacePreview.shortcutLabel')}
+                      wrapperClassName="inline-flex h-[1lh] shrink-0 items-center"
+                    >
+                      <ArrowUpRight
+                        size="1em"
+                        style={{ width: '1em', height: '1em' }}
+                        aria-label={t('spacePreview.shortcutLabel')}
+                      />
+                    </Tooltip>
+                  </span>
                 </span>
                 {!unavailable ? (
-                  <span className="sp-design-summary">
-                    <SpaceShortcutSummary
-                      nodeCount={DEMO_NODE_COUNT}
-                      updatedAt={DEMO_UPDATED_AT}
+                  <span
+                    className="flex items-center gap-2"
+                    style={{ height: CONVERSATION_CARD_SPACING.footerHeight }}
+                  >
+                    <SpaceAgentActivity
+                      activity={[
+                        {
+                          nodeId: 'node-demo-1',
+                          threadId: 'demo-1',
+                          title: 'Research',
+                          status: 'running',
+                          agentBinding: { kind: 'internal' },
+                        },
+                        {
+                          nodeId: 'node-demo-2',
+                          threadId: 'demo-2',
+                          title: 'Review',
+                          status: 'approval',
+                          agentBinding: { kind: 'internal' },
+                        },
+                      ]}
                     />
+                    <NodeActivityTime updatedAt={DEMO_UPDATED_AT} />
                   </span>
                 ) : null}
               </span>
@@ -543,14 +582,16 @@ export default function SpacePreviewDesignPlaygroundPage() {
         <div>
           <span>01 / 使用同一套节点规范</span>
           <p>
-            3px 标准边界、共享圆角、28px / 500 卡片标题，以及 Note / Web / PDF
+            {NODE_BORDER_WIDTH}px 边界、{CONVERSATION_CARD_SPACING.padding}px
+            内边距、共享圆角、24px / 500 卡片标题，以及 Note / Web / PDF
             的表面与强调色。不增加阴影或新的边框颜色。
           </p>
         </div>
         <div>
           <span>02 / 入口，不是缩略画布</span>
           <p>
-            仅保留目标名称，以及节点数量和相对更新时间摘要。没有图标、封面、快照加载、内部缩放或大面积空白，也不显示
+            仅保留目标名称、Agent
+            活动和相对更新时间。没有图标、封面、快照加载、内部缩放或大面积空白，也不显示
             URL 和常驻跳转箭头。
           </p>
         </div>
@@ -577,13 +618,14 @@ export default function SpacePreviewDesignPlaygroundPage() {
           <dt>文字与高度</dt>
           <dd>
             短标题一行，长标题最多两行，超出省略；悬停标题查看全名。字号固定为
-            28，不随宽度缩放；高度跟随标题行数和摘要，不提供高度输入或上下拉伸。
+            24，不随宽度缩放；摘要固定一行，高度只随标题行数变化，不提供高度输入或上下拉伸。
           </dd>
           <dt>空间摘要</dt>
           <dd>
-            标题下方间隔 4px，以 16px / 400
-            弱化文字展示节点数量和相对更新时间；单行显示，过长省略，悬停可查看精确时间。样例固定为
-            24 个节点、两天前更新；目标失效时隐藏摘要，不请求真实空间数据。
+            标题下方间隔 4px，以 18px / 400 展示 Agent
+            活动和相对更新时间，始终共用一行，放不下的对话收进「+N」。悬停时间可查看精确时间。样例固定为
+            1 个运行中、1
+            个待审批、两天前更新；目标失效时隐藏摘要，不请求真实空间数据。
           </dd>
           <dt>手动宽度</dt>
           <dd>
