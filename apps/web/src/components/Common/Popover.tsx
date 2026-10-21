@@ -252,7 +252,8 @@ export const Popover: FC<PopoverProps> = ({
   );
   const onDismissRef = useRef(onDismiss);
   onDismissRef.current = onDismiss;
-  const canDismissOnEscape = Boolean(onDismiss) && dismissOnEscape;
+  const canDismiss = Boolean(onDismiss);
+  const canDismissOnEscape = canDismiss && dismissOnEscape;
   useLayoutEffect(() => {
     if (!contentElement) return;
     popoverRoots.set(escapeLayer, {
@@ -393,7 +394,7 @@ export const Popover: FC<PopoverProps> = ({
   // React descendants count as inside even when their portal roots are elsewhere.
   // Newly opened dialogs and explicit dismissal-ignore regions also stay inside.
   useEffect(() => {
-    if (!onDismiss) return;
+    if (!canDismiss) return;
 
     const dialogsAtOpen = new Set(document.querySelectorAll('[role="dialog"]'));
 
@@ -416,7 +417,7 @@ export const Popover: FC<PopoverProps> = ({
       ) {
         activeElement.blur();
       }
-      onDismiss('outside-press');
+      onDismissRef.current?.('outside-press');
     };
 
     // Delay listener to avoid catching the triggering event
@@ -429,7 +430,7 @@ export const Popover: FC<PopoverProps> = ({
       clearTimeout(timer);
       document.removeEventListener('pointerdown', handlePointerDown, true);
     };
-  }, [onDismiss, reference, escapeLayer]);
+  }, [canDismiss, reference, escapeLayer]);
 
   // Dismiss on Escape key
   useEffect(() => {

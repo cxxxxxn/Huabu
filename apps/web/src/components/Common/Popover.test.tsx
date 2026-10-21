@@ -267,6 +267,33 @@ describe('Popover', () => {
     expect(events).toEqual(['dismiss', 'canvas']);
   });
 
+  it('keeps outside dismissal listening when its callback changes', async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    const firstDismiss = vi.fn();
+    const latestDismiss = vi.fn();
+    const renderPanel = (onDismiss: typeof firstDismiss) => (
+      <Popover onDismiss={onDismiss}>
+        <Button>Popover content</Button>
+      </Popover>
+    );
+    await act(async () => root?.render(renderPanel(firstDismiss)));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    act(() => root?.render(renderPanel(latestDismiss)));
+    act(() =>
+      document.body.dispatchEvent(
+        new PointerEvent('pointerdown', { bubbles: true }),
+      ),
+    );
+
+    expect(firstDismiss).not.toHaveBeenCalled();
+    expect(latestDismiss).toHaveBeenCalledExactlyOnceWith('outside-press');
+  });
+
   it('runs initial focus once after the anchored panel becomes visible', async () => {
     container = document.createElement('div');
     document.body.appendChild(container);
