@@ -4,6 +4,7 @@
 export interface LocalAgentState {
   enabled: boolean;
   agentletId?: string;
+  device?: { agentletId: string; displayName: string; version: string };
   status:
     | 'disabled'
     | 'connecting'
@@ -28,6 +29,11 @@ export interface LocalAgentChild {
 }
 
 interface LocalAgentOptions {
+  readDevice(): Promise<{
+    agentletId: string;
+    displayName: string;
+    version: string;
+  }>;
   readCredential(): LocalAgentCredential | null;
   saveCredential(credential: LocalAgentCredential | null): void;
   requestCredential(): Promise<LocalAgentCredential>;
@@ -65,6 +71,8 @@ export class LocalAgentManager {
   async restore(): Promise<void> {
     this.busy = true;
     try {
+      this.publish({ device: await this.options.readDevice() });
+      if (this.quitting) return;
       this.credential = this.options.readCredential();
       if (!this.credential) return;
       this.publish({ enabled: true });

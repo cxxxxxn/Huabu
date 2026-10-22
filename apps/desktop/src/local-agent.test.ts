@@ -21,6 +21,11 @@ function setup(saved: LocalAgentCredential | null = null) {
   const children: Child[] = [];
   const credential = { token: 'secret', maxAgents: 3 };
   const options = {
+    readDevice: vi.fn(async () => ({
+      agentletId: 'this-device',
+      displayName: 'My computer: darwin arm64',
+      version: '1.0.0',
+    })),
     readCredential: vi.fn(() => saved),
     saveCredential: vi.fn(),
     requestCredential: vi.fn(async () => credential),
@@ -52,6 +57,11 @@ describe('desktop local Agent lifecycle', () => {
       enabled: false,
       status: 'disabled',
       error: null,
+      device: {
+        agentletId: 'this-device',
+        displayName: 'My computer: darwin arm64',
+        version: '1.0.0',
+      },
     });
     expect(options.requestCredential).not.toHaveBeenCalled();
     expect(options.start).not.toHaveBeenCalled();
@@ -160,6 +170,7 @@ describe('desktop local Agent lifecycle', () => {
       }),
     );
     const restoring = manager.restore();
+    await vi.waitFor(() => expect(options.start).toHaveBeenCalled());
     const stopping = manager.shutdown();
     complete(child);
     await Promise.all([restoring, stopping]);

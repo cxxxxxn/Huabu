@@ -346,6 +346,19 @@ function registerLocalAgent(origin: string): void {
     }
   };
   const manager = new LocalAgentManager({
+    readDevice: async () => {
+      const runtime = await loadRuntime();
+      const artifacts = runtime.resolveRuntimeArtifacts({
+        repoRoot: IS_DEV ? join(__dirname, '../../..') : undefined,
+        bundleDir,
+      });
+      if (!artifacts.daemonEntry) {
+        throw new Error(
+          'The bundled Agent runtime is missing. Rebuild or reinstall Huabu.',
+        );
+      }
+      return runtime.readDesktopDeviceInfo(artifacts.daemonEntry);
+    },
     readCredential: () => {
       const stored = getSecrets().get(key);
       if (!stored) return null;

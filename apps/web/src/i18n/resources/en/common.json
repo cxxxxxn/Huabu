@@ -173,6 +173,7 @@
     "builtInPiConfiguration": "Chat model",
     "addDevice": "Add device",
     "localAgentTitle": "Connect this device",
+    "localAgentThisDevice": "(This device)",
     "localAgentConnect": "Connect",
     "localAgentDisconnect": "Disconnect",
     "localAgentReconnect": "Reconnect",

@@ -180,6 +180,7 @@ interface ElectronUpdaterApi {
 export interface ElectronLocalAgentState {
   enabled: boolean;
   agentletId?: string;
+  device?: { agentletId: string; displayName: string; version: string };
   status:
     | 'disabled'
     | 'connecting'

@@ -79,6 +79,12 @@ export function ConnectedDevicesSetting() {
   const localDevice = connectedDevices.find(
     (device) => device.agentletId === state?.agentletId,
   );
+  const orderedDevices = localDevice
+    ? [
+        localDevice,
+        ...connectedDevices.filter((device) => device !== localDevice),
+      ]
+    : connectedDevices;
   const showStatus =
     !state || (state.status !== 'disabled' && state.status !== 'connected');
 
@@ -151,10 +157,42 @@ export function ConnectedDevicesSetting() {
 
   return (
     <>
-      {connectedDevices.map((device) => (
+      {api && !localDevice ? (
+        <SettingRow
+          title={
+            state?.device ? (
+              <>
+                {state.device.displayName}
+                <span className="text-fg-muted ml-1 font-normal">
+                  {t('settings.localAgentThisDevice')}
+                </span>
+              </>
+            ) : (
+              t('settings.localAgentTitle')
+            )
+          }
+          description={
+            state?.device
+              ? `v${state.device.version} · ${state.device.agentletId}`
+              : undefined
+          }
+        >
+          {controls}
+        </SettingRow>
+      ) : null}
+      {orderedDevices.map((device) => (
         <SettingRow
           key={device.agentletId}
-          title={device.displayName}
+          title={
+            <>
+              {device.displayName}
+              {device === localDevice ? (
+                <span className="text-fg-muted ml-1 font-normal">
+                  {t('settings.localAgentThisDevice')}
+                </span>
+              ) : null}
+            </>
+          }
           description={[
             t('settings.deviceProfileCount', { count: device.profileCount }),
             `v${device.version}`,
@@ -164,11 +202,6 @@ export function ConnectedDevicesSetting() {
           {device === localDevice ? controls : null}
         </SettingRow>
       ))}
-      {api && !localDevice ? (
-        <SettingRow title={t('settings.localAgentTitle')}>
-          {controls}
-        </SettingRow>
-      ) : null}
       {!api && connectedDevices.length === 0 ? (
         <SettingRow title={t('settings.noConnectedDevices')}>
           <span />

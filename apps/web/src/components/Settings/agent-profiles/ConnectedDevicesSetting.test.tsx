@@ -97,6 +97,33 @@ describe('connected device settings', () => {
     );
   });
 
+  it('shows the actual device name, version and ID before connecting', async () => {
+    await act(async () => root.render(<ConnectedDevicesSetting />));
+    await act(async () =>
+      onState?.({
+        enabled: false,
+        status: 'disabled',
+        error: null,
+        device: {
+          agentletId: 'this-device',
+          displayName: 'My computer: darwin arm64',
+          version: '2.3.4',
+        },
+      }),
+    );
+    const row = container.querySelector('.setting-row');
+    expect(row?.textContent).toContain('My computer: darwin arm64');
+    expect(row?.textContent).toContain('settings.localAgentThisDevice');
+    expect(row?.textContent).toContain('this-device');
+    expect(row?.querySelector('p + p')?.textContent).toBe(
+      'v2.3.4 · this-device',
+    );
+    expect(row?.querySelector('button')?.textContent).toBe(
+      'settings.localAgentConnect',
+    );
+    expect(api.setEnabled).not.toHaveBeenCalled();
+  });
+
   it('connects without a token input and updates independently from Settings actions', async () => {
     await act(async () => root.render(<ConnectedDevicesSetting />));
     expect(container.querySelector('input')).toBeNull();
@@ -149,7 +176,7 @@ describe('connected device settings', () => {
       connectedAt: '2026-01-01T00:00:00.000Z',
       profileCount: 2,
     };
-    connectedDevices = [device, { ...device, agentletId: 'another-device' }];
+    connectedDevices = [{ ...device, agentletId: 'another-device' }, device];
     await act(async () => root.render(<ConnectedDevicesSetting />));
     await act(async () =>
       onState?.({
@@ -163,6 +190,9 @@ describe('connected device settings', () => {
     expect(rows).toHaveLength(2);
     expect(container.textContent).not.toContain('settings.localAgentTitle');
     expect(rows[0].textContent).toContain('this-device');
+    expect(rows[0].textContent).toContain('settings.localAgentThisDevice');
+    expect(rows[1].textContent).not.toContain('settings.localAgentThisDevice');
+    expect(connectedDevices[0].agentletId).toBe('another-device');
     expect(rows[0].querySelector('p + p')?.textContent).toBe(
       'settings.deviceProfileCount · v1.0.0 · this-device',
     );
@@ -214,7 +244,7 @@ describe('connected device settings', () => {
     expect(container.querySelector('button')).toBeNull();
   });
 
-  it('places the connect-this-device entry after existing connected devices', async () => {
+  it('keeps the connect-this-device entry first before and after connecting', async () => {
     connectedDevices = [
       {
         agentletId: 'server-device',
@@ -227,12 +257,40 @@ describe('connected device settings', () => {
     await act(async () => root.render(<ConnectedDevicesSetting />));
     const rows = container.querySelectorAll('.setting-row');
     expect(rows).toHaveLength(2);
-    expect(rows[0].textContent).toContain('Server: linux x64');
-    expect(rows[0].querySelector('button')).toBeNull();
-    expect(rows[1].textContent).toContain('settings.localAgentTitle');
-    expect(rows[1].querySelector('button')?.textContent).toBe(
+    expect(rows[1].textContent).toContain('Server: linux x64');
+    expect(rows[1].querySelector('button')).toBeNull();
+    expect(rows[0].textContent).toContain('settings.localAgentTitle');
+    expect(rows[0].querySelector('button')?.textContent).toBe(
       'settings.localAgentConnect',
     );
     expect(container.querySelector('[role="status"]')).toBeNull();
+    connectedDevices = [
+      ...connectedDevices,
+      {
+        agentletId: 'this-device',
+        displayName: 'My computer',
+        version: '1.0.0',
+        connectedAt: '2026-01-01T00:00:00.000Z',
+        profileCount: 2,
+      },
+    ];
+    await act(async () =>
+      onState?.({
+        enabled: true,
+        status: 'connected',
+        error: null,
+        agentletId: 'this-device',
+      }),
+    );
+    const connectedRows = container.querySelectorAll('.setting-row');
+    expect(connectedRows).toHaveLength(2);
+    expect(connectedRows[0].textContent).toContain('My computer');
+    expect(connectedRows[0].textContent).toContain(
+      'settings.localAgentThisDevice',
+    );
+    expect(connectedRows[0].querySelector('button')?.textContent).toBe(
+      'settings.localAgentDisconnect',
+    );
+    expect(connectedRows[1].textContent).toContain('Server: linux x64');
   });
 });

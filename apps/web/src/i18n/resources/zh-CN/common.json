@@ -173,6 +173,7 @@
     "builtInPiConfiguration": "聊天模型",
     "addDevice": "添加设备",
     "localAgentTitle": "连接本设备",
+    "localAgentThisDevice": "（本设备）",
     "localAgentConnect": "连接",
     "localAgentDisconnect": "断开连接",
     "localAgentReconnect": "重新连接",

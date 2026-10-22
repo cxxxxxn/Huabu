@@ -1,9 +1,51 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir, hostname } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
-import { fetchDesktopAgentCredential } from '../src/desktop.js';
+import {
+  fetchDesktopAgentCredential,
+  readDesktopDeviceInfo,
+} from '../src/desktop.js';
+
+describe('desktop device information', () => {
+  it('reads identity from the runtime without starting a worker or requesting credentials', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'desktop-device-'));
+    try {
+      writeFileSync(join(dir, 'package.json'), '{"type":"module"}');
+      writeFileSync(
+        join(dir, 'device-info.js'),
+        'export const version = "2.3.4"; export function resolveDeviceIdentity() { return "stable-device-id"; }',
+      );
+      expect(await readDesktopDeviceInfo(join(dir, 'index.js'))).toEqual({
+        agentletId: 'stable-device-id',
+        displayName: `${hostname()}: ${process.platform} ${process.arch}`,
+        version: '2.3.4',
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it('rejects a runtime without version metadata', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'desktop-device-'));
+    try {
+      writeFileSync(join(dir, 'package.json'), '{"type":"module"}');
+      writeFileSync(
+        join(dir, 'device-info.js'),
+        'export function resolveDeviceIdentity() { return "stable-device-id"; }',
+      );
+      await expect(
+        readDesktopDeviceInfo(join(dir, 'index.js')),
+      ).rejects.toThrow('invalid device version');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('desktop device credential exchange', () => {
   it('uses the authenticated fetch implementation and never follows redirects', async () => {
