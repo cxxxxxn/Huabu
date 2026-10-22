@@ -22,11 +22,14 @@ const STATUS_KEYS = {
   error: 'settings.localAgentError',
 } as const;
 
-export function LocalAgentConnectionSetting() {
+export function ConnectedDevicesSetting() {
   const { t } = useTranslation();
   const bridge = getElectronBridge();
   const api = bridge?.isRemoteServer ? bridge.localAgent : undefined;
   const refresh = useAcpProfilesStore((state) => state.refresh);
+  const connectedDevices = useAcpProfilesStore(
+    (state) => state.connectedDevices,
+  );
   const [state, setState] = useState<ElectronLocalAgentState | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -56,7 +59,6 @@ export function LocalAgentConnectionSetting() {
     };
   }, [api, refresh]);
 
-  if (!api) return null;
   const busy = pending || state?.status === 'stopping';
   const needsRetry =
     state?.status === 'error' || state?.status === 'authorization-required';
@@ -64,6 +66,7 @@ export function LocalAgentConnectionSetting() {
     setPending(true);
     setError(null);
     try {
+      if (!api) throw new Error('Device connection requires the desktop app.');
       setState(await api.setEnabled(enabled));
       await refresh({ background: true });
     } catch (reason) {
@@ -73,13 +76,12 @@ export function LocalAgentConnectionSetting() {
     }
   };
   const message = error ?? state?.error;
+  const localDevice = connectedDevices.find(
+    (device) => device.agentletId === state?.agentletId,
+  );
 
-  return (
-    <SettingRow
-      title={t('settings.localAgentTitle')}
-      description={t('settings.localAgentDescription')}
-      layout="stacked"
-    >
+  const controls = api ? (
+    <>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <span role="status" className="text-fg-muted text-xs">
           {t(state ? STATUS_KEYS[state.status] : 'settings.loadingAgents')}
@@ -135,11 +137,41 @@ export function LocalAgentConnectionSetting() {
       {message ? (
         <p
           role="alert"
-          className="text-danger mt-2 text-xs [overflow-wrap:anywhere]"
+          className="text-danger mt-2 max-w-sm text-xs [overflow-wrap:anywhere]"
         >
           {message}
         </p>
       ) : null}
-    </SettingRow>
+    </>
+  ) : null;
+
+  return (
+    <>
+      {api && !localDevice ? (
+        <SettingRow title={t('settings.localAgentTitle')}>
+          {controls}
+        </SettingRow>
+      ) : null}
+      {connectedDevices.map((device) => (
+        <SettingRow
+          key={device.agentletId}
+          title={device.displayName}
+          description={[
+            t('settings.deviceProfileCount', { count: device.profileCount }),
+            device.agentletId,
+          ].join(' · ')}
+        >
+          <div className="flex flex-col gap-2">
+            <span className="text-fg-subtle text-xs">{device.version}</span>
+            {device === localDevice ? controls : null}
+          </div>
+        </SettingRow>
+      ))}
+      {!api && connectedDevices.length === 0 ? (
+        <SettingRow title={t('settings.noConnectedDevices')}>
+          <span />
+        </SettingRow>
+      ) : null}
+    </>
   );
 }

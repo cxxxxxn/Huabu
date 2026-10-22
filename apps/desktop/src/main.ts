@@ -464,16 +464,16 @@ function registerLocalAgent(origin: string): void {
         if (!parent) throw new Error('The main window is unavailable.');
         const response = await dialog.showMessageBox(parent, {
           type: 'warning',
-          title: enabled ? 'Connect local Agents' : 'Disconnect local Agents',
+          title: enabled ? 'Connect device' : 'Disconnect device',
           message: enabled
-            ? `Allow ${origin} to run Agents on this computer?`
-            : 'Disconnect local Agents and stop their running tasks?',
+            ? `Allow ${origin} to run commands and access files on this device?`
+            : 'Disconnect this device?',
           detail: enabled
-            ? 'Agents can run commands and access local files with your account permissions. The connection will resume when Huabu starts. Quit Huabu to stop the local worker.' +
+            ? 'Uses your account permissions. Reconnects when Huabu starts; quitting stops local tasks.' +
               (origin.startsWith('http:')
-                ? '\nWarning: this server uses unencrypted HTTP. Only continue on a trusted network.'
+                ? '\nUnencrypted HTTP. Continue only on a trusted network.'
                 : '')
-            : 'Running local Agent tasks will be interrupted. This device will not reconnect automatically until you enable it again.',
+            : 'Stops running tasks and disables automatic reconnection.',
           buttons: ['Cancel', enabled ? 'Connect' : 'Disconnect'],
           defaultId: 0,
           cancelId: 0,

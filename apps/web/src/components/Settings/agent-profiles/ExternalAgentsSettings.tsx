@@ -22,7 +22,7 @@ import { readAgentIcon, withAgentIcon } from '@/utils/agentIcon';
 
 import { AgentletHealthBanner } from './AgentletHealthBanner';
 import { AgentProfileEditor } from './AgentProfileEditor';
-import { LocalAgentConnectionSetting } from './LocalAgentConnectionSetting';
+import { ConnectedDevicesSetting } from './ConnectedDevicesSetting';
 import { PersistedAgentIconPicker } from './PersistedAgentIconPicker';
 import { ProfileFormFooterTarget } from './ProfileFormFooter';
 import { useDetectedClis } from './useDetectedClis';
@@ -367,31 +367,7 @@ export function ExternalAgentsSettings({
                 </Button>
               }
             >
-              <LocalAgentConnectionSetting />
-              {connectedDevices.length === 0 ? (
-                <SettingRow title={t('settings.noConnectedDevices')}>
-                  <span />
-                </SettingRow>
-              ) : (
-                connectedDevices.map((device) => (
-                  <SettingRow
-                    key={device.agentletId}
-                    title={device.displayName}
-                    description={[
-                      t('settings.deviceProfileCount', {
-                        count: device.profileCount,
-                      }),
-                      device.agentletId,
-                    ]
-                      .filter(Boolean)
-                      .join(' · ')}
-                  >
-                    <span className="text-fg-subtle text-xs">
-                      {device.version}
-                    </span>
-                  </SettingRow>
-                ))
-              )}
+              <ConnectedDevicesSetting />
             </SettingSection>
             <SettingSection
               title={t('settings.agentProfiles')}

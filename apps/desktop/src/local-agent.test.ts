@@ -61,8 +61,12 @@ describe('desktop local Agent lifecycle', () => {
     const { manager, options, children, credential } = setup();
     await manager.setEnabled(true);
     expect(options.saveCredential).toHaveBeenCalledWith(credential);
-    children[0].emit('message', { type: 'agentlet:ready' });
+    children[0].emit('message', {
+      type: 'agentlet:ready',
+      agentletId: 'this-device',
+    });
     expect(manager.getState().status).toBe('connected');
+    expect(manager.getState().agentletId).toBe('this-device');
     expect(JSON.stringify(manager.getState())).not.toContain('secret');
     await manager.setEnabled(false);
     expect(children[0].postMessage).toHaveBeenCalledWith({
@@ -70,7 +74,28 @@ describe('desktop local Agent lifecycle', () => {
     });
     expect(options.saveCredential).toHaveBeenLastCalledWith(null);
     expect(manager.getState().status).toBe('disabled');
+    expect(manager.getState().agentletId).toBeUndefined();
     expect(children[0].kill).not.toHaveBeenCalled();
+  });
+
+  it('keeps the device ID while reconnecting and rejects readiness without an ID', async () => {
+    const { manager, children } = setup();
+    await manager.setEnabled(true);
+    children[0].emit('message', { type: 'agentlet:ready', agentletId: 123 });
+    expect(manager.getState()).toMatchObject({
+      status: 'error',
+      error: 'The local worker did not report its device ID.',
+    });
+    children[0].emit('message', {
+      type: 'agentlet:ready',
+      agentletId: 'this-device',
+    });
+    children[0].emit('message', { type: 'agentlet:reconnecting' });
+    expect(manager.getState()).toMatchObject({
+      status: 'reconnecting',
+      agentletId: 'this-device',
+    });
+    await manager.shutdown();
   });
 
   it('restores saved credentials without logging in or revealing the token to the UI', async () => {

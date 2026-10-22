@@ -3,6 +3,7 @@
 
 export interface LocalAgentState {
   enabled: boolean;
+  agentletId?: string;
   status:
     | 'disabled'
     | 'connecting'
@@ -88,10 +89,18 @@ export class LocalAgentManager {
         this.credential = null;
         this.publish({ enabled: false });
         await this.stop();
-        this.publish({ status: 'disabled', error: null });
+        this.publish({
+          status: 'disabled',
+          error: null,
+          agentletId: undefined,
+        });
       } else {
         await this.stop();
-        this.publish({ status: 'connecting', error: null });
+        this.publish({
+          status: 'connecting',
+          error: null,
+          agentletId: undefined,
+        });
         this.connectionRejected = false;
         const credential = await this.options.requestCredential();
         if (this.quitting) return this.getState();
@@ -144,7 +153,21 @@ export class LocalAgentManager {
         return;
       const event = 'type' in message ? message.type : undefined;
       if (event === 'agentlet:ready') {
-        this.publish({ status: 'connected', error: null });
+        if (
+          !('agentletId' in message) ||
+          typeof message.agentletId !== 'string' ||
+          !message.agentletId.trim()
+        ) {
+          this.fail(
+            new Error('The local worker did not report its device ID.'),
+          );
+          return;
+        }
+        this.publish({
+          status: 'connected',
+          error: null,
+          agentletId: message.agentletId,
+        });
       } else if (event === 'agentlet:reconnecting') {
         this.publish({ status: 'reconnecting', error: null });
       } else if (event === 'agentlet:authorization-required') {
