@@ -149,7 +149,7 @@ describe('Space shortcut design playground', () => {
     expect(
       container.querySelector('button[aria-label="宽度设置"]'),
     ).not.toBeNull();
-    expect(shell().style.width).toBe('360px');
+    expect(shell().style.width).toBe('400px');
     expect(container.textContent).not.toContain('重试快照');
     expect(container.querySelectorAll('.nt-toolbar')).toHaveLength(1);
     expect(entryButton().disabled).toBe(false);
@@ -161,7 +161,7 @@ describe('Space shortcut design playground', () => {
     expect(document.querySelector('[aria-label="适应内容宽度"]')).toBeNull();
     await setWidthInput('320');
     expect(shell().style.width).toBe('320px');
-    expect(shell('primary').style.width).toBe('360px');
+    expect(shell('primary').style.width).toBe('400px');
     await choose('测试长标题');
     expect(shell().style.width).toBe('320px');
     expect(document.querySelector('input[aria-label*="高度"]')).toBeNull();
@@ -180,11 +180,11 @@ describe('Space shortcut design playground', () => {
       card().querySelector('.sp-design-copy .sp-design-title'),
     ).not.toBeNull();
     await choose('测试短标题');
-    expect(shell().style.width).toBe('360px');
+    expect(shell().style.width).toBe('400px');
     expect(summaries[0].textContent).toBe('2d ago');
     await choose('空间失效');
     expect(container.querySelector('[data-space-shortcut-summary]')).toBeNull();
-    expect(shell().style.width).toBe('360px');
+    expect(shell().style.width).toBe('400px');
     await choose('正常');
     expect(
       container.querySelectorAll('[data-space-shortcut-summary]'),
@@ -246,7 +246,7 @@ describe('Space shortcut design playground', () => {
       '宽度持久化',
     );
     await choose('重置样例');
-    expect(shell().style.width).toBe('360px');
+    expect(shell().style.width).toBe('400px');
   });
 
   it('uses production boundary, radius, spacing, and typography values', async () => {
