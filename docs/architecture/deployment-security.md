@@ -28,6 +28,8 @@ Prompt debugging is a separate local retention surface: when enabled, it writes 
 
 OCR settings validate HTTPS resource-root endpoints against the Azure public-cloud `cognitiveservices.azure.com` and regional `api.cognitive.microsoft.com` host forms, excluding arbitrary gateways, IP literals, non-default ports, and sovereign-cloud endpoints. The adapter applies the same validation to effective stored/environment configuration before sending a key and rejects redirects. The endpoint and key overrides are persisted as one encrypted SecretStore record with serialized updates, avoiding the partial-write state where a replacement key could be sent to a previous endpoint. All settings mutations require writable secure storage; read-only deployments may still use environment configuration. See [credential storage](./credential-storage.md) for migration and fallback semantics.
 
+Owner-only `POST /api/acp/connection-credentials` is a second deliberate reveal boundary for the optional remote desktop local-Agent connection. It validates an empty JSON object and returns the same existing shared token plus the configured process limit with `Cache-Control: no-store` and `Pragma: no-cache`; it does not mint credentials or expand their privileges. Electron main requests it only for its configured Server through the authenticated network session, without redirects, after native local-execution consent. The renderer receives only connection state. Remote mode's separate device vault does not expose the local Server credential bridge or native filesystem picker. Explicit no-login deployments retain their existing trusted-network owner boundary; HTTPS alone does not add owner authentication.
+
 ## Bind and authentication policy
 
 ### Automatic initialization and setup

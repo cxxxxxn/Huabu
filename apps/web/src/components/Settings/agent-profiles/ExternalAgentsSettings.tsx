@@ -22,6 +22,7 @@ import { readAgentIcon, withAgentIcon } from '@/utils/agentIcon';
 
 import { AgentletHealthBanner } from './AgentletHealthBanner';
 import { AgentProfileEditor } from './AgentProfileEditor';
+import { LocalAgentConnectionSetting } from './LocalAgentConnectionSetting';
 import { PersistedAgentIconPicker } from './PersistedAgentIconPicker';
 import { ProfileFormFooterTarget } from './ProfileFormFooter';
 import { useDetectedClis } from './useDetectedClis';
@@ -366,6 +367,7 @@ export function ExternalAgentsSettings({
                 </Button>
               }
             >
+              <LocalAgentConnectionSetting />
               {connectedDevices.length === 0 ? (
                 <SettingRow title={t('settings.noConnectedDevices')}>
                   <span />
