@@ -54,8 +54,8 @@ function handshake(): void {
   })), false)
 }
 
-async function startDaemon(): Promise<Logger> {
-  const logger = new Logger('error')
+async function startDaemon(onEntry?: ConstructorParameters<typeof Logger>[2]): Promise<Logger> {
+  const logger = new Logger('error', undefined, onEntry)
   vi.spyOn(logger, 'error').mockImplementation(() => undefined)
   const daemon = new Agentlet({
     server: 'ws://127.0.0.1:3001/bridge', token: 'test-token',
@@ -88,6 +88,20 @@ afterEach(async () => {
 })
 
 describe('control reconnect lifecycle', () => {
+  it('reports the device identity rather than the server session ID on readiness', async () => {
+    const onEntry = vi.fn()
+    await startDaemon(onEntry)
+    const socket = currentSocket()
+    socket.readyState = 1
+    socket.emit('open')
+    socket.emit('message', Buffer.from(JSON.stringify({
+      jsonrpc: '2.0', id: 1, result: { sessionId: 'control-session' },
+    })), false)
+    expect(onEntry).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'daemon_ready', agentletId: 'machine-a', daemonId: 'control-session',
+    }))
+  })
+
   it('uses exact exponential delays capped at 30 seconds and resets after a successful handshake', async () => {
     await startDaemon()
     handshake()

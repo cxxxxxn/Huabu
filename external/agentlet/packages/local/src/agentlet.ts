@@ -255,7 +255,7 @@ export class Agentlet {
         this.handshakeComplete = true
         this.controlHealth?.handshakeComplete()
         this.reconnectAttempt = 0
-        this.logger.info('daemon_ready', { daemonId: result.sessionId, agents: this.agents.size })
+        this.logger.info('daemon_ready', { daemonId: result.sessionId, agentletId: this.daemonId, agents: this.agents.size })
         return
       }
     }

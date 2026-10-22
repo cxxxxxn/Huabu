@@ -23,7 +23,10 @@ const logger = new Logger(options.logLevel, fileWriter, (entry) => {
     : entry.event === 'reconnecting' ? 'agentlet:reconnecting'
       : entry.event === 'authentication_failed' ? 'agentlet:authorization-required'
         : entry.event === 'handshake_failed' ? 'agentlet:rejected' : null
-  if (type) parentPort?.postMessage({ type })
+  if (type) parentPort?.postMessage({
+    type,
+    ...(type === 'agentlet:ready' ? { agentletId: entry.agentletId } : {}),
+  })
 })
 const agentlet = new Agentlet(options, logger)
 
