@@ -171,6 +171,7 @@ it('integrates the existing title as the final crumb without management controls
       ),
     );
     const nav = host.querySelector('nav');
+    expect(nav?.classList.contains('text-[15px]')).toBe(true);
     expect(nav?.querySelector('a[href="/canvas/root"]')?.textContent).toBe(
       'Root',
     );
