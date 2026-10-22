@@ -26,7 +26,7 @@ import {
   resolvePasteClipboard,
   resolveSelectNodes,
 } from './resolvers';
-import { resolveSetQuestionCardScale } from './resolvers/resolveSetQuestionCardScale';
+import { resolveSetCardScale } from './resolvers/resolveSetCardScale';
 import {
   computeNodeEditDiff,
   extractNodeRef,
@@ -198,11 +198,11 @@ export type CanvasUiIntent =
       targetNodeId: string;
       targetContentAfterInsert: string;
     }
-  | { type: 'DELETE_NODES'; nodeIds: string[] }
+  | { type: 'DELETE_NODES'; nodeIds: string[]; edgeIds?: string[] }
   | { type: 'UPDATE_NODE_DATA'; nodeId: string; patch: Record<string, unknown> }
   | {
       /** Absolute percentage of QUESTION_NODE_DEFAULT_FONT_SIZE, in [10, 1000]. */
-      type: 'SET_QUESTION_CARD_SCALE';
+      type: 'SET_CARD_SCALE';
       nodeId: string;
       percent: number;
     }
@@ -410,8 +410,8 @@ export function resolveUiIntent(
       return resolveDeleteNodes(intent, ui);
     case 'UPDATE_NODE_DATA':
       return resolveUpdateNodeData(intent, ui);
-    case 'SET_QUESTION_CARD_SCALE':
-      return resolveSetQuestionCardScale(intent, ui);
+    case 'SET_CARD_SCALE':
+      return resolveSetCardScale(intent, ui);
     case 'CONNECT_EDGE':
       return resolveConnectEdge(intent, ui);
     case 'DISCONNECT_EDGE':
@@ -486,25 +486,34 @@ function resolveDeleteNodes(
   ui: UiResolverState,
 ): UiIntentResolution {
   const toDelete = ui.nodes.filter((n) => intent.nodeIds.includes(n.id));
+  const disconnected = intent.edgeIds?.length
+    ? resolveDisconnectEdge(
+        { type: 'DISCONNECT_EDGE', edgeIds: intent.edgeIds },
+        ui,
+      )
+    : { commands: [], trace: [] };
   return {
     commands: [
       {
         type: 'DELETE_NODES',
         nodeIds: intent.nodeIds as CanvasNodeId[],
       },
+      ...disconnected.commands,
     ],
-    trace:
-      toDelete.length > 0
+    trace: [
+      ...(toDelete.length > 0
         ? [
             {
-              action: 'nodes_deleted',
+              action: 'nodes_deleted' as const,
               nodes: toDelete.map((n) => ({
                 ...extractNodeRef(n),
                 snippet: extractSnippet(n),
               })),
             },
           ]
-        : [],
+        : []),
+      ...disconnected.trace,
+    ],
   };
 }
 

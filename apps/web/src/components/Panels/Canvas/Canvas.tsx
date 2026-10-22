@@ -23,8 +23,14 @@ import React, {
 } from 'react';
 import { createPortal } from 'react-dom';
 import '@xyflow/react/dist/style.css';
+import './CanvasEntrance.css';
 
-import { edgeZIndex, indexById } from '@huabu/shared/canvas-engine';
+import { createId } from '@huabu/shared';
+import {
+  frameNodesInRect as collectFrameRect,
+  edgeZIndex,
+  indexById,
+} from '@huabu/shared/canvas-engine';
 
 import { resolveArtifactUrl } from '@/api/artifact';
 import { cn } from '@/components/Common/cn';
@@ -54,6 +60,7 @@ import {
   stopHeightPrewarm,
 } from '@/components/Nodes/shared/height/measure/prewarmQueue';
 import { TextNode } from '@/components/Nodes/text/TextNode';
+import { requestCreateChildSpace } from '@/components/Space/createChildSpaceAction';
 import {
   uploadFileToNodeInput,
   urlToNodeInput,
@@ -80,8 +87,10 @@ import {
 import { useSketchHoverRouting } from '@/hooks/useSketchHoverRouting';
 import { useSketchStrokeMove } from '@/hooks/useSketchStrokeMove';
 import { openPreviewNode } from '@/store/previewWorkspace/actions';
+import { useWorkspaceStore } from '@/store/workspaceStore';
 import { isMac } from '@/utils/platform';
 import { getEdgeIdsBetweenSelectedNodes } from '@/utils/selection';
+import { isVisibleWorldNode } from '@/utils/spaceHierarchy';
 
 import { applyNodeGeometryPreviews } from './applyNodeGeometryPreview';
 import { CanvasGrid } from './CanvasGrid';
@@ -374,6 +383,25 @@ const CanvasContent: React.FC<CanvasProps> = ({
   const nodes = useCanvasStore((state) => state.nodes);
   const edges = useCanvasStore((state) => state.edges);
   const canvasId = useCanvasStore((state) => state.canvasId);
+  const worldId = useWorkspaceStore((state) => state.worldCanvasId);
+  const spaceSummaries = useWorkspaceStore((state) => state.spaceSummaries);
+  const spaceTitlesStatus = useWorkspaceStore(
+    (state) => state.spaceTitlesStatus,
+  );
+  const worldHiddenIds = useMemo(
+    () =>
+      new Set(
+        canvasId === worldId
+          ? nodes
+              .filter(
+                (node) =>
+                  !isVisibleWorldNode(node, canvasId, worldId, spaceSummaries),
+              )
+              .map((node) => node.id)
+          : [],
+      ),
+    [canvasId, worldId, nodes, spaceSummaries],
+  );
   const minimapEnabled = useCanvasStore((state) => state.minimapEnabled);
   const pendingNodeType = useToolStore((state) => state.pendingNodeType);
   // Whether a stroke-level sketch selection is active — suppresses node
@@ -461,7 +489,13 @@ const CanvasContent: React.FC<CanvasProps> = ({
     defaultViewport,
     fitInitialViewport,
     isPending: isInitialViewportPending,
-  } = useInitialCanvasViewport();
+  } = useInitialCanvasViewport(
+    canvasId !== worldId || spaceTitlesStatus === 'ready'
+      ? 'ready'
+      : spaceTitlesStatus === 'error'
+        ? 'error'
+        : 'pending',
+  );
   useRevealCreatedNodes(isInitialViewportPending);
 
   const isNotMouse = useIsNotMouse();
@@ -639,10 +673,30 @@ const CanvasContent: React.FC<CanvasProps> = ({
   );
   const { pointerHandlers: framePointerHandlers, previewRect: frameDragRect } =
     useFrameDragToCreate({
-      active: pendingNodeType === 'frame',
+      active: pendingNodeType === 'frame' || pendingNodeType === 'childSpace',
+      scopeKey: `${canvasId}:${pendingNodeType}`,
       wrapperRef,
       rfInstanceRef,
-      onCreate: frameNodesInRect,
+      onCreate: (rect) => {
+        if (pendingNodeType === 'frame') {
+          frameNodesInRect(rect);
+          return;
+        }
+        const frameId = createId('node');
+        const grouped = collectFrameRect(
+          useCanvasStore.getState().nodes,
+          rect,
+          frameId,
+        );
+        const nodeIds = grouped.nodes
+          .filter((node) => node.parentId === frameId)
+          .map((node) => node.id);
+        requestCreateChildSpace({ x: rect.x, y: rect.y }, nodeIds);
+      },
+      onClick:
+        pendingNodeType === 'childSpace'
+          ? (position) => requestCreateChildSpace(position, [])
+          : undefined,
       onEnd: exitPendingNodeType,
     });
 
@@ -863,6 +917,7 @@ const CanvasContent: React.FC<CanvasProps> = ({
       if (
         !pendingNodeType ||
         pendingNodeType === 'frame' ||
+        pendingNodeType === 'childSpace' ||
         pendingNodeType === 'sketch'
       ) {
         return false;
@@ -949,7 +1004,8 @@ const CanvasContent: React.FC<CanvasProps> = ({
             frameHandlersRef.current.onPointerCancel(toReact(e)),
         }),
         (event, ctx) =>
-          useToolStore.getState().pendingNodeType === 'frame' &&
+          (useToolStore.getState().pendingNodeType === 'frame' ||
+            useToolStore.getState().pendingNodeType === 'childSpace') &&
           event.button === 0 &&
           event.isPrimary &&
           !isPanelTarget(event.target as Element | null) &&
@@ -1116,7 +1172,8 @@ const CanvasContent: React.FC<CanvasProps> = ({
         pendingNodeType === 'note' && 'canvas-pending-note',
         pendingNodeType === 'text' && 'canvas-pending-text',
         pendingNodeType === 'frame' && 'canvas-pending-frame',
-        pendingNodeType === 'sketch' && 'cursor-crosshair',
+        (pendingNodeType === 'sketch' || pendingNodeType === 'childSpace') &&
+          'cursor-crosshair',
         pendingNodeType === 'audio' && 'canvas-pending-audio',
         pendingNodeType === 'question' && 'canvas-pending-question',
         tool === 'lasso' && !isStrokeMoving && 'canvas-lasso cursor-crosshair',
@@ -1310,13 +1367,25 @@ const CanvasContent: React.FC<CanvasProps> = ({
       <FrameZoomProvider>
         <ReactFlow
           className={cn(
-            isInitialViewportPending && 'invisible',
+            isInitialViewportPending ? 'invisible' : 'space-canvas-enter',
             isStructuredReflowing && 'structured-reflow',
           )}
           defaultViewport={defaultViewport}
           deleteKeyCode={null}
-          nodes={displayNodes}
-          edges={displayEdges}
+          nodes={
+            worldHiddenIds.size
+              ? displayNodes.filter((node) => !worldHiddenIds.has(node.id))
+              : displayNodes
+          }
+          edges={
+            worldHiddenIds.size
+              ? displayEdges.filter(
+                  (edge) =>
+                    !worldHiddenIds.has(edge.source) &&
+                    !worldHiddenIds.has(edge.target),
+                )
+              : displayEdges
+          }
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}

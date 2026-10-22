@@ -205,8 +205,8 @@ describe('intrinsicToLayoutHeight', () => {
   });
 
   it('adds shell chrome without scaling the measured Note height', () => {
-    expect(intrinsicToLayoutHeight(200, 'note', 400)).toBe(208);
-    expect(intrinsicToLayoutHeight(200, 'note', 800)).toBe(208);
+    expect(intrinsicToLayoutHeight(200, 'note', 400)).toBe(204);
+    expect(intrinsicToLayoutHeight(200, 'note', 800)).toBe(204);
   });
 
   it('keeps the Note minimum in canvas units at every width', () => {
@@ -221,7 +221,7 @@ describe('intrinsicToLayoutHeight', () => {
 
   it('does not shrink Note typography for narrow nodes', () => {
     expect(contentScaleFor(getHeightPolicy('note'), 100)).toBe(1);
-    expect(intrinsicToLayoutHeight(200, 'note', 100)).toBe(208);
+    expect(intrinsicToLayoutHeight(200, 'note', 100)).toBe(204);
   });
 
   it('floors the scale for manual types, whose box the user owns', () => {
@@ -238,7 +238,7 @@ describe('intrinsicToLayoutHeight', () => {
       expect(scale).toBe(1);
       expect(
         autoHeightContentWidth(node({ type: 'note', style: { width } })),
-      ).toBe(width - 6);
+      ).toBe(width - 4);
     }
   });
 
@@ -251,14 +251,14 @@ describe('intrinsicToLayoutHeight', () => {
           measured: { width: 400 },
         }),
       ),
-    ).toBe(794.25);
+    ).toBe(796.25);
     expect(
       autoHeightContentWidth(node({ type: 'note', measured: { width: 600 } })),
-    ).toBe(594);
-    expect(autoHeightContentWidth(node({ type: 'note' }))).toBe(394);
+    ).toBe(596);
+    expect(autoHeightContentWidth(node({ type: 'note' }))).toBe(396);
     expect(
       autoHeightContentWidth(node({ type: 'note', style: { width: NaN } })),
-    ).toBe(394);
+    ).toBe(396);
     expect(
       autoHeightContentWidth(node({ type: 'note', style: { width: 0 } })),
     ).toBe(1);
@@ -435,8 +435,8 @@ describe('materializeAutoHeight', () => {
         },
       }),
     );
-    // 260 content plus 6px shell chrome, quantized.
-    expect((result.style as { height: number }).height).toBe(268);
+    // 260 content plus 4px shell chrome, quantized.
+    expect((result.style as { height: number }).height).toBe(264);
   });
 
   it('materializes a stale hint too — a seed beats a collapse', () => {
@@ -450,7 +450,7 @@ describe('materializeAutoHeight', () => {
         },
       }),
     );
-    expect((result.style as { height: number }).height).toBe(268);
+    expect((result.style as { height: number }).height).toBe(264);
   });
 
   it('leaves fixed nodes alone', () => {
@@ -492,7 +492,7 @@ describe('materializeAutoHeight', () => {
         },
       }),
     );
-    expect(result.measured?.height).toBe(268);
+    expect(result.measured?.height).toBe(264);
     expect(result.measured?.width).toBe(400);
   });
 

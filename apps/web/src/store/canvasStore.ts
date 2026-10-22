@@ -32,6 +32,7 @@ import {
   autoHeightContentWidth,
   preserveAgentNodeOwnedData,
   projectAgentNodeEditableData,
+  replayAgentNodeEditableData,
   stripTransientNodeFields,
   applyDeltas,
   applySharedPostEffects,
@@ -92,8 +93,14 @@ import {
   setSnapStructuredSuppressed,
   writeDragDecision,
 } from '@/handler/snap/snapSession';
+import {
+  changedSpaceEntries,
+  isVisibleWorldNode,
+  REQUEST_DELETE_SPACE,
+} from '@/utils/spaceHierarchy';
 
 import { canvasHistoryManager } from './canvasHistoryManager';
+import { useWorkspaceStore } from './workspaceStore';
 import {
   getCanvas,
   postCanvasExecute,
@@ -577,7 +584,7 @@ type RFState = {
     targetNodeId: string | null;
     dropPoint: { x: number; y: number };
   }) => void;
-  deleteNodes: (nodeIds: string[]) => void;
+  deleteNodes: (nodeIds: string[], edgeIds?: string[]) => void;
   disconnectEdges: (edgeIds: string[]) => void;
   setNodeGeometry: (
     items: Array<{
@@ -915,6 +922,35 @@ type RFState = {
    */
   flushCanvasEvents: () => Promise<void>;
 };
+
+function canChangeSpaceEntries(
+  canvasId: string,
+  previous: Node[],
+  next: Node[],
+): boolean {
+  const workspace = useWorkspaceStore.getState();
+  for (const node of changedSpaceEntries(previous, next)) {
+    const target = node.data.targetCanvasId;
+    if (typeof target !== 'string') continue;
+    const summary = workspace.spaceSummaries[target];
+    if (
+      workspace.spaceTitlesStatus !== 'ready' ||
+      (!summary && Object.hasOwn(workspace.spaceTitles, target))
+    ) {
+      toast(t('spaceHierarchy.ownershipUnavailable'), { tone: 'warning' });
+      void workspace.refreshSpaceTitles();
+      return false;
+    }
+    if (
+      summary?.parentSpaceId === canvasId &&
+      summary.parentEntryNodeId === node.id
+    ) {
+      toast(t('spaceHierarchy.entryProtected'), { tone: 'warning' });
+      return false;
+    }
+  }
+  return true;
+}
 
 /**
  * Module-scoped structure-save scheduler. Owns the debounce timer
@@ -1577,6 +1613,10 @@ const useCanvasStore = create<RFState>()(
 
       // Only commit if at least one command was applied.
       if (!commandResults.some((r) => r.applied)) return;
+      if (
+        !canChangeSpaceEntries(state.canvasId, state.nodes, writeResult.nodes)
+      )
+        return;
 
       const createdQuestions = writeResult.nodes.filter(
         (node) =>
@@ -1790,6 +1830,35 @@ const useCanvasStore = create<RFState>()(
       const localNodesById = new Map(
         get().nodes.map((node) => [node.id, node]),
       );
+      if (agentNodeProjection) {
+        deltas = deltas.map((delta) => {
+          if (
+            delta.type !== 'REPLACE_NODE' ||
+            delta.prev.type !== 'question' ||
+            delta.next.type !== 'question'
+          )
+            return delta;
+          const live = localNodesById.get(delta.next.id);
+          if (live?.type !== 'question') return delta;
+          // Lifecycle/title projections carry stale geometry in coarse deltas.
+          // Apply their data effects without replacing local resize/undo state.
+          return {
+            ...delta,
+            prev: live,
+            next: {
+              ...live,
+              data: preserveAgentNodeOwnedData(
+                replayAgentNodeEditableData(
+                  live.data,
+                  delta.prev.data,
+                  delta.next.data,
+                ),
+                delta.next.data,
+              ),
+            },
+          };
+        });
+      }
       const safeDeltas =
         dirty.size === 0
           ? deltas
@@ -1900,6 +1969,17 @@ const useCanvasStore = create<RFState>()(
       const prevNodes = get().nodes;
       const prevEdges = get().edges;
       const canvasId = get().canvasId;
+      const insertedSpaceTargets = safeDeltas.flatMap((delta) =>
+        delta.type === 'INSERT_NODE' &&
+        delta.node.type === 'spacePreview' &&
+        typeof delta.node.data.targetCanvasId === 'string'
+          ? [delta.node.data.targetCanvasId]
+          : [],
+      );
+      if (insertedSpaceTargets.length)
+        void useWorkspaceStore
+          .getState()
+          .refreshSpaceTitles(insertedSpaceTargets);
       if (agentNodeProjection) {
         canvasHistoryManager.rebaseAgentInitialContent(safeDeltas);
       } else if (
@@ -2018,6 +2098,48 @@ const useCanvasStore = create<RFState>()(
 
     /** Resolve a web-only UiIntent and execute the resulting commands. */
     dispatchUiIntent: (intent) => {
+      if (intent.type === 'DELETE_NODES') {
+        const state = get();
+        const summaries = useWorkspaceStore.getState().spaceSummaries;
+        const affected = new Set(intent.nodeIds);
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const node of state.nodes) {
+            if (
+              node.parentId &&
+              affected.has(node.parentId) &&
+              !affected.has(node.id)
+            ) {
+              affected.add(node.id);
+              changed = true;
+            }
+          }
+        }
+        const owned = Object.entries(summaries).filter(
+          ([, summary]) =>
+            summary?.parentSpaceId === state.canvasId &&
+            summary.parentEntryNodeId &&
+            affected.has(summary.parentEntryNodeId),
+        );
+        if (owned.length) {
+          const [childId, child] = owned[0]!;
+          if (
+            owned.length === 1 &&
+            intent.nodeIds.length === 1 &&
+            intent.nodeIds[0] === child?.parentEntryNodeId
+          ) {
+            window.dispatchEvent(
+              new CustomEvent(REQUEST_DELETE_SPACE, { detail: childId }),
+            );
+          } else {
+            toast(t('spaceHierarchy.deleteEntrySeparately'), {
+              tone: 'warning',
+            });
+          }
+          return;
+        }
+      }
       const { rfInstance, canvasWrapper, viewport } = get();
       // Fullscreen Preview unmounts Canvas; retain a nearby placement until
       // the queued reveal can run against the restored, unobscured viewport.
@@ -3789,8 +3911,8 @@ const useCanvasStore = create<RFState>()(
       }
     },
 
-    deleteNodes: (nodeIds) => {
-      get().dispatchUiIntent({ type: 'DELETE_NODES', nodeIds });
+    deleteNodes: (nodeIds, edgeIds) => {
+      get().dispatchUiIntent({ type: 'DELETE_NODES', nodeIds, edgeIds });
     },
 
     disconnectEdges: (edgeIds) => {
@@ -3944,6 +4066,23 @@ const useCanvasStore = create<RFState>()(
     },
 
     selectNodes: (ids, multiSelect = false) => {
+      const state = get();
+      const workspace = useWorkspaceStore.getState();
+      if (state.canvasId === workspace.worldCanvasId) {
+        const visible = new Set(
+          state.nodes
+            .filter((node) =>
+              isVisibleWorldNode(
+                node,
+                state.canvasId,
+                workspace.worldCanvasId,
+                workspace.spaceSummaries,
+              ),
+            )
+            .map((node) => node.id),
+        );
+        ids = ids.filter((id) => visible.has(id));
+      }
       get().dispatchUiIntent({
         type: 'SELECT_NODES',
         nodeIds: ids,
@@ -4390,7 +4529,9 @@ const useCanvasStore = create<RFState>()(
 
     undo: async () => {
       const { nodes, edges, canvasId } = get();
-      const snapshot = canvasHistoryManager.undo(nodes, edges);
+      const snapshot = canvasHistoryManager.undo(nodes, edges, (candidate) =>
+        canChangeSpaceEntries(canvasId, nodes, candidate.nodes),
+      );
       if (!snapshot) return;
       // Undo swaps in authoritative geometry, so any retained stroke
       // selection / polygon may no longer describe it (e.g. the classic
@@ -4427,7 +4568,9 @@ const useCanvasStore = create<RFState>()(
 
     redo: async () => {
       const { nodes, edges, canvasId } = get();
-      const snapshot = canvasHistoryManager.redo(nodes, edges);
+      const snapshot = canvasHistoryManager.redo(nodes, edges, (candidate) =>
+        canChangeSpaceEntries(canvasId, nodes, candidate.nodes),
+      );
       if (!snapshot) return;
       // See `undo`: a redo is the same authoritative geometry swap, so
       // discard the floating stroke selection for the same reason.

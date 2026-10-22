@@ -463,8 +463,8 @@ describe('World preview reconciliation', () => {
         position: node.position,
       })),
     ).toEqual([
-      { target: 'canvas-a', position: { x: 560, y: 0 } },
-      { target: 'canvas-b', position: { x: 1120, y: 0 } },
+      { target: 'canvas-a', position: { x: 440, y: 0 } },
+      { target: 'canvas-b', position: { x: 880, y: 0 } },
     ]);
     const first = await space('canvas-world').read();
     await reconcileWorldPreviews();
@@ -514,7 +514,7 @@ describe('World preview reconciliation', () => {
       expect(
         current.find((node) => node.data.targetCanvasId === 'canvas-b')
           ?.position,
-      ).toEqual({ x: 0, y: 218 });
+      ).toEqual({ x: 0, y: 232 });
     },
   );
 
@@ -534,7 +534,7 @@ describe('World preview reconciliation', () => {
     expect(
       (await previews()).find((node) => node.data.targetCanvasId === 'canvas-a')
         ?.position,
-    ).toEqual({ x: 0, y: 654 });
+    ).toEqual({ x: 0, y: 696 });
   });
 
   it('ignores legacy topology on read without rewriting disk and never reuses its identity or geometry', async () => {

@@ -800,12 +800,11 @@ describe('runAgent durable acceptance failures', () => {
 
   it('does not accept a turn when Tier-1 persistence fails', async () => {
     const failure = new Error('turn-start write failed');
-    vi.spyOn(
-      conversationEventLogStore,
-      'appendTurnStart',
-    ).mockImplementationOnce(() => {
-      throw failure;
-    });
+    const appendTurnStart = vi
+      .spyOn(conversationEventLogStore, 'appendTurnStart')
+      .mockImplementationOnce(() => {
+        throw failure;
+      });
     const threadId = 'acceptance-write-failure';
     const onTurnStarted = vi.fn();
     try {
@@ -822,6 +821,7 @@ describe('runAgent durable acceptance failures', () => {
           }),
         ),
       ).rejects.toBe(failure);
+      expect(appendTurnStart).toHaveBeenCalledOnce();
       expect(onTurnStarted).not.toHaveBeenCalled();
     } finally {
       await agenetes.close(threadId);

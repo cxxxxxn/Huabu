@@ -17,6 +17,7 @@
 
 import {
   clampSpaceShortcutWidth,
+  spaceShortcutScale,
   SPACE_SHORTCUT_SIZE,
 } from './spaceShortcut.js';
 import {
@@ -94,10 +95,15 @@ export function getNodeDefaultSize(nodeType: string): NodeSize {
 export function getNodeCreationStyle(
   nodeType: string,
   size: NodeSize,
-  opts: { heightIsExplicit?: boolean } = {},
+  opts: { heightIsExplicit?: boolean; data?: Record<string, unknown> } = {},
 ): NodeSize {
   if (nodeType === 'spacePreview')
-    return { width: clampSpaceShortcutWidth(size.width) };
+    return {
+      width: clampSpaceShortcutWidth(
+        size.width,
+        spaceShortcutScale(opts.data ?? {}),
+      ),
+    };
   const shouldWriteHeight =
     typeof size.height === 'number' &&
     (opts.heightIsExplicit

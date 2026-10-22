@@ -92,7 +92,8 @@ export const FrameNode = memo(
             node.type === 'image' ||
             node.type === 'video' ||
             node.type === 'text' ||
-            node.type === 'question';
+            node.type === 'question' ||
+            node.type === 'spacePreview';
           contentInsetX = Math.min(contentInsetX, node.position.x);
         }
 

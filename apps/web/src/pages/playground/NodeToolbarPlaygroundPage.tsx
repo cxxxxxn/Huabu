@@ -352,7 +352,7 @@ function Specimen({ type: initialType }: { type: CanvasNodeType }) {
                   onMove={setPosition}
                 />
                 <span className="nt-divider" />
-                {type !== 'question' && type !== 'sketch' && (
+                {type !== 'sketch' && (
                   <FloatingToolbar.ColorPicker
                     floating
                     colors={colors}
@@ -862,9 +862,7 @@ function Specimen({ type: initialType }: { type: CanvasNodeType }) {
           }))}
           onClose={() => setDialog(null)}
           onSubmit={(destination) => {
-            setFeedback(
-              `样例目标：${destination.kind === 'new' ? destination.title : destination.canvasId}`,
-            );
+            setFeedback(`样例目标：${destination}`);
             setDialog(null);
           }}
         />
