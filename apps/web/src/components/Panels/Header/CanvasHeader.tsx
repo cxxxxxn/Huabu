@@ -65,6 +65,7 @@ export const CanvasHeader: React.FC<CanvasHeaderProps> = ({
   return (
     <header
       ref={headerRef}
+      data-canvas-header
       className={clsx(
         'bg-surface relative flex items-center overflow-hidden',
         vertical
