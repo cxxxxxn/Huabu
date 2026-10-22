@@ -29,6 +29,42 @@ function createNodes(
 }
 
 describe('CREATE_NODES selection', () => {
+  it.each([
+    'text',
+    'note',
+    'web',
+    'pdf',
+    'office',
+    'video',
+    'image',
+    'audio',
+    'frame',
+    'spacePreview',
+    'question',
+    'sketch',
+  ] as const)(
+    'defaults %s to 400 units wide and preserves explicit widths',
+    (nodeType) => {
+      for (const width of [undefined, 320]) {
+        const nodes = createNodes(
+          {
+            type: 'CREATE_NODES',
+            nodes: [
+              {
+                nodeType,
+                position: { x: 0, y: 0 },
+                ...(width === undefined ? {} : { size: { width } }),
+              },
+            ],
+          },
+          [],
+        );
+        expect(nodes).toHaveLength(1);
+        expect(nodes[0].style?.width).toBe(width ?? 400);
+      }
+    },
+  );
+
   it('uses nominal note and question heights for placement without pinning creation height', () => {
     const nodes = createNodes({
       type: 'CREATE_NODES',

@@ -32,7 +32,7 @@ import type { Node } from '@xyflow/react';
 // Default dimensions per node type
 // ---------------------------------------------------------------------------
 const DEFAULT_SIZES: Record<string, NodeSize> = {
-  text: { width: 200 },
+  text: { width: 400 },
   // Note nodes auto-size by content height but have a minimum intrinsic
   // height of ~50px (the note policy's `minIntrinsicHeight`) plus borders/padding when empty.
   // Use 56px as a nominal default for layout calculations (matches the
@@ -44,7 +44,7 @@ const DEFAULT_SIZES: Record<string, NodeSize> = {
   video: { width: 400, height: 300 },
   image: { width: 400, height: 300 },
   // Compact recorder: fits the recording controls on one row.
-  audio: { width: 200, height: 56 },
+  audio: { width: 400, height: 56 },
   frame: { width: 400, height: 300 },
   spacePreview: {
     width: SPACE_SHORTCUT_SIZE.defaultWidth,
@@ -77,7 +77,7 @@ export function isAlwaysAutoHeightNodeType(nodeType: string): boolean {
  * new nodes). Once rendered, the measured height takes precedence.
  */
 export function getNodeDefaultSize(nodeType: string): NodeSize {
-  return DEFAULT_SIZES[nodeType] || { width: 300, height: 200 };
+  return DEFAULT_SIZES[nodeType] || { width: 400, height: 200 };
 }
 
 /**

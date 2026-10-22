@@ -130,13 +130,13 @@ Before placing or resizing relative to existing content, query the relevant node
 
 | Node type              | Default geometry                                                                     |
 | ---------------------- | ------------------------------------------------------------------------------------ |
-| `text`                 | 200px wide; content-driven height                                                    |
+| `text`                 | 400px wide; content-driven height                                                    |
 | `note`                 | 400px wide; content-driven height (56px nominal layout height)                       |
 | `web`, `pdf`, `office` | 400 × 400px                                                                          |
 | `video`                | 400 × 300px                                                                          |
 | `image`                | 400px wide; height follows the source aspect ratio (300px nominal before resolution) |
 | `frame`                | 400 × 300px                                                                          |
-| `question`             | 440px wide; content-driven height (80px nominal layout height)                       |
+| `question`             | 400px wide; content-driven height (80px nominal layout height)                       |
 
 Never pin top-level height for `text` or `question`. Both respect `data.style.fontSize`: Text defaults to 16px and Question to 24px. The font also scales content padding and, for Question, the avatar, alias, status, and gaps; Question chrome retains a separate 28px design basis. Width-only edits preserve the font and reflow content-driven height; proportional canvas resize gestures scale the font with outer width. Existing Question font values are respected without automatic persisted-data migration. Notes normally auto-size by content but may use an explicit fixed height; resizing their container preserves fixed typography and reflows or scrolls the document rather than scaling its font. For free-form root or frame layouts, a useful starting heuristic is about 50px between nodes, 28px side/bottom Frame padding, and an 80px top inset for a Regular internal Frame title, adjusted to the actual queried sizes.
 

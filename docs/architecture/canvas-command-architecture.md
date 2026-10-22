@@ -20,6 +20,8 @@ non-`question` entries in that command become the active selection, while
 agent/system-created entries and `question` entries preserve the existing
 selection.
 
+`getNodeDefaultSize()` supplies a uniform 400-unit default width for new nodes, including Text, Audio, and Space shortcuts, while preserving each type's existing height policy. Explicit dimensions from creation, drawing, media geometry, or saved nodes remain authoritative; this default change does not migrate existing widths. Space shortcuts and World placement share `SPACE_SHORTCUT_SIZE.defaultWidth`.
+
 ## Layer 1: CanvasUiIntent
 
 `CanvasUiIntent` is a web-only input model for user gestures. It resolves UI-specific ambiguity (selection, clipboard, drag context, viewport position, rectangle hit-testing) into explicit `CanvasCommand` operands.

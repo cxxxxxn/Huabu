@@ -463,8 +463,8 @@ describe('World preview reconciliation', () => {
         position: node.position,
       })),
     ).toEqual([
-      { target: 'canvas-a', position: { x: 440, y: 0 } },
-      { target: 'canvas-b', position: { x: 880, y: 0 } },
+      { target: 'canvas-a', position: { x: 480, y: 0 } },
+      { target: 'canvas-b', position: { x: 960, y: 0 } },
     ]);
     const first = await space('canvas-world').read();
     await reconcileWorldPreviews();
@@ -578,7 +578,7 @@ describe('World preview reconciliation', () => {
     const current = await previews();
     expect(current).toHaveLength(2);
     expect(current.every((node) => node.id !== 'node-old')).toBe(true);
-    expect(current[0]?.style).toEqual({ width: 360 });
+    expect(current[0]?.style).toEqual({ width: 400 });
     expect(getCanvasStore('canvas-world').read()?.state.nodes).not.toEqual(
       JSON.parse(before).state.nodes,
     );

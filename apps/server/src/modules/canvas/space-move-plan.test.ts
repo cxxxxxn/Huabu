@@ -108,7 +108,7 @@ describe('buildSpaceMovePlan', () => {
           nodeType: 'spacePreview',
           data: { targetCanvasId: 'destination' },
           position: { x: 50, y: 60 },
-          size: { width: 360, height: 120 },
+          size: { width: 400, height: 120 },
         },
       ],
     });
@@ -212,7 +212,7 @@ describe('buildSpaceMovePlan', () => {
       nodes: [
         {
           position: { x: -100, y: -200 },
-          size: { width: 360, height: 120 },
+          size: { width: 400, height: 120 },
         },
       ],
     });
