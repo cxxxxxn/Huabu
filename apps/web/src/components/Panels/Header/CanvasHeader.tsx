@@ -57,6 +57,7 @@ export const CanvasHeader: React.FC<CanvasHeaderProps> = ({
   // the two affordances no longer duplicate each other.
   return (
     <header
+      data-canvas-header
       className={clsx(
         'bg-surface flex items-center overflow-hidden',
         vertical
