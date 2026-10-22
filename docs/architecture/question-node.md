@@ -210,7 +210,7 @@ Ordinary Question previews retain `AgentConversationView`, whose presentation an
 
 ---
 
-Questions directly inside row/column layout Frames keep their card presentation at all zoom levels instead of collapsing to Agent marks. Parent layout changes and reparenting update this policy live. Parent Frame region suppression still hides their cards like ordinary children, without leaving a floating dot; free-layout Frames and standalone Questions retain the takeover behavior above.
+Questions directly inside row/column layout Frames keep their card presentation at all zoom levels instead of collapsing to Agent marks. Parent layout changes and reparenting update this policy live. The subscription reads the Question and its immediate parent from React Flow's existing `nodeLookup` index, using at most two keyed lookups per update rather than scanning the Canvas node array for every Question. Parent Frame region suppression still hides their cards like ordinary children, without leaving a floating dot; free-layout Frames and standalone Questions retain the takeover behavior above.
 
 ## 6. Code entry points
 

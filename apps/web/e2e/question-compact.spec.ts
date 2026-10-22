@@ -721,7 +721,7 @@ test('layout Frame Questions stay readable when zoomed out and react to layout c
   const shell = page.locator('[data-id="layout-question"] .question-compact');
   const portal = page.locator('[data-takeover-node="layout-question"]');
   await expect(shell).toBeVisible();
-  for (const layoutMode of ['column', 'free', 'row', 'free', 'column']) {
+  for (const layoutMode of ['column', 'free', 'row', 'grid', 'column']) {
     const changed = await page.request.post(`/api/canvas/${canvasId}/execute`, {
       data: {
         commands: [
@@ -740,13 +740,35 @@ test('layout Frame Questions stay readable when zoomed out and react to layout c
         return transform ? scaleOf(transform) : null;
       })
       .toBe(0.2);
-    if (layoutMode === 'free') {
+    if (layoutMode === 'free' || layoutMode === 'grid') {
       await expect(shell).toHaveCSS('opacity', '0');
       await expect(portal).toHaveCSS('opacity', '1');
     } else {
       await expect(shell).toHaveCSS('opacity', '1');
       await expect(shell).not.toHaveAttribute('data-lod-body');
       await expect(portal).toHaveCount(0);
+    }
+  }
+  for (const parentId of [null, 'layout-frame', null, 'layout-frame']) {
+    const changed = await page.request.post(`/api/canvas/${canvasId}/execute`, {
+      data: {
+        commands: [
+          {
+            type: 'SET_NODE_PARENT',
+            nodeIds: ['layout-question'],
+            parentId,
+          },
+        ],
+        originator: { source: 'agent', threadId: 'layout-card-test' },
+      },
+    });
+    expect(changed.ok(), await changed.text()).toBe(true);
+    await expect(shell).toHaveCSS('opacity', parentId ? '1' : '0');
+    if (parentId) {
+      await expect(shell).not.toHaveAttribute('data-lod-body');
+      await expect(portal).toHaveCount(0);
+    } else {
+      await expect(portal).toHaveCSS('opacity', '1');
     }
   }
   await page.screenshot({

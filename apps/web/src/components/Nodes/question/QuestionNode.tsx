@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+import { useStore } from '@xyflow/react';
 import { Maximize2 } from 'lucide-react';
 import { memo, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -77,11 +78,9 @@ export const QuestionNode = memo(
   ({ id, data, selected, width }: NodeProps<QuestionNodeType>) => {
     const { t } = useTranslation();
     const frameSuppressed = useFrameSuppressed(id);
-    const inLayoutFrame = useCanvasStore((state) => {
-      const parentId = state.nodes.find((node) => node.id === id)?.parentId;
-      const parent = parentId
-        ? state.nodes.find((node) => node.id === parentId)
-        : undefined;
+    const inLayoutFrame = useStore((state) => {
+      const parentId = state.nodeLookup.get(id)?.parentId;
+      const parent = parentId ? state.nodeLookup.get(parentId) : undefined;
       return (
         parent?.type === 'frame' &&
         (parent.data.layoutMode === 'column' ||
