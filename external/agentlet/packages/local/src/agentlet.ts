@@ -31,6 +31,7 @@ import {
 } from './session-bootstrap.js'
 import type { AgentletOptions } from './cli.js'
 import { resolveDeviceIdentity } from './device-identity.js'
+import { monitorConnection } from './connection-health.js'
 import {
   createBootstrapEnv,
   interpolateBootstrapDestination,
@@ -91,6 +92,7 @@ export class Agentlet {
   private readonly startingCleanupTimers = new Map<AgentProcess, ReturnType<typeof setTimeout>>()
   private readonly stopOperations = new Map<string, Promise<StopResult>>()
   private handshakeComplete = false
+  private controlHealth: ReturnType<typeof monitorConnection> | null = null
 
   private readonly bootstrapEnv: Readonly<Record<string, string>>
 
@@ -104,6 +106,10 @@ export class Agentlet {
   async start(): Promise<void> {
     this.setupSignalHandlers()
     this.startDaemon()
+  }
+
+  async stop(): Promise<void> {
+    await this.shutdown('user_interrupt')
   }
 
   // ── Resource handling ───────────────────────────────────────────────
@@ -155,8 +161,10 @@ export class Agentlet {
     }
     url.searchParams.set('role', 'agentlet')
     url.searchParams.set('id', this.daemonId)
-    const controlWs = new WebSocket(url.toString())
+    const controlWs = new WebSocket(url.toString(), { handshakeTimeout: 10_000 })
     this.controlWs = controlWs
+    this.controlHealth?.stop()
+    this.controlHealth = monitorConnection(controlWs, this.options.heartbeat)
 
     this.controlWs.on('open', () => {
       this.logger.info('ws_connected', { server: this.options.server })
@@ -245,6 +253,7 @@ export class Agentlet {
       if ('result' in msg) {
         const result = msg.result as AgentHelloResult
         this.handshakeComplete = true
+        this.controlHealth?.handshakeComplete()
         this.reconnectAttempt = 0
         this.logger.info('daemon_ready', { daemonId: result.sessionId, agents: this.agents.size })
         return
@@ -677,8 +686,21 @@ export class Agentlet {
       })
 
       agentWs.on('close', () => {
+        detachEarlyBuffer()
         managed.relay?.stop()
         managed.relay = null
+        if (this.shutdownInProgress || this.serverRestartInProgress ||
+          managed.status === 'stopping' || managed.idleSuspending) return
+        this.logger.warn('agent_connection_lost', {
+          sessionId,
+          message: 'The session disconnected. Stopping the agent without replaying requests; a later user turn can recover the session.',
+        })
+        void this.stopManagedAgent(managed).catch((error: unknown) => {
+          this.logger.error('agent_cleanup_failed', {
+            sessionId,
+            message: error instanceof Error ? error.message : String(error),
+          })
+        })
       })
 
       agentWs.on('error', (err) => {
@@ -759,20 +781,26 @@ export class Agentlet {
       return
     }
 
-    const operation = this.stopManagedAgent(managed)
-    this.stopOperations.set(params.sessionId, operation)
     try {
-      this.sendDaemonResponse(requestId, await operation)
+      this.sendDaemonResponse(requestId, await this.stopManagedAgent(managed))
     } catch (error) {
       this.sendStopFailure(requestId, error)
-    } finally {
-      if (this.stopOperations.get(params.sessionId) === operation) {
-        this.stopOperations.delete(params.sessionId)
-      }
     }
   }
 
-  private async stopManagedAgent(managed: ManagedAgent): Promise<StopResult> {
+  private stopManagedAgent(managed: ManagedAgent): Promise<StopResult> {
+    const existing = this.stopOperations.get(managed.sessionId)
+    if (existing) return existing
+    const operation = this.performStopManagedAgent(managed).finally(() => {
+      if (this.stopOperations.get(managed.sessionId) === operation) {
+        this.stopOperations.delete(managed.sessionId)
+      }
+    })
+    this.stopOperations.set(managed.sessionId, operation)
+    return operation
+  }
+
+  private async performStopManagedAgent(managed: ManagedAgent): Promise<StopResult> {
     this.logger.info('stopping_agent', { sessionId: managed.sessionId })
     managed.status = 'stopping'
     managed.relay?.stop()
@@ -941,6 +969,7 @@ export class Agentlet {
   private async shutdown(reason: string, exitCode = 0): Promise<void> {
     if (this.shutdownInProgress) return
     this.shutdownInProgress = true
+    this.controlHealth?.stop()
     for (const timer of this.startingCleanupTimers.values()) clearTimeout(timer)
     this.startingCleanupTimers.clear()
 
@@ -967,6 +996,11 @@ export class Agentlet {
     const results = await Promise.allSettled([
       ...[...this.startingAgents].map(agent => this.stopStartingAgent(agent)),
       ...[...this.agents.values()].map(async managed => {
+        const stopping = this.stopOperations.get(managed.sessionId)
+        if (stopping) {
+          await stopping
+          return
+        }
         this.logger.info('stopping_agent', { sessionId: managed.sessionId })
         managed.status = 'stopping'
         try {
