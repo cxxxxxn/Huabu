@@ -40,7 +40,6 @@ import {
   SqliteTurnStore,
 } from './sqlite-stores.js';
 import { logger } from '../../../utils/logger.js';
-import { projectAgentConversationActivity } from '../../canvas/agent-node-projection.js';
 import {
   getStructuredStore,
   registerSpaceDirHandleOwner,
@@ -174,6 +173,9 @@ async function publishActivity(
 ) {
   if (!namespace.name) return;
   try {
+    // The Canvas executor imports drivers; load it only after the stores are mounted.
+    const { projectAgentConversationActivity } =
+      await import('../../canvas/agent-node-projection.js');
     await projectAgentConversationActivity(namespace.name, threadId, ts);
   } catch (error) {
     // The authoritative log is already committed; a display projection cannot reject the turn.

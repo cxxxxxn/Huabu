@@ -137,6 +137,8 @@ Move validates the whole selection and acquires all turn leases before closing a
 
 Move maps execution/binding failures to bounded `MOVE_*` errors, never raw Agent errors. Unknown rehome outcomes and failed compensation retain the destination for reconciliation, including request-created Spaces. Existing realized ACP controls have their own admission behavior; Move does not change control-operation locking policy or claim to serialize every in-flight control RPC.
 
+Conversation stores load the Canvas activity projector only after a durable activity boundary is written. The projector depends on the Canvas executor, which imports the mounted Agent runtime; importing it during store initialization would create a cycle and can mount the runtime with default in-memory stores instead of Huabu's durable adapters. Projection failures remain logged display errors, while persistence failures reject turn acceptance.
+
 ---
 
 ### Panel conversation titles
