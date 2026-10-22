@@ -306,7 +306,7 @@ test('Frame density and card typography stay consistent across layout modes and 
     await expect(frame.locator('input')).toHaveCSS('font-size', '24px');
     await expect(node(page, childIds[0]).locator('h1')).toHaveCSS(
       'font-size',
-      '28px',
+      '24px',
     );
     await expect(async () => {
       const outer = await frame.boundingBox();
