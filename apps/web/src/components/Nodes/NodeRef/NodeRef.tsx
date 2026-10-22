@@ -3,10 +3,10 @@
 
 import { useTranslation } from 'react-i18next';
 
-import { Tooltip } from './Tooltip';
-import { NODE_ICON } from '../../config/nodeIcons';
-import useCanvasStore from '../../store/canvasStore';
-import { revealNodesOnCanvas } from '../Panels/CanvasLayerPanel/focusNodesOnCanvas';
+import { Tooltip } from '@/components/Common/Tooltip';
+import { NODE_ICON } from '@/config/nodeIcons';
+import useCanvasStore from '@/store/canvasStore';
+import { revealNodesOnCanvas } from '@/utils/canvasViewport';
 
 import type { CanvasNodeType, ChatAttachment } from '@huabu/shared';
 

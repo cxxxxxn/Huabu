@@ -49,53 +49,64 @@ afterEach(() => {
 });
 
 describe('FloatingToolbar.ColorPicker', () => {
-  it('keeps portal swatch clicks alive after mousedown', () => {
-    const picked: string[] = [];
-    const container = render(
-      <FloatingToolbar.ColorPicker
-        colors={[{ token: 'red', name: 'Red', value: '#f00' }]}
-        value={null}
-        onSelect={(token) => picked.push(token)}
-        title=""
-      />,
-    );
+  it.each([false, true])(
+    'keeps portal swatch clicks alive after mousedown with floating=%s',
+    (floating) => {
+      const picked: string[] = [];
+      const container = render(
+        <FloatingToolbar.ColorPicker
+          floating={floating}
+          colors={[{ token: 'red', name: 'Red', value: '#f00' }]}
+          value={null}
+          onSelect={(token) => picked.push(token)}
+          title=""
+        />,
+      );
 
-    const trigger = container.querySelector('button');
-    expect(trigger).not.toBeNull();
-    expect(trigger?.classList.contains('bg-bg-default')).toBe(true);
-    expect(trigger?.classList.contains('rounded-md')).toBe(true);
+      const trigger = container.querySelector('button');
+      expect(trigger).not.toBeNull();
+      expect(trigger?.classList.contains('bg-bg-default')).toBe(true);
+      expect(trigger?.classList.contains('rounded-md')).toBe(true);
 
-    act(() => {
-      trigger?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
+      act(() => {
+        trigger?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
 
-    const redSwatch = document.body.querySelector(
-      'button[aria-label="Red"]',
-    ) as HTMLButtonElement | null;
-    expect(redSwatch).not.toBeNull();
-    expect(redSwatch?.closest('div.flex.gap-0')).not.toBeNull();
-    expect(redSwatch?.classList.contains('h-6')).toBe(true);
-    expect(redSwatch?.classList.contains('min-h-6')).toBe(true);
-    expect(redSwatch?.classList.contains('w-6')).toBe(true);
-    expect(redSwatch?.classList.contains('min-w-6')).toBe(true);
-    expect(redSwatch?.classList.contains('enabled:hover:bg-transparent')).toBe(
-      true,
-    );
-    expect(redSwatch?.classList.contains('enabled:hover:bg-hover')).toBe(false);
+      const redSwatch = document.body.querySelector(
+        'button[aria-label="Red"]',
+      ) as HTMLButtonElement | null;
+      expect(redSwatch).not.toBeNull();
+      expect(redSwatch?.closest('div.flex.gap-0')).not.toBeNull();
+      expect(redSwatch?.classList.contains('h-6')).toBe(true);
+      expect(redSwatch?.classList.contains('min-h-6')).toBe(true);
+      expect(redSwatch?.classList.contains('w-6')).toBe(true);
+      expect(redSwatch?.classList.contains('min-w-6')).toBe(true);
+      expect(
+        redSwatch?.classList.contains('enabled:hover:bg-transparent'),
+      ).toBe(true);
+      expect(redSwatch?.classList.contains('enabled:hover:bg-hover')).toBe(
+        false,
+      );
 
-    const redDot = redSwatch?.querySelector('span[aria-hidden]');
-    expect(redDot?.classList.contains('border-solid')).toBe(true);
-    expect(redDot?.classList.contains('h-3.5')).toBe(true);
-    expect(redDot?.classList.contains('w-3.5')).toBe(true);
+      const redDot = redSwatch?.querySelector('span[aria-hidden]');
+      expect(redDot?.classList.contains('border-solid')).toBe(true);
+      expect(redDot?.classList.contains('h-3.5')).toBe(true);
+      expect(redDot?.classList.contains('w-3.5')).toBe(true);
 
-    act(() => {
-      redSwatch?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-      redSwatch?.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-      redSwatch?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
+      act(() => {
+        redSwatch?.dispatchEvent(
+          new MouseEvent('mousedown', { bubbles: true }),
+        );
+        redSwatch?.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+        redSwatch?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
 
-    expect(picked).toEqual(['red']);
-  });
+      expect(picked).toEqual(['red']);
+      expect(
+        document.body.querySelector('button[aria-label="Red"]'),
+      ).toBeNull();
+    },
+  );
 });
 
 describe('FloatingToolbar floating controls', () => {

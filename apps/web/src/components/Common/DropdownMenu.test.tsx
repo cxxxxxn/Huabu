@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { act, type ReactNode } from 'react';
+import { act, useState, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -66,6 +66,109 @@ afterEach(() => {
 });
 
 describe('DropdownMenu keyboard contract', () => {
+  it('restores focus after a controlled action closes the menu', async () => {
+    function Menu() {
+      const [open, setOpen] = useState(false);
+      return (
+        <DropdownMenu
+          open={open}
+          onOpenChange={setOpen}
+          trigger={<Button data-testid="trigger">Actions</Button>}
+        >
+          <DropdownMenuItem onClick={() => setOpen(false)}>
+            Apply
+          </DropdownMenuItem>
+        </DropdownMenu>
+      );
+    }
+    await mount(<Menu />);
+    await click(getElement('[data-testid="trigger"]'));
+    await click(getElement('[role="menuitem"]'));
+    await nextFrame();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(document.activeElement).toBe(getElement('[data-testid="trigger"]'));
+  });
+
+  it('does not steal focus from a dialog opened by an action', async () => {
+    function Menu() {
+      const [open, setOpen] = useState(false);
+      const [dialog, setDialog] = useState(false);
+      return (
+        <>
+          <DropdownMenu
+            open={open}
+            onOpenChange={setOpen}
+            trigger={<Button>Actions</Button>}
+          >
+            <DropdownMenuItem
+              onClick={() => {
+                setOpen(false);
+                setDialog(true);
+              }}
+            >
+              Edit
+            </DropdownMenuItem>
+          </DropdownMenu>
+          {dialog && (
+            <div role="dialog">
+              <TextInput autoFocus aria-label="Name" />
+            </div>
+          )}
+        </>
+      );
+    }
+    await mount(<Menu />);
+    await click(getElement('button'));
+    await click(getElement('[role="menuitem"]'));
+    await nextFrame();
+    expect(document.activeElement).toBe(getElement('input'));
+  });
+
+  it('does not restore focus after an outside press on a nonfocusable target', async () => {
+    await mount(
+      <>
+        <DropdownMenu trigger={<Button>Actions</Button>}>
+          <DropdownMenuItem>Apply</DropdownMenuItem>
+        </DropdownMenu>
+        <div data-testid="outside">Canvas</div>
+      </>,
+    );
+    await click(getElement('button'));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () =>
+      getElement('[data-testid="outside"]').dispatchEvent(
+        new PointerEvent('pointerdown', { bubbles: true }),
+      ),
+    );
+    await nextFrame();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('navigates checkbox and radio items and exposes their checked state', async () => {
+    await mount(
+      <DropdownMenu trigger={<Button>Filters</Button>}>
+        <DropdownMenuItem role="menuitemcheckbox" aria-checked>
+          Selected filter
+        </DropdownMenuItem>
+        <DropdownMenuItem role="menuitemcheckbox" aria-checked={false} disabled>
+          Disabled filter
+        </DropdownMenuItem>
+        <DropdownMenuItem role="menuitemradio" aria-checked={false}>
+          Other choice
+        </DropdownMenuItem>
+      </DropdownMenu>,
+    );
+    await click(getElement('button'));
+    const selected = getElement('[role="menuitemcheckbox"]');
+    expect(document.activeElement).toBe(selected);
+    expect(selected.getAttribute('aria-checked')).toBe('true');
+    await press(selected, 'ArrowDown');
+    expect(document.activeElement).toBe(getElement('[role="menuitemradio"]'));
+  });
+
   it('labels the menu, focuses its first enabled item, and navigates buttons and links', async () => {
     await mount(
       <MemoryRouter>
@@ -277,6 +380,27 @@ describe('DropdownMenu keyboard contract', () => {
     await press(first, 'ArrowDown');
     expect(document.activeElement).toBe(submenuTrigger);
     await press(submenuTrigger, 'ArrowRight');
+    expect(document.activeElement).toBe(getElement('[data-testid="child"]'));
+  });
+
+  it('enters a hovered submenu on click instead of toggling it closed', async () => {
+    await mount(
+      <DropdownMenu trigger={<Button>Actions</Button>}>
+        <DropdownMenuSubmenu label="More">
+          <DropdownMenuItem disabled>Disabled</DropdownMenuItem>
+          <DropdownMenuItem data-testid="child">Child</DropdownMenuItem>
+        </DropdownMenuSubmenu>
+      </DropdownMenu>,
+    );
+    await click(getElement('button'));
+    const submenuTrigger = getElement('[role="menuitem"][aria-haspopup]');
+    await act(async () =>
+      submenuTrigger.dispatchEvent(
+        new PointerEvent('pointerover', { bubbles: true }),
+      ),
+    );
+    await click(submenuTrigger);
+    expect(document.querySelectorAll('[role="menu"]')).toHaveLength(2);
     expect(document.activeElement).toBe(getElement('[data-testid="child"]'));
   });
 

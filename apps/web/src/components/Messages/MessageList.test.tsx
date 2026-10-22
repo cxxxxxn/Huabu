@@ -58,10 +58,12 @@ vi.mock('./UserMessage', async () => {
   const { memo } = await import('react');
   return {
     UserMessage: memo(function MockUserMessage({
+      isFirst,
       inputKind,
       inkInterpretation,
       groundingVisual,
     }: {
+      isFirst?: boolean;
       inputKind?: string;
       inkInterpretation?: InkInterpretation;
       groundingVisual?: unknown;
@@ -70,7 +72,7 @@ vi.mock('./UserMessage', async () => {
       renderCounts.userInputKinds.push(inputKind);
       renderCounts.userInterpretations.push(inkInterpretation);
       renderCounts.userGroundingValues.push(groundingVisual);
-      return <div data-user-message />;
+      return <div data-user-message data-first={isFirst} />;
     }),
   };
 });
@@ -138,6 +140,31 @@ afterEach(() => {
   container = undefined;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe('MessageList leading user spacing', () => {
+  it.each([false, true])(
+    'marks only the leading rendered message as first when an assistant precedes it=%s',
+    (withAssistant) => {
+      const messages: ChatMessage[] = [
+        { id: 'user-1', role: 'user', content: 'First question' },
+        { id: 'user-2', role: 'user', content: 'Follow-up question' },
+      ];
+      if (withAssistant) {
+        messages.unshift({
+          id: 'assistant-1',
+          role: 'assistant',
+          segments: [{ kind: 'text', text: 'Earlier answer' }],
+        });
+      }
+      mount(<MessageList messages={messages} isLoading={false} />);
+      expect(
+        [...(container?.querySelectorAll('[data-user-message]') ?? [])].map(
+          (message) => message.getAttribute('data-first'),
+        ),
+      ).toEqual([String(!withAssistant), 'false']);
+    },
+  );
 });
 
 describe('MessageList comment availability', () => {

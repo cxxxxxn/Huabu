@@ -105,7 +105,7 @@ function ResourceList({
   }, [index, scrollRef]);
   if (!nodes.length)
     return (
-      <p className="text-fg-subtle px-2 py-3 text-xs" role="status">
+      <p className="text-fg-muted px-2 py-3 text-xs" role="status">
         {t('sigil.noResources')}
       </p>
     );
@@ -635,7 +635,7 @@ function InkResourcePicker({
         onPointerDown={(event) => event.stopPropagation()}
       >
         <div className="mb-1.5 flex shrink-0 items-center justify-between gap-2 pl-1">
-          <span className="text-fg-subtle text-[10px]">
+          <span className="text-fg-muted text-xs">
             {t('sigil.bindingHint')}
           </span>
           <Button

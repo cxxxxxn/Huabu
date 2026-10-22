@@ -34,7 +34,7 @@ import { cn } from './cn';
 import { ColorPicker, type ColorPreset } from './ColorPicker';
 import { DropdownMenu, DropdownMenuItem } from './DropdownMenu';
 import { FLOATING_CHROME_PROPS } from './floatingChrome';
-import { Popover } from './Popover';
+import { Popover, POPOVER_SURFACE_CLASS } from './Popover';
 import {
   Select as BaseSelect,
   type SelectOption as BaseSelectOption,
@@ -65,8 +65,7 @@ export const FLOATING_TOOLBAR_CLASS =
   'text-fg-muted shadow-bottom bg-surface flex items-center gap-1 rounded-lg p-1.5';
 
 /** Shared surface chrome for compact popovers opened from a toolbar. */
-export const FLOATING_TOOLBAR_POPOVER_CLASS =
-  'border-edge-default shadow-bottom bg-surface z-50 rounded-lg border p-2';
+export const FLOATING_TOOLBAR_POPOVER_CLASS = `${POPOVER_SURFACE_CLASS} z-50 p-2`;
 
 // ─── Root ─────────────────────────────────────────────────────────────────────
 
@@ -372,6 +371,17 @@ function ToolbarColorPicker({
     />
   );
 
+  const picker = (
+    <ColorPicker
+      colors={colors}
+      activeToken={value}
+      onSelect={(token) => {
+        onSelect(token);
+        setIsOpen(false);
+      }}
+    />
+  );
+
   return (
     <div
       ref={(node) => {
@@ -404,14 +414,7 @@ function ToolbarColorPicker({
           onDismiss={() => setIsOpen(false)}
           className={FLOATING_TOOLBAR_POPOVER_CLASS}
         >
-          <ColorPicker
-            colors={colors}
-            activeToken={value}
-            onSelect={(token) => {
-              onSelect(token);
-              setIsOpen(false);
-            }}
-          />
+          {picker}
         </Popover>
       ) : isOpen ? (
         createPortal(
@@ -437,14 +440,7 @@ function ToolbarColorPicker({
               onMouseDown={(e) => e.preventDefault()}
               onClick={(e) => e.stopPropagation()}
             >
-              <ColorPicker
-                colors={colors}
-                activeToken={value}
-                onSelect={(t) => {
-                  onSelect(t);
-                  setIsOpen(false);
-                }}
-              />
+              {picker}
             </div>
           </>,
           document.body,

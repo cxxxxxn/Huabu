@@ -16,9 +16,9 @@ import {
 } from '@/components/Nodes/spacePreview/spaceShortcutEvents';
 import { isVideoControlTarget } from '@/components/Nodes/video/videoInteraction';
 import { EDIT_EDGE_LABEL_EVENT } from '@/components/Panels/Canvas/edges/LabelledEdge';
-import { fitCanvasContent } from '@/components/Panels/CanvasLayerPanel/focusNodesOnCanvas';
 import { requestCreateChildSpace } from '@/components/Space/createChildSpaceAction';
 import { matchesShortcut } from '@/config/shortcuts';
+import { fitCanvasContent } from '@/utils/canvasViewport';
 
 import {
   isEditableTarget,

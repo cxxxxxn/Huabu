@@ -93,6 +93,7 @@ import {
   setSnapStructuredSuppressed,
   writeDragDecision,
 } from '@/handler/snap/snapSession';
+import { getCanvasVisibleArea } from '@/utils/canvasViewport';
 import {
   changedSpaceEntries,
   isVisibleWorldNode,
@@ -143,7 +144,6 @@ import {
   resumeHeightCommits,
   suspendHeightCommits,
 } from '../components/Nodes/shared/height/commitSuspension';
-import { getCanvasVisibleArea } from '../components/Panels/CanvasLayerPanel/focusNodesOnCanvas';
 import { copyCanvasClipboard } from '../utils/io/clipboard';
 import { nodesToPlainText } from '../utils/io/nodeToPlainText';
 

@@ -16,12 +16,12 @@ test('Ink submission spinner stays centered throughout rotation and respects red
     const load = (path: string) => import(/* @vite-ignore */ path);
     const { mountInkToolbar } = await load('/e2e/fixtures/ink-toolbar.tsx');
     await mountInkToolbar('en');
-    // Hold the catalogue refresh so the real toolbar stays in preparation.
-    const { useAcpProfilesStore } = await load(
-      '/src/store/acpProfilesStore.ts',
-    );
-    useAcpProfilesStore.setState({ refresh: () => new Promise(() => {}) });
   });
+  // Hold the actual creation acknowledgement, not an unrelated catalogue refresh.
+  await page.route(
+    '**/api/canvas/ink-layout-fixture/execute',
+    () => new Promise<void>(() => {}),
+  );
   const send = page.locator('.ink-context-toolbar .canvas-context-submit');
   const picker = page.locator('.ink-agent-destination-trigger');
   await expect(send).toBeEnabled();
@@ -115,6 +115,10 @@ test('Ink excludes built-in Chat from new and recent destinations while retainin
   });
   const trigger = page.locator('.ink-agent-destination-trigger');
   await expect(trigger).toContainText('Conversation 2');
+  await expect(trigger.getByText('Continue', { exact: true })).toHaveCSS(
+    'font-size',
+    '12px',
+  );
   const send = page.locator('.ink-context-toolbar .canvas-context-submit');
   await expect(send).toBeEnabled();
   await trigger.tap();
@@ -126,6 +130,25 @@ test('Ink excludes built-in Chat from new and recent destinations while retainin
     menu.getByRole('menuitem', { name: /Conversation 2/ }),
   ).toBeEnabled();
   const newGroup = menu.getByRole('group', { name: 'New conversation' });
+  await expect(newGroup).toHaveCSS('margin-top', '0px');
+  await expect(menu.getByRole('separator')).toHaveCount(1);
+  await expect(menu.getByRole('separator')).toHaveCSS('margin-top', '8px');
+  await expect(menu.getByRole('separator')).toHaveCSS('margin-bottom', '8px');
+  await expect(newGroup).toHaveCSS('border-top-width', '0px');
+  for (const label of ['New conversation', 'External Agents']) {
+    await expect(newGroup.getByText(label, { exact: true })).toHaveCSS(
+      'font-size',
+      '12px',
+    );
+    await expect(newGroup.getByText(label, { exact: true })).toHaveCSS(
+      'font-weight',
+      '400',
+    );
+    await expect(newGroup.getByText(label, { exact: true })).toHaveCSS(
+      'text-transform',
+      'none',
+    );
+  }
   await expect(newGroup.getByRole('menuitem', { name: /^Chat/ })).toHaveCount(
     0,
   );
@@ -168,10 +191,14 @@ for (const pointerOpen of ['click', 'tap'] as const) {
     });
     await expect(externalHeading).toBeVisible();
     await expect(externalHeading).toHaveCSS('text-transform', 'none');
-    await expect(externalHeading.locator('..')).toHaveCSS(
-      'padding-left',
-      '12px',
-    );
+    await expect(externalHeading).toHaveCSS('padding-left', '8px');
+    await expect(externalHeading).toHaveCSS('font-size', '12px');
+    await expect(externalHeading).toHaveCSS('font-weight', '400');
+    await expect(externalHeading.locator('..')).toHaveCSS('margin-top', '8px');
+    await expect(externalHeading.locator('..')).toHaveCSS('margin-left', '0px');
+    await expect(
+      newGroup.getByText('New conversation', { exact: true }),
+    ).toHaveCSS('font-weight', '400');
     await expect(
       externalHeading.locator('..').locator('.bg-edge-default'),
     ).toHaveCount(0);
@@ -379,6 +406,9 @@ for (const locale of ['zh-CN', 'en']) {
     const toolbar = page.locator('.ink-context-toolbar');
     const trigger = toolbar.locator('.ink-agent-destination-trigger');
     await expect(trigger).toContainText('GitHub Copilot');
+    await expect(
+      trigger.getByText(locale === 'zh-CN' ? '新建' : 'New', { exact: true }),
+    ).toHaveCSS('font-size', '12px');
     await expect(toolbar.locator('.node-toolbar-color')).toBeVisible();
     await expect(toolbar.locator('.lucide-pencil')).toBeVisible();
     await trigger.hover();
@@ -434,7 +464,7 @@ for (const locale of ['zh-CN', 'en']) {
       await expect
         .poll(() =>
           page.getByRole('menu').evaluate((menu) => {
-            const panel = menu.parentElement;
+            const panel = menu.closest('[data-floating-chrome]');
             const toolbar = document.querySelector('.ink-context-toolbar');
             if (!panel || !toolbar) return 0;
             return (

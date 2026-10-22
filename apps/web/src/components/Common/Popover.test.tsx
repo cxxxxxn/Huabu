@@ -323,12 +323,13 @@ describe('Popover', () => {
     expect(document.activeElement?.textContent).toBe('Destination');
   });
 
-  it('updates the available width when a coordinate boundary changes', () => {
+  it('updates the available width and height when a coordinate boundary changes', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
     let boundaryWidth = 220;
+    let boundaryHeight = 400;
     vi.spyOn(container, 'getBoundingClientRect').mockImplementation(
-      () => new DOMRect(40, 20, boundaryWidth, 400),
+      () => new DOMRect(40, 20, boundaryWidth, boundaryHeight),
     );
     root = createRoot(container);
     act(() => {
@@ -346,11 +347,49 @@ describe('Popover', () => {
     expect(panel?.style.getPropertyValue('--popover-available-width')).toBe(
       '200px',
     );
+    expect(panel?.style.getPropertyValue('--popover-available-height')).toBe(
+      '380px',
+    );
     boundaryWidth = 160;
+    boundaryHeight = 200;
     act(() => window.dispatchEvent(new Event('resize')));
     expect(panel?.style.getPropertyValue('--popover-available-width')).toBe(
       '140px',
     );
+    expect(panel?.style.getPropertyValue('--popover-available-height')).toBe(
+      '180px',
+    );
+  });
+
+  it('observes the coordinate boundary only while manual positioning is active', async () => {
+    container = document.createElement('div');
+    document.body.append(container);
+    const boundary = document.createElement('div');
+    const trigger = document.createElement('button');
+    document.body.append(boundary, trigger);
+    root = createRoot(container);
+    const observe = vi.spyOn(ResizeObserver.prototype, 'observe');
+    try {
+      for (const reference of [undefined, trigger, undefined]) {
+        observe.mockClear();
+        await act(async () =>
+          root?.render(
+            <Popover
+              boundary={boundary}
+              reference={reference}
+              position={{ x: 20, y: 20 }}
+            >
+              <span>Content</span>
+            </Popover>,
+          ),
+        );
+        expect(observe.mock.calls.some(([target]) => target === boundary)).toBe(
+          !reference,
+        );
+      }
+    } finally {
+      observe.mockRestore();
+    }
   });
 
   it('blurs focused content before outside dismissal but not on Escape', async () => {

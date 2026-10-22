@@ -11,8 +11,8 @@ import { usePanelStore } from '../../../store/panelStore';
 import { createEmptyWorkspace } from '../../../store/previewWorkspace/model';
 import { usePreviewWorkspaceStore } from '../../../store/previewWorkspace/store';
 
-import type * as CanvasFocus from './focusNodesOnCanvas';
 import type { DataSourceTreeItem } from './types';
+import type * as CanvasFocus from '@/utils/canvasViewport';
 import type { DndContextProps, DragEndEvent } from '@dnd-kit/core';
 import type { Node } from '@xyflow/react';
 
@@ -62,7 +62,7 @@ vi.mock('@dnd-kit/sortable', () => ({
 vi.mock('../../../store/previewWorkspace/actions', () => ({
   openPreviewNode: mocks.openPreviewNode,
 }));
-vi.mock('./focusNodesOnCanvas', async (importOriginal) => ({
+vi.mock('@/utils/canvasViewport', async (importOriginal) => ({
   ...(await importOriginal<typeof CanvasFocus>()),
   revealNodesOnCanvas: mocks.revealNodesOnCanvas,
 }));
