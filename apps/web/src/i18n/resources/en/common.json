@@ -172,7 +172,7 @@
     "externalAgentRuntime": "Advanced runtime settings",
     "builtInPiConfiguration": "Chat model",
     "addDevice": "Add device",
-    "localAgentTitle": "Connect device",
+    "localAgentTitle": "Connect this device",
     "localAgentConnect": "Connect",
     "localAgentDisconnect": "Disconnect",
     "localAgentReconnect": "Reconnect",

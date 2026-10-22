@@ -91,9 +91,7 @@ describe('connected device settings', () => {
     expect(container.querySelector('.setting-row')?.classList).not.toContain(
       'flex-col',
     );
-    expect(container.querySelector('[role="status"]')?.textContent).toBe(
-      'settings.localAgentDisabled',
-    );
+    expect(container.querySelector('[role="status"]')).toBeNull();
     expect(container.querySelector('button')?.textContent).toBe(
       'settings.localAgentConnect',
     );
@@ -108,7 +106,7 @@ describe('connected device settings', () => {
     await act(async () =>
       onState?.({ enabled: true, status: 'connected', error: null }),
     );
-    expect(container.textContent).toContain('settings.localAgentConnected');
+    expect(container.querySelector('[role="status"]')).toBeNull();
     expect(container.textContent).toContain('settings.localAgentDisconnect');
     await act(async () => container.querySelector('button')?.click());
     expect(api.setEnabled).toHaveBeenLastCalledWith(false);
@@ -165,7 +163,13 @@ describe('connected device settings', () => {
     expect(rows).toHaveLength(2);
     expect(container.textContent).not.toContain('settings.localAgentTitle');
     expect(rows[0].textContent).toContain('this-device');
-    expect(rows[0].textContent).toContain('1.0.0');
+    expect(rows[0].querySelector('p + p')?.textContent).toBe(
+      'settings.deviceProfileCount · v1.0.0 · this-device',
+    );
+    expect(
+      rows[0].querySelector('.setting-row-control')?.textContent,
+    ).not.toContain('1.0.0');
+    expect(rows[0].querySelector('[role="status"]')).toBeNull();
     expect(rows[0].querySelector('button')?.textContent).toBe(
       'settings.localAgentDisconnect',
     );
@@ -208,5 +212,27 @@ describe('connected device settings', () => {
     expect(container.querySelectorAll('.setting-row')).toHaveLength(1);
     expect(container.textContent).toContain('Server: linux x64');
     expect(container.querySelector('button')).toBeNull();
+  });
+
+  it('places the connect-this-device entry after existing connected devices', async () => {
+    connectedDevices = [
+      {
+        agentletId: 'server-device',
+        displayName: 'Server: linux x64',
+        version: '1.0.0',
+        connectedAt: '2026-01-01T00:00:00.000Z',
+        profileCount: 1,
+      },
+    ];
+    await act(async () => root.render(<ConnectedDevicesSetting />));
+    const rows = container.querySelectorAll('.setting-row');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].textContent).toContain('Server: linux x64');
+    expect(rows[0].querySelector('button')).toBeNull();
+    expect(rows[1].textContent).toContain('settings.localAgentTitle');
+    expect(rows[1].querySelector('button')?.textContent).toBe(
+      'settings.localAgentConnect',
+    );
+    expect(container.querySelector('[role="status"]')).toBeNull();
   });
 });

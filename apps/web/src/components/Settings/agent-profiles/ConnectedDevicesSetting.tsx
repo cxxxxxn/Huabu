@@ -79,13 +79,17 @@ export function ConnectedDevicesSetting() {
   const localDevice = connectedDevices.find(
     (device) => device.agentletId === state?.agentletId,
   );
+  const showStatus =
+    !state || (state.status !== 'disabled' && state.status !== 'connected');
 
   const controls = api ? (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <span role="status" className="text-fg-muted text-xs">
-          {t(state ? STATUS_KEYS[state.status] : 'settings.loadingAgents')}
-        </span>
+      <div className="flex flex-wrap items-center justify-end gap-3">
+        {showStatus ? (
+          <span role="status" className="text-fg-muted text-xs">
+            {t(state ? STATUS_KEYS[state.status] : 'settings.loadingAgents')}
+          </span>
+        ) : null}
         <div className="flex flex-wrap gap-2">
           {state?.enabled && needsRetry ? (
             <Button
@@ -147,26 +151,24 @@ export function ConnectedDevicesSetting() {
 
   return (
     <>
-      {api && !localDevice ? (
-        <SettingRow title={t('settings.localAgentTitle')}>
-          {controls}
-        </SettingRow>
-      ) : null}
       {connectedDevices.map((device) => (
         <SettingRow
           key={device.agentletId}
           title={device.displayName}
           description={[
             t('settings.deviceProfileCount', { count: device.profileCount }),
+            `v${device.version}`,
             device.agentletId,
           ].join(' · ')}
         >
-          <div className="flex flex-col gap-2">
-            <span className="text-fg-subtle text-xs">{device.version}</span>
-            {device === localDevice ? controls : null}
-          </div>
+          {device === localDevice ? controls : null}
         </SettingRow>
       ))}
+      {api && !localDevice ? (
+        <SettingRow title={t('settings.localAgentTitle')}>
+          {controls}
+        </SettingRow>
+      ) : null}
       {!api && connectedDevices.length === 0 ? (
         <SettingRow title={t('settings.noConnectedDevices')}>
           <span />
