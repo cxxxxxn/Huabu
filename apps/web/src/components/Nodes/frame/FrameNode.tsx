@@ -170,7 +170,7 @@ export const FrameNode = memo(
       FRAME_DESIGN_CONFIG.header.minWidth;
     const responsiveMetrics = frameVisualMetricsForSize(nodeWidth, nodeHeight);
     const headerMetrics = getFrameHeaderMetrics(
-      contentInsetX,
+      isStructuredLayout ? responsiveMetrics.contentSpacing : contentInsetX,
       nodeWidth,
       responsiveMetrics.titleFontSize,
       responsiveMetrics.headerInset,

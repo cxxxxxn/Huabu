@@ -1956,7 +1956,7 @@ export function describeStructuredDropZone(
   axis: FrameGridAxis,
   count: number,
   dragged?: DraggedNodeRect,
-  options: StructuredLayoutOptions = {},
+  options: StructuredLayoutOptions & { target?: StructuredDropTarget } = {},
 ): StructuredDropZone | null {
   const frame = nodes.find((n) => n.id === frameId);
   if (!frame || !dragged) return null;
@@ -1970,9 +1970,11 @@ export function describeStructuredDropZone(
     options,
   );
   const isCol = axis !== 'row';
-  const target = isCol
-    ? pickAxisDropTarget(preDrop, 'x', framePoint.x)
-    : pickAxisDropTarget(preDrop, 'y', framePoint.y);
+  const target =
+    options.target ??
+    (isCol
+      ? pickAxisDropTarget(preDrop, 'x', framePoint.x)
+      : pickAxisDropTarget(preDrop, 'y', framePoint.y));
 
   if (axis === 'grid') {
     return describeGridDropZone(

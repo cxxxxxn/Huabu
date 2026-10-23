@@ -423,9 +423,10 @@ const CanvasContent: React.FC<CanvasProps> = ({
   // Enables the peer slide-aside transition while a node hovers a
   // structured frame. Toggles once per hover (not per drag tick), and the
   // CSS rule excludes `.dragging` so the dragged node stays on the cursor.
-  const isStructuredReflowing = useGesturePreviewStore(
-    (state) => state.structuredDropPreview !== null,
+  const structuredTargetFrameId = useGesturePreviewStore(
+    (state) => state.structuredDropPreview?.frameId ?? null,
   );
+  const isStructuredReflowing = structuredTargetFrameId !== null;
   const nodeGeometryPreviews = useGesturePreviewStore(
     (state) => state.nodeGeometryPreviews,
   );
@@ -1501,6 +1502,7 @@ const CanvasContent: React.FC<CanvasProps> = ({
           elevateNodesOnSelect={false}
         >
           <FrameZoomController scopeKey={canvasId} />
+          <StructuredDropOverlay />
           <CanvasGestures
             wrapperRef={wrapperRef}
             rfInstanceRef={rfInstanceRef}
@@ -1640,20 +1642,16 @@ const CanvasContent: React.FC<CanvasProps> = ({
       )}
 
       {/* Frame auto-fit preview overlays — shown while dragging nodes near frames */}
-      {frameFitPreviews.map((preview) => (
-        <FrameFitPreviewOverlay
-          key={preview.frameId}
-          preview={preview}
-          rfInstance={rfInstanceRef.current}
-          wrapperRef={wrapperRef}
-        />
-      ))}
-
-      {/* Structured-frame drop indicator — column/row track highlight or insert bar */}
-      <StructuredDropOverlay
-        rfInstance={rfInstanceRef.current}
-        wrapperRef={wrapperRef}
-      />
+      {frameFitPreviews
+        .filter((preview) => preview.frameId !== structuredTargetFrameId)
+        .map((preview) => (
+          <FrameFitPreviewOverlay
+            key={preview.frameId}
+            preview={preview}
+            rfInstance={rfInstanceRef.current}
+            wrapperRef={wrapperRef}
+          />
+        ))}
 
       {/* Smart-snap alignment guides — shown while dragging nodes */}
       <SnapGuidesOverlay

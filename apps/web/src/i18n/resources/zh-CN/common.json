@@ -779,6 +779,8 @@
     "setCapturedAreaAsPdfCover": "设为 PDF 封面",
     "frameLayoutFree": "自由",
     "frameLayoutColumn": "列",
+    "frameDropNewColumn": "新建列",
+    "frameDropNewRow": "新建行",
     "frameLayoutRow": "行",
     "frameLayoutGrid": "网格",
     "columns": "列数",

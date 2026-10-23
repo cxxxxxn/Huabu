@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   getState: vi.fn(),
   nodeIdAtScreenPoint: vi.fn(),
   onNodeDragStart: vi.fn(),
+  onNodeDrag: vi.fn(),
   onNodesChange: vi.fn(),
   onNodeDragStop: vi.fn(),
   cancelActiveNodeDrag: vi.fn(),
