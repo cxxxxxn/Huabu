@@ -333,6 +333,33 @@ function rejectAgentTurnAcceptance(canvasId: string, threadId: string): void {
   }
 }
 
+export async function reconcileAgentTurnAfterReconnect(
+  canvasId: string,
+  threadId: string,
+): Promise<void> {
+  const key = turnKey(canvasId, threadId);
+  const sink = turnAcceptanceSinks.get(key);
+  if (!sink || activeTurnRequests.has(key)) return;
+  const response = await agentApi.stopThread(
+    threadId,
+    canvasId,
+    sink.requestId,
+  );
+  if (turnAcceptanceSinks.get(key) !== sink) return;
+  if (response.request?.id !== sink.requestId) {
+    throw new Error(
+      'Agent request reconciliation returned no matching request',
+    );
+  }
+  useChatStore.getState().setQueuePaused(threadId, true);
+  if (response.request.accepted) {
+    turnAcceptanceSinks.delete(key);
+    sink.accept({ requestId: sink.requestId });
+  } else {
+    rejectAgentTurnAcceptance(canvasId, threadId);
+  }
+}
+
 export function resetAgentTurnAcceptanceObserversForTests(): void {
   turnAcceptanceSinks.clear();
   preparingTurnCancellations.clear();
@@ -1053,6 +1080,31 @@ export async function dispatchAgentTurn(
   }
 }
 
+function waitForPreparation<T>(
+  operation: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  // Stop waiting without cancelling persistence shared with other callers.
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    operation.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+    if (signal.aborted) {
+      signal.removeEventListener('abort', onAbort);
+      onAbort();
+    }
+  });
+}
+
 async function executeAgentTurn(
   input: PreparedAgentTurn,
   callbacks: AgentTurnCallbacks = {},
@@ -1147,8 +1199,14 @@ async function executeAgentTurn(
         throw new Error('Ink requests require selected Sketch strokes');
       }
       if (conversationView) {
-        await awaitConversationDraft(conversationView);
-        await validateConversationView(conversationView);
+        await waitForPreparation(
+          awaitConversationDraft(conversationView),
+          streamClaim.signal,
+        );
+        await waitForPreparation(
+          validateConversationView(conversationView),
+          streamClaim.signal,
+        );
       }
       if (streamClaim.signal.aborted) {
         result.status = 'stopped';
@@ -1156,7 +1214,10 @@ async function executeAgentTurn(
       }
       if (callbacks.canDispatch?.() === false) return;
       if (requestScope.includeCanvasSelection && requestScope.canvasId) {
-        await saveCanvasForSubmission(requestScope.canvasId);
+        await waitForPreparation(
+          saveCanvasForSubmission(requestScope.canvasId),
+          streamClaim.signal,
+        );
       }
       if (streamClaim.signal.aborted) {
         result.status = 'stopped';
@@ -1164,6 +1225,10 @@ async function executeAgentTurn(
       }
       if (callbacks.canDispatch?.() === false) return;
     } catch (error) {
+      if (streamClaim.signal.aborted) {
+        result.status = 'stopped';
+        return;
+      }
       result.error = error instanceof Error ? error : new Error(String(error));
       if (callbacks.queuedTurnId) addMessage(threadId, userMessage);
       addMessage(threadId, {
@@ -1255,7 +1320,10 @@ async function executeAgentTurn(
     // network blip to block the agent call.
     try {
       if (requestScope.includeCanvasSelection && requestScope.canvasId) {
-        await useCanvasStore.getState().flushCanvasEvents();
+        await waitForPreparation(
+          useCanvasStore.getState().flushCanvasEvents(),
+          streamClaim.signal,
+        );
       }
       if (streamClaim.signal.aborted) {
         result.status = 'stopped';
@@ -1327,13 +1395,15 @@ async function executeAgentTurn(
           },
           onComplete: () => {
             if (errorHandled) return;
-            settleTurnInkInterpretation(
-              streamContext,
-              streamClaim.signal.aborted ? 'interrupted' : 'done',
-            );
             result.status = streamClaim.signal.aborted
               ? 'stopped'
-              : 'completed';
+              : !result.accepted && result.completedNormally === undefined
+                ? 'unknown'
+                : 'completed';
+            settleTurnInkInterpretation(
+              streamContext,
+              result.status === 'completed' ? 'done' : 'interrupted',
+            );
           },
         },
         {
@@ -1392,7 +1462,7 @@ async function executeAgentTurn(
         if (!conversationView) {
           refreshConversationTitleAfterStream(session.ownerCanvasId, threadId);
         }
-        await refreshAfterLifecycle();
+        if (requestDispatched) await refreshAfterLifecycle();
       } catch (error) {
         console.error('Failed to refresh Agent turn presentation', error);
         result.error ??=

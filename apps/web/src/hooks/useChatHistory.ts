@@ -30,6 +30,7 @@ import {
   clearInkInterpretationStream,
   inkTurnOutcome,
   observeAgentTurnAcceptance,
+  reconcileAgentTurnAfterReconnect,
   settleTurnInkInterpretation,
   settleAgentTurnQueue,
 } from './agentTurnController';
@@ -591,6 +592,8 @@ export function useChatHistory(
         settleTurnInkInterpretation(streamContext, 'interrupted');
       }
       if (result.status !== 'aborted' && !cancelled) {
+        await reconcileAgentTurnAfterReconnect(ownerCanvasId, ownerThreadId);
+        if (cancelled) return;
         const finalHistory = await fetchLatestHistoryWindow(
           ownerThreadId,
           ownerCanvasId,
