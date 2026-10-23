@@ -12,6 +12,7 @@ import { SPACE_SHORTCUT_SIZE } from '@huabu/shared/canvas-engine';
 import { ApiError } from '@/api/_client';
 import { renameSpace } from '@/api/spaceCard';
 import { Button } from '@/components/Common/Button';
+import { DropdownMenuItem } from '@/components/Common/DropdownMenu';
 import { TextInput } from '@/components/Common/TextInput';
 import { Tooltip } from '@/components/Common/Tooltip';
 import { nodeLayoutBorderInset } from '@/components/Nodes/design/nodeBoundary';
@@ -242,40 +243,40 @@ export const SpacePreviewNode = memo(
         onDoubleClick={openTarget}
         farLabel={{ title: target.title }}
         actions={
+          <Button
+            variant="ghost"
+            iconOnly
+            title={t('spacePreview.openSpace')}
+            disabled={!canOpen}
+            onClick={openTarget}
+          >
+            <ArrowUpRight />
+          </Button>
+        }
+        overflow={
           <>
-            <Button
-              variant="ghost"
-              iconOnly
-              title={t('spacePreview.openSpace')}
-              disabled={!canOpen}
-              onClick={openTarget}
-            >
-              <ArrowUpRight />
-            </Button>
-            <Button
-              variant="ghost"
-              iconOnly
-              title={t('spacePreview.rename')}
+            <DropdownMenuItem
+              icon={<Pencil />}
+              aria-label={t('spacePreview.rename')}
               disabled={!canRename}
               onClick={startRename}
             >
-              <Pencil />
-            </Button>
+              {t('spacePreview.rename')}
+            </DropdownMenuItem>
             {targetStatus === 'error' ||
             targetStatus === 'missing' ||
             target.error !== null ||
             snapshot?.status === 'error' ? (
-              <Button
-                variant="ghost"
-                iconOnly
-                title={t('spacePreview.retry')}
+              <DropdownMenuItem
+                icon={<RefreshCw />}
+                aria-label={t('spacePreview.retry')}
                 onClick={() => {
                   target.retry();
                   refreshSpaceCardActivity();
                 }}
               >
-                <RefreshCw />
-              </Button>
+                {t('spacePreview.retry')}
+              </DropdownMenuItem>
             ) : null}
           </>
         }

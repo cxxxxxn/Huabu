@@ -1956,23 +1956,22 @@ export function describeStructuredDropZone(
   axis: FrameGridAxis,
   count: number,
   dragged?: DraggedNodeRect,
-  options: StructuredLayoutOptions = {},
+  options: StructuredLayoutOptions & { target?: StructuredDropTarget } = {},
 ): StructuredDropZone | null {
   const frame = nodes.find((n) => n.id === frameId);
   if (!frame || !dragged) return null;
 
-  // One pre-drop solve feeds every axis the mode consults, so a `grid`
-  // still costs the same two solves per tick it always did.
-  const preDrop = solveStructuredFrameLayout(
-    nodes,
-    frameId,
-    'compact',
-    options,
-  );
+  // A supplied masonry target needs only the simulated solve; Grid still picks a row.
+  const preDrop =
+    !options.target || axis === 'grid'
+      ? solveStructuredFrameLayout(nodes, frameId, 'compact', options)
+      : null;
   const isCol = axis !== 'row';
-  const target = isCol
-    ? pickAxisDropTarget(preDrop, 'x', framePoint.x)
-    : pickAxisDropTarget(preDrop, 'y', framePoint.y);
+  const target =
+    options.target ??
+    (isCol
+      ? pickAxisDropTarget(preDrop, 'x', framePoint.x)
+      : pickAxisDropTarget(preDrop, 'y', framePoint.y));
 
   if (axis === 'grid') {
     return describeGridDropZone(

@@ -706,6 +706,9 @@ export const NodeWrapper = memo(
         }
       : undefined;
 
+    const hasStructuredDrop = useGesturePreviewStore(
+      (state) => state.structuredDropPreview?.nodeId === id,
+    );
     const [toolbarGestureActive, setToolbarGestureActive] = useState(false);
     const toolbarDragEnabled = !data.locked;
 
@@ -807,7 +810,12 @@ export const NodeWrapper = memo(
             paintsCardChrome &&
               type !== 'spacePreview' &&
               isDragging &&
+              !hasStructuredDrop &&
               'shadow-md',
+            isDragging &&
+              hasStructuredDrop &&
+              (paintsCardChrome || type === 'frame') &&
+              'shadow-sm',
             type !== 'frame' &&
               type !== 'note' &&
               !accentTokens &&

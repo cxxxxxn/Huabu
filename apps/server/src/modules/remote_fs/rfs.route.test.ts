@@ -244,7 +244,7 @@ describe('GET /api/rfs/:canvasId/skill', () => {
         `${getNodeDefaultSize('web').width} × ${getNodeDefaultSize('web').height}px`,
       );
       expect(res.body).toContain(
-        `${getNodeDefaultSize('note').height}px nominal layout height`,
+        `${getNodeDefaultSize('note').width} × ${getNodeDefaultSize('note').height}px; fixed height by default`,
       );
     } finally {
       await app.close();

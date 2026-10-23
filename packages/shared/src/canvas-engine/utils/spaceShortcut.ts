@@ -5,7 +5,7 @@ import type { Node } from '@xyflow/react';
 
 export const SPACE_SHORTCUT_SIZE = {
   minWidth: 240,
-  defaultWidth: 360,
+  defaultWidth: 400,
   defaultHeight: 120,
   autoMaxHeight: 152,
 } as const;

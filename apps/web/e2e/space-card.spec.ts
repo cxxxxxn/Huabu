@@ -321,7 +321,12 @@ test('Space cards show activity and rename inline without entering the target', 
   });
   expect(created.ok(), await created.text()).toBe(true);
   let activityMode: 'mixed' | 'single' | 'idle' | 'approval' = 'mixed';
+  let failActivity = false;
   await page.route('**/api/canvas/cards/query', async (route) => {
+    if (failActivity) {
+      await route.fulfill({ status: 503, json: { error: 'Offline' } });
+      return;
+    }
     const response = await route.fetch();
     const body = await response.json();
     if (body.spaces[target]?.status === 'ready') {
@@ -447,7 +452,19 @@ test('Space cards show activity and rename inline without entering the target', 
 
   await card.getByText('Card task', { exact: true }).click();
   await expect(card.locator('input')).toHaveCount(0);
-  await card.getByText('Card task', { exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: 'Rename Space', exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole('button', { name: 'Retry', exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole('button', { name: 'More', exact: true }).click();
+  await expect(
+    page.getByRole('menuitem', { name: 'Retry', exact: true }),
+  ).toHaveCount(0);
+  await page
+    .getByRole('menuitem', { name: 'Rename Space', exact: true })
+    .click();
   const input = card.getByRole('textbox', { name: 'Rename Space' });
   await expect(input).toBeFocused();
   await input.fill('Renamed task');
@@ -469,6 +486,21 @@ test('Space cards show activity and rename inline without entering the target', 
   await card.locator('[data-space-shortcut-summary]').click();
   await expect(input).toHaveCount(0);
   await expect(card).toContainText('Saved on blur');
+  failActivity = true;
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(card.locator('[role="status"]')).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Retry', exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole('button', { name: 'More', exact: true }).click();
+  const retry = page.getByRole('menuitem', { name: 'Retry', exact: true });
+  await expect(retry).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath('space-more-actions.png'),
+  });
+  failActivity = false;
+  await retry.click();
+  await expect(card.locator('[role="status"]')).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('space-card.png') });
   await page.getByRole('button', { name: 'Size', exact: true }).click();
   await page.locator('input[name="node-width"]').fill('720');
