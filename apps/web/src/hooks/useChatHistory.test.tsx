@@ -361,6 +361,40 @@ describe('useChatHistory paging', () => {
       historyError: null,
     });
   });
+
+  it('retains the draft after invalidated history fails and retries without remounting', async () => {
+    seedStore(false);
+    const chat = useChatStore.getState();
+    chat.setMessages(THREAD_ID, []);
+    chat.setDraft(THREAD_ID, 'Unsent draft');
+    await renderHarness();
+    expect(apiMocks.fetchHistoryPage).not.toHaveBeenCalled();
+
+    apiMocks.fetchHistoryPage.mockRejectedValueOnce(
+      new Error('History unavailable'),
+    );
+    await act(async () => chat.setHistoryLoaded(THREAD_ID, false));
+    expect(useChatStore.getState().threadsById[THREAD_ID]).toMatchObject({
+      historyLoaded: false,
+      historyError: 'History unavailable',
+      draft: 'Unsent draft',
+    });
+    expect(apiMocks.fetchHistoryPage).toHaveBeenCalledOnce();
+    apiMocks.fetchHistoryPage.mockResolvedValueOnce({
+      threadId: THREAD_ID,
+      turns: [],
+      hasMore: false,
+    });
+    await act(async () => latestRetryHistory?.());
+    expect(apiMocks.fetchHistoryPage).toHaveBeenCalledTimes(2);
+    expect(useChatStore.getState().threadsById[THREAD_ID]).toMatchObject({
+      historyLoaded: true,
+      historyError: null,
+      draft: 'Unsent draft',
+    });
+    expect(apiMocks.reconnectStream).not.toHaveBeenCalled();
+  });
+
   it('rehydrates quote-only user messages without regenerating template text', async () => {
     useChatStore.setState({ threadsById: {} });
     const quotedComments = [

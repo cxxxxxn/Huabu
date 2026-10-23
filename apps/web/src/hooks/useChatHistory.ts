@@ -280,7 +280,7 @@ export function useChatHistory(
     return (owner?.data as { status?: unknown } | undefined)?.status;
   });
 
-  // Load history from server on first mount (once per thread).
+  // Load history on first mount and when the thread's cache is invalidated.
   // Wait for canvasId to be available — on initial mount the canvas may
   // not have loaded yet, causing a request without canvasId that 404s.
   useEffect(() => {
@@ -362,6 +362,7 @@ export function useChatHistory(
     canvasId,
     recentTurnCount,
     historyError,
+    isHistoryLoaded,
   ]);
 
   const loadOlderHistory = useCallback(() => {
