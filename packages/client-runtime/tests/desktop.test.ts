@@ -59,11 +59,37 @@ describe('desktop device credential exchange', () => {
       new URL('https://huabu.test/api/acp/connection-credentials'),
       expect.objectContaining({
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: 'https://huabu.test',
+        },
         body: '{}',
         redirect: 'error',
       }),
     );
   });
+  it.each([
+    ['http://192.168.1.20:3001/', 'http://192.168.1.20:3001'],
+    ['https://HUABU.test:443/', 'https://huabu.test'],
+  ])(
+    'pins credential requests to the normalized server origin: %s',
+    async (origin, expected) => {
+      const request = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(Response.json({ token: 'secret', maxAgents: 3 }));
+      await fetchDesktopAgentCredential(origin, request);
+      expect(request).toHaveBeenCalledWith(
+        new URL('/api/acp/connection-credentials', expected),
+        expect.objectContaining({
+          headers: {
+            'Content-Type': 'application/json',
+            Origin: expected,
+          },
+          redirect: 'error',
+        }),
+      );
+    },
+  );
   it.each([401, 403, 302, 503])(
     'surfaces HTTP %i without returning credentials',
     async (status) => {

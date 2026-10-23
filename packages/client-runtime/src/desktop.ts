@@ -42,7 +42,10 @@ export async function fetchDesktopAgentCredential(
     new URL('/api/acp/connection-credentials', origin),
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: new URL(origin).origin,
+      },
       body: '{}',
       redirect: 'error',
       signal: AbortSignal.timeout(10_000),
