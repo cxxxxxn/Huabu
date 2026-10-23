@@ -3,10 +3,15 @@
 
 import { describe, expect, it } from 'vitest';
 
+import {
+  executeCanvasCommands,
+  solveStructuredFrameLayout,
+} from '@huabu/shared/canvas-engine';
+
 import resolveAddNodes from '../resolveAddNodes';
 import resolvePasteClipboard from '../resolvePasteClipboard';
 
-import type { CanvasNodeType, SketchStroke } from '@huabu/shared';
+import type { CanvasNodeType, Point, SketchStroke } from '@huabu/shared';
 import type { Node } from '@xyflow/react';
 
 const ui = { nodes: [], edges: [] };
@@ -124,6 +129,160 @@ describe('resolveAddNodes', () => {
     expect(create.nodes[0]).not.toHaveProperty('selectOnCreate');
   });
 });
+
+describe.each(['column', 'row'] as const)(
+  'resolveAddNodes in a %s Frame',
+  (axis) => {
+    const frameId = 'node-frame';
+    const field = axis === 'column' ? 'frameColumn' : 'frameRow';
+    const along = axis === 'column' ? 'y' : 'x';
+
+    function scene(sizing = 'hug', nested = false): Node[] {
+      const nodes: Node[] = [
+        ...(nested
+          ? [
+              {
+                id: 'outer',
+                type: 'frame',
+                position: { x: 300, y: 400 },
+                data: { sizing: 'manual' },
+                style: { width: 1600, height: 1600 },
+              },
+            ]
+          : []),
+        {
+          id: frameId,
+          type: 'frame',
+          ...(nested ? { parentId: 'outer' } : {}),
+          position: { x: 100, y: 200 },
+          data: { layoutMode: axis, gridCount: 2, sizing },
+          style: { width: 800, height: 800 },
+        },
+        ...['other', 'first', 'middle', 'last'].map((id, index) => ({
+          id,
+          type: 'note',
+          parentId: frameId,
+          position: { x: index * 100, y: index * 100 },
+          data: { [field]: index === 0 ? 0 : 1, heightMode: 'fixed' },
+          style: { width: 120, height: 80 },
+        })),
+      ];
+      const layout = solveStructuredFrameLayout(nodes, frameId, 'compact');
+      if (!layout) throw new Error('Missing fixture layout');
+      return nodes.map((node) => ({
+        ...node,
+        position: layout.childPositions.get(node.id) ?? node.position,
+      }));
+    }
+
+    function createAt(nodes: Node[], point?: Point, explicitParent = false) {
+      const before = JSON.stringify(nodes);
+      const resolution = resolveAddNodes(
+        {
+          type: 'ADD_NODES',
+          inputs: [
+            {
+              id: 'node-new',
+              nodeType: 'note',
+              size: { width: 120, height: 80 },
+              ...(explicitParent ? { parentId: frameId } : {}),
+              ...(point ? { placementPoint: point } : {}),
+            },
+          ],
+        },
+        { nodes, edges: [] },
+      );
+      const committed = executeCanvasCommands(
+        { source: 'ui', commands: resolution.commands },
+        { nodes, edges: [], canvasId: 'canvas' },
+      ).writeResult.nodes;
+      expect(JSON.stringify(nodes)).toBe(before);
+      return committed;
+    }
+
+    it.each(
+      ['hug', 'manual'].flatMap((sizing) =>
+        [0, 1, 3].map((index) => ({ sizing, index })),
+      ),
+    )(
+      'inserts at position $index in the pointed track ($sizing)',
+      ({ sizing, index }) => {
+        const nodes = scene(sizing);
+        const peers = nodes.filter((node) => node.data[field] === 1);
+        const anchor = peers[Math.min(index, peers.length - 1)].position;
+        const local = {
+          ...anchor,
+          [along]: anchor[along] + (index === peers.length ? 100 : -5),
+        };
+        const committed = createAt(nodes, {
+          x: 100 + local.x,
+          y: 200 + local.y,
+        });
+        const added = committed.find((node) => node.id === 'node-new');
+        expect(added).toMatchObject({
+          parentId: frameId,
+          data: { [field]: 1 },
+        });
+        const expected = peers.map((node) => node.id);
+        expected.splice(index, 0, 'node-new');
+        expect(
+          committed
+            .filter(
+              (node) => node.parentId === frameId && node.data[field] === 1,
+            )
+            .sort((a, b) => a.position[along] - b.position[along])
+            .map((node) => node.id),
+        ).toEqual(expected);
+        expect(
+          committed.find((node) => node.id === frameId)?.data.gridCount,
+        ).toBe(2);
+      },
+    );
+
+    it.each([false, true])(
+      'uses parent-local coordinates in nested Frames (explicit parent: %s)',
+      (explicitParent) => {
+        const nodes = scene('manual', true);
+        const local = nodes.find((node) => node.id === 'middle')?.position;
+        if (!local) throw new Error('Missing middle node');
+        const point = explicitParent
+          ? local
+          : { x: 400 + local.x, y: 600 + local.y };
+        expect(
+          createAt(nodes, point, explicitParent).find(
+            (node) => node.id === 'node-new',
+          ),
+        ).toMatchObject({ parentId: frameId, data: { [field]: 1 } });
+      },
+    );
+
+    it('keeps automatic track assignment without a placement point', () => {
+      expect(
+        createAt(scene(), undefined, true).find(
+          (node) => node.id === 'node-new',
+        ),
+      ).toMatchObject({ parentId: frameId, data: { [field]: 0 } });
+    });
+
+    it('uses the nearest existing track in a gutter without creating one', () => {
+      const nodes = scene();
+      const layout = solveStructuredFrameLayout(nodes, frameId, 'compact');
+      const column = layout?.columnTracks?.[1];
+      const row = layout?.rowTracks?.[1];
+      const start = axis === 'column' ? column?.left : row?.top;
+      if (start === undefined) throw new Error('Missing second track');
+      const local =
+        axis === 'column' ? { x: start - 1, y: 100 } : { x: 100, y: start - 1 };
+      const committed = createAt(nodes, { x: 100 + local.x, y: 200 + local.y });
+      expect(
+        committed.find((node) => node.id === 'node-new')?.data[field],
+      ).toBe(1);
+      expect(
+        committed.find((node) => node.id === frameId)?.data.gridCount,
+      ).toBe(2);
+    });
+  },
+);
 
 describe('resolvePasteClipboard', () => {
   it('rebases surviving children before paste placement and drops incident edges', () => {

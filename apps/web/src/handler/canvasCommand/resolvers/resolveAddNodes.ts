@@ -15,8 +15,12 @@ import {
   type NodeSize,
   type Point,
 } from '@huabu/shared';
-import { getNodeDefaultSize } from '@huabu/shared/canvas-engine';
+import {
+  getNodeDefaultSize,
+  readFrameGridConfig,
+} from '@huabu/shared/canvas-engine';
 
+import { resolveMasonryDrop } from '../../masonryDrop';
 import { resolveFrameAtPoint } from '../utils';
 
 import type {
@@ -159,16 +163,38 @@ function materializeAddNode(
       : { x: 0, y: 0 };
   }
 
+  let data = input.data;
+  const config = parentId
+    ? readFrameGridConfig(ui.nodes.find((node) => node.id === parentId))
+    : null;
+  if (
+    input.placementPoint &&
+    parentId &&
+    (config?.axis === 'column' || config?.axis === 'row')
+  ) {
+    const { target } = resolveMasonryDrop(
+      ui.nodes,
+      parentId,
+      config.axis,
+      position,
+      { edges: ui.edges, allowInsert: false },
+    );
+    data = {
+      ...data,
+      [config.axis === 'column' ? 'frameColumn' : 'frameRow']: target.slot,
+    };
+  }
+
   return {
     node: {
       id: nodeId,
       nodeType: input.nodeType,
       data: (input.nodeType === 'question'
         ? {
-            ...input.data,
+            ...data,
             threadId: input.data?.threadId ?? createId('thread'),
           }
-        : input.data) as never,
+        : data) as never,
       position,
       ...(size && { size }),
       ...(parentId && { parentId }),
