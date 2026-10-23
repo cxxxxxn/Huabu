@@ -48,7 +48,7 @@ function Specimen({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-fg-default text-sm font-semibold">{title}</h2>
           <span
-            className={cn('text-xs', draft ? 'text-info' : 'text-fg-subtle')}
+            className={cn('text-xs', draft ? 'text-info-fg' : 'text-fg-subtle')}
           >
             {draft ? '拟议组合 · 尚未抽取' : '复用现有组件'}
           </span>
@@ -666,7 +666,7 @@ export default function SettingsComponentsPlaygroundPage() {
               </Button>
               <Link
                 to="/playground/components"
-                className="text-info self-center px-2 text-xs underline"
+                className="text-info-fg self-center px-2 text-xs underline"
               >
                 Common 展厅
               </Link>

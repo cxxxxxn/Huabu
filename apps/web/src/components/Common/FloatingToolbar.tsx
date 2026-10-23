@@ -63,7 +63,7 @@ export type ToolbarAlignDirection =
 
 /** Base class string shared by every toolbar surface (node, edge, multi-select). */
 export const FLOATING_TOOLBAR_CLASS =
-  'text-fg-muted shadow-bottom bg-surface flex items-center gap-1 rounded-lg p-1.5';
+  'text-fg-muted shadow-bottom bg-surface flex items-center gap-1 rounded-lg p-1.5 [&_button[aria-pressed=true]_svg]:text-info';
 
 /** Shared surface chrome for compact popovers opened from a toolbar. */
 export const FLOATING_TOOLBAR_POPOVER_CLASS = `${POPOVER_SURFACE_CLASS} z-50 p-2`;
@@ -117,7 +117,7 @@ interface ToggleButtonProps {
 /**
  * A toolbar button with a consistent active / inactive highlight.
  *
- * Active:   `text-info bg-info-bg`
+ * Active:   `text-info-fg bg-info-bg`
  * Inactive: `text-fg-muted hover:bg-bg-default`
  */
 function ToggleButton({
@@ -140,7 +140,7 @@ function ToggleButton({
       disabled={disabled}
       className={cn(
         active
-          ? 'text-info bg-info-bg enabled:hover:bg-info-bg'
+          ? 'text-info-fg bg-info-bg enabled:hover:bg-info-bg'
           : 'text-fg-muted hover:bg-bg-default',
         className,
       )}
@@ -783,7 +783,9 @@ function ToolbarSizePicker({
           }}
           className={cn(
             'nodrag flex h-6 w-6 items-center justify-center rounded transition-colors',
-            autoActive ? 'text-info' : 'text-fg-subtle hover:text-fg-default',
+            autoActive
+              ? 'text-info-fg'
+              : 'text-fg-subtle hover:text-fg-default',
           )}
         >
           {icon}

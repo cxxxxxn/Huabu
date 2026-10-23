@@ -303,7 +303,7 @@ export function WorkingDirectoryOverride({
                   className={cn(
                     'text-fg-default block min-h-[1lh] w-full min-w-0 flex-1 resize-none overflow-hidden rounded-sm border-0 bg-transparent p-0 leading-5.25 wrap-anywhere focus:ring-0',
                     isEditing &&
-                      'ring-edge-default focus:ring-info-light ring-1 focus:ring-1',
+                      'ring-edge-default focus:ring-info ring-1 focus:ring-1',
                   )}
                 />
                 {showPickerSlot ? (

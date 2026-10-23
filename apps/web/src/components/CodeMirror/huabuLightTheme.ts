@@ -47,8 +47,8 @@ const BG_SURFACE = 'var(--bg-surface)';
 const BG_HOVER = 'var(--bg-hover)';
 const EDGE_DEFAULT = 'var(--edge-default)';
 const INFO = 'var(--info)';
+const INFO_FG = 'var(--info-fg)';
 const INFO_BG = 'var(--info-bg)';
-const INFO_BG_HOVER = 'var(--info-bg-hover)';
 const SUCCESS = 'var(--success)';
 const WARNING = 'var(--warning)';
 const DANGER = 'var(--danger)';
@@ -85,12 +85,13 @@ const chrome = EditorView.theme(
     // both the `::selection` pseudo and the `.cm-selectionBackground`
     // class because CM swaps strategies between focused / unfocused
     // and between native / drawn selection layers.
-    '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection':
+    '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection':
       {
         backgroundColor: INFO_BG,
       },
     '.cm-selectionMatch': {
-      backgroundColor: INFO_BG_HOVER,
+      backgroundColor: BG_HOVER,
+      textDecoration: `underline ${INFO}`,
     },
 
     // Active line: very subtle to avoid competing with selection.
@@ -170,12 +171,12 @@ const highlight = HighlightStyle.define([
   // Kept at uniform font-size to preserve the monospaced grid; weight
   // + color signal hierarchy. h4–h6 lose the extra-bold weight so
   // deeply-nested outlines don't look "shouty".
-  { tag: t.heading1, color: INFO, fontWeight: '700' },
-  { tag: t.heading2, color: INFO, fontWeight: '700' },
-  { tag: t.heading3, color: INFO, fontWeight: '700' },
-  { tag: t.heading4, color: INFO, fontWeight: '600' },
-  { tag: t.heading5, color: INFO, fontWeight: '600' },
-  { tag: t.heading6, color: INFO, fontWeight: '600' },
+  { tag: t.heading1, color: INFO_FG, fontWeight: '700' },
+  { tag: t.heading2, color: INFO_FG, fontWeight: '700' },
+  { tag: t.heading3, color: INFO_FG, fontWeight: '700' },
+  { tag: t.heading4, color: INFO_FG, fontWeight: '600' },
+  { tag: t.heading5, color: INFO_FG, fontWeight: '600' },
+  { tag: t.heading6, color: INFO_FG, fontWeight: '600' },
 
   // ── Inline emphasis ──────────────────────────────────────────────
   { tag: t.strong, fontWeight: '700' },
@@ -183,8 +184,8 @@ const highlight = HighlightStyle.define([
   { tag: t.strikethrough, textDecoration: 'line-through' },
 
   // ── Links / URLs ────────────────────────────────────────────────
-  { tag: t.link, color: INFO, textDecoration: 'underline' },
-  { tag: t.url, color: INFO },
+  { tag: t.link, color: INFO_FG, textDecoration: 'underline' },
+  { tag: t.url, color: INFO_FG },
 
   // ── Code (inline & fenced) ───────────────────────────────────────
   // `monospace` covers both `` `inline` `` and the contents of code
@@ -197,7 +198,7 @@ const highlight = HighlightStyle.define([
   { tag: t.quote, color: FG_MUTED, fontStyle: 'italic' },
 
   // ── Lists ───────────────────────────────────────────────────────
-  { tag: t.list, color: INFO },
+  { tag: t.list, color: INFO_FG },
 
   // ── Horizontal rule (---) ───────────────────────────────────────
   { tag: t.contentSeparator, color: FG_SUBTLE },
@@ -213,7 +214,7 @@ const highlight = HighlightStyle.define([
   { tag: t.escape, color: FG_SUBTLE },
 
   // ── Task list literals ([ ] / [x]) ──────────────────────────────
-  { tag: t.literal, color: INFO },
+  { tag: t.literal, color: INFO_FG },
 
   // ── Generic code tags (kept for future fenced sub-language
   //    highlighting; harmless when sub-languages aren't enabled). ──

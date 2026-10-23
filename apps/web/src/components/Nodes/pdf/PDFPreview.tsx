@@ -664,7 +664,7 @@ export const PDFPreview = ({
         title={t('node.selectArea')}
         aria-label={t('node.selectAreaToCapture')}
         aria-pressed={captureMode}
-        className={clsx(captureMode && 'text-info bg-bg-default')}
+        className={clsx(captureMode && 'text-info-fg bg-bg-default')}
         onClick={() => {
           const next = !captureMode;
           setCaptureMode(next);

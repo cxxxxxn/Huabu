@@ -325,7 +325,7 @@ export const TreeRowItem = React.memo(
               onKeyDown={handleKeyDown}
               onClick={(e) => e.stopPropagation()}
               onMouseDown={(e) => e.stopPropagation()}
-              className="focus:border-info focus:ring-info/20 h-6 w-full min-w-0 flex-1 px-1 py-0 text-sm font-normal focus:ring-2"
+              className="focus:border-info focus:ring-info-light h-6 w-full min-w-0 flex-1 px-1 py-0 text-sm font-normal focus:ring-2"
             />
           ) : (
             <span

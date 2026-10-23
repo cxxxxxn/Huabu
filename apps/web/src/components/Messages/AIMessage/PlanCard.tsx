@@ -12,7 +12,7 @@
  *
  * Semantic-token discipline (matches design-system §2.1):
  *   pending     → text-fg-muted   (no special color)
- *   in_progress → text-info       (active)
+ *   in_progress → text-info-fg       (active)
  *   completed   → text-success    (done)
  *   priority badge uses tonal pills, no raw hex.
  */
@@ -102,7 +102,11 @@ export function PlanCard({ entries }: PlanCardProps) {
                   {entry.status === 'completed' ? (
                     <Check size={12} className="text-success" />
                   ) : entry.status === 'in_progress' ? (
-                    <Loading layout="inline" size="xs" className="text-info" />
+                    <Loading
+                      layout="inline"
+                      size="xs"
+                      className="text-info-fg"
+                    />
                   ) : (
                     <Circle size={12} className="text-fg-muted" />
                   )}

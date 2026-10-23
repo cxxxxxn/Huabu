@@ -26,8 +26,7 @@ import type {
 
 const BADGE_LAYOUT = 'gap-1.5 rounded-md py-[3px]';
 const BADGE_STATUS_CLASSES: Record<SpaceCardAgent['status'], string> = {
-  running:
-    'bg-info-bg text-[color:color-mix(in_srgb,var(--info)_65%,var(--fg-default))] enabled:hover:bg-info-bg-hover',
+  running: 'bg-info-bg text-info-fg enabled:hover:bg-info-bg-hover',
   approval:
     'bg-warning-bg text-[color:color-mix(in_srgb,var(--warning)_65%,var(--fg-default))] enabled:hover:bg-warning-bg-hover',
   error: 'bg-danger-bg text-danger enabled:hover:bg-danger-bg-hover',

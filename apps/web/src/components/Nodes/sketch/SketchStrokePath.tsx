@@ -48,7 +48,7 @@ export const SketchStrokePath = memo(function SketchStrokePath({
           fill="none"
           stroke="var(--color-info)"
           strokeWidth={2}
-          strokeOpacity={emphasis === 'selected' ? 0.7 : 0.45}
+          strokeOpacity={`var(--sketch-${emphasis}-opacity)`}
           strokeLinejoin="round"
           strokeLinecap="round"
           vectorEffect="non-scaling-stroke"

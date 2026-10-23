@@ -90,7 +90,7 @@
   color: var(--danger);
 }
 .qs-state-symbol[data-tone='info'] {
-  color: var(--info);
+  color: var(--info-fg);
 }
 .qs-state-symbol[data-tone='success'] {
   color: var(--success);
@@ -385,7 +385,7 @@
   background: var(--bg-hover);
 }
 .qd-status[data-tone='info'] {
-  color: var(--info);
+  color: var(--info-fg);
   background: var(--info-bg);
 }
 .qd-status[data-tone='warning'] {

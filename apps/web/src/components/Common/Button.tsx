@@ -53,7 +53,7 @@ const variantToneClasses: Record<ButtonVariant, Record<Tone, string>> = {
   solid: {
     neutral:
       'border border-transparent bg-inverse text-fg-inverse enabled:hover:bg-inverse/80',
-    info: 'border border-transparent bg-info text-fg-inverse enabled:hover:bg-info/80',
+    info: 'border border-transparent bg-info-fg text-fg-inverse enabled:hover:ring-1 enabled:hover:ring-inset enabled:hover:ring-fg-inverse',
     success:
       'border border-transparent bg-success text-fg-inverse enabled:hover:bg-success/80',
     warning:
@@ -64,7 +64,7 @@ const variantToneClasses: Record<ButtonVariant, Record<Tone, string>> = {
   outline: {
     neutral:
       'border border-edge-default bg-surface text-fg-muted enabled:hover:bg-hover',
-    info: 'border border-info bg-surface text-info enabled:hover:bg-info-bg',
+    info: 'border border-info bg-surface text-info-fg enabled:hover:bg-info-bg',
     success:
       'border border-success bg-surface text-success enabled:hover:bg-success-bg',
     warning:
@@ -75,7 +75,7 @@ const variantToneClasses: Record<ButtonVariant, Record<Tone, string>> = {
   ghost: {
     neutral:
       'cursor-pointer border-none bg-transparent text-fg-muted enabled:hover:bg-hover',
-    info: 'cursor-pointer border-none bg-transparent text-info enabled:hover:bg-info-bg',
+    info: 'cursor-pointer border-none bg-transparent text-info-fg enabled:hover:bg-info-bg',
     success:
       'cursor-pointer border-none bg-transparent text-success enabled:hover:bg-success-bg',
     warning:
@@ -174,7 +174,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
             className={cn(
               'pointer-events-none absolute right-1 bottom-0.5 select-none',
               'text-[9px] leading-none font-medium',
-              shortcutBadgeActive ? 'text-info' : 'text-fg-subtle',
+              shortcutBadgeActive ? 'text-info-fg' : 'text-fg-subtle',
             )}
           >
             {shortcutBadge}

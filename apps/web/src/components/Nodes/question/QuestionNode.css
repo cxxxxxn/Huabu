@@ -5,6 +5,11 @@
 
 .question-compact {
   --question-tone: var(--fg-muted);
+  --question-fg: color-mix(
+    in srgb,
+    var(--question-tone) 65%,
+    var(--fg-default)
+  );
   --question-light: var(--fg-subtle);
   --question-bg: var(--bg-hover);
   --question-fill: var(--bg-surface);
@@ -12,6 +17,7 @@
 }
 .question-tone-info {
   --question-tone: var(--info);
+  --question-fg: var(--info-fg);
   --question-light: var(--info-light);
   --question-bg: var(--info-bg);
 }
@@ -100,7 +106,7 @@
   min-width: 0;
   flex: 0 1 auto;
   overflow: hidden;
-  color: color-mix(in srgb, var(--question-tone) 65%, var(--fg-default));
+  color: var(--question-fg);
   border-radius: calc(6px * var(--question-scale));
   background: var(--question-bg);
   padding: calc(3px * var(--question-scale))

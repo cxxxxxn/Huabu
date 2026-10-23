@@ -89,7 +89,7 @@ export function SnapshotNodesCard({ part }: SnapshotNodesCardProps) {
 
   // ── Icon ───────────────────────────────────────────────────────────
   const icon = executing ? (
-    <Loading layout="inline" size="xs" className="text-info" />
+    <Loading layout="inline" size="xs" className="text-info-fg" />
   ) : failed ? (
     <XIcon size={12} className="text-danger" />
   ) : (

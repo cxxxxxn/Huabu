@@ -760,7 +760,7 @@ function BuiltInAvatarCandidate({
   }
 
   return (
-    <div className="bg-info-bg text-info flex h-9 w-9 items-center justify-center rounded-full">
+    <div className="bg-info-bg text-info-fg flex h-9 w-9 items-center justify-center rounded-full">
       <BuiltInSolidMark mode={mode} />
     </div>
   );
@@ -1035,7 +1035,7 @@ function ApprovalRequiredReference({ icon }: { icon: AgentIconValue }) {
           ) : (
             <div className="border-edge-default bg-bg-default rounded-xl border p-4">
               <div className="flex min-w-0 items-start gap-3">
-                <span className="bg-info-bg text-info mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full">
+                <span className="bg-info-bg text-info-fg mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full">
                   <Loader
                     size={17}
                     className="animate-spin motion-reduce:animate-none"
@@ -1065,7 +1065,7 @@ function ApprovalRequiredReference({ icon }: { icon: AgentIconValue }) {
               <span aria-hidden>›</span>
               <span className="bg-bg-default rounded-full px-2 py-1">Open</span>
               <span aria-hidden>›</span>
-              <span className="bg-info-bg text-info rounded-full px-2 py-1">
+              <span className="bg-info-bg text-info-fg rounded-full px-2 py-1">
                 Running
               </span>
               <span aria-hidden>›</span>
@@ -1684,7 +1684,7 @@ function FinalQuestionNodeLodReference({ icon }: { icon: AgentIconValue }) {
             <h2 className="text-fg-default font-semibold">
               Historical · Question-node states
             </h2>
-            <span className="bg-info-bg text-info rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase">
+            <span className="bg-info-bg text-info-fg rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase">
               Archived geometry
             </span>
           </div>
@@ -2366,7 +2366,7 @@ export default function AgentNodePlaygroundPage() {
                       {d.label}
                     </h3>
                     {d.recommended ? (
-                      <span className="bg-info-bg text-info rounded-full px-1.5 py-0.5 text-[10px] font-semibold">
+                      <span className="bg-info-bg text-info-fg rounded-full px-1.5 py-0.5 text-[10px] font-semibold">
                         Recommended
                       </span>
                     ) : null}
@@ -2509,7 +2509,7 @@ export default function AgentNodePlaygroundPage() {
                     {candidate.label}
                   </h3>
                   {candidate.recommended ? (
-                    <span className="bg-info-bg text-info rounded-full px-1.5 py-0.5 text-[10px] font-semibold">
+                    <span className="bg-info-bg text-info-fg rounded-full px-1.5 py-0.5 text-[10px] font-semibold">
                       Recommended
                     </span>
                   ) : null}
@@ -2646,7 +2646,7 @@ export default function AgentNodePlaygroundPage() {
                           {candidate.label}
                         </h4>
                         {candidate.recommended ? (
-                          <span className="text-info text-[10px] font-semibold uppercase">
+                          <span className="text-info-fg text-[10px] font-semibold uppercase">
                             Recommended
                           </span>
                         ) : null}

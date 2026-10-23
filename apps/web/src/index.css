@@ -92,9 +92,10 @@
 
   /* Status: info */
   --info: #2e90ff;
+  --info-fg: #236dc2;
   --info-light: #8ac2ff;
   --info-bg: #f2f8ff;
-  --info-bg-hover: #dbeafe;
+  --info-bg-hover: var(--bg-hover);
 
   /* Status: success */
   --success: #1e7a3f;
@@ -233,10 +234,11 @@
   --warning-bg-hover: oklch(0.28 0.06 80);
 
   /* Status: info */
-  --info: #60a5fa;
-  --info-light: #93c5fd;
-  --info-bg: oklch(0.22 0.04 260);
-  --info-bg-hover: oklch(0.28 0.05 260);
+  --info: #6aaaf4;
+  --info-fg: #b2d3fa;
+  --info-light: #4776ad;
+  --info-bg: #1b304b;
+  --info-bg-hover: var(--bg-hover);
 
   /* Status: danger */
   --danger: oklch(0.704 0.191 22.216);
@@ -265,6 +267,17 @@
   --skeleton-1: oklch(0.2 0 0);
   --skeleton-2: oklch(0.28 0 0);
   --skeleton-3: oklch(0.32 0 0);
+}
+
+/* Resolve translucent interaction paint against the current theme. */
+:root,
+.dark {
+  --canvas-overlay-subtle: color-mix(in srgb, var(--info) 6%, transparent);
+  --canvas-overlay-drop: color-mix(in srgb, var(--info) 10%, transparent);
+  --canvas-overlay-selection: color-mix(in srgb, var(--info) 14%, transparent);
+  --editor-selection-bg: color-mix(in srgb, var(--info) 35%, transparent);
+  --sketch-selected-opacity: 0.7;
+  --sketch-reference-opacity: 0.45;
 }
 
 /* Extending Tailwind theme with utility classes.*/
@@ -309,9 +322,12 @@
 
   /* Status: info */
   --color-info: var(--info);
+  --color-info-fg: var(--info-fg);
   --color-info-light: var(--info-light);
   --color-info-bg: var(--info-bg);
   --color-info-bg-hover: var(--info-bg-hover);
+  --color-canvas-overlay-subtle: var(--canvas-overlay-subtle);
+  --color-canvas-overlay-drop: var(--canvas-overlay-drop);
 
   /* Diff */
   --color-diff-added-bg: var(--diff-added-bg);

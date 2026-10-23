@@ -215,7 +215,7 @@ function SplitSelectDemo() {
             iconOnly
             primaryTitle="Activate current tool"
             menuTitle="Switch tool"
-            primaryButtonClassName="text-info bg-bg-default enabled:hover:bg-bg-default"
+            primaryButtonClassName="text-info-fg bg-bg-default enabled:hover:bg-bg-default"
             menuButtonClassName="enabled:hover:bg-bg-default"
           />
         </div>
@@ -332,7 +332,7 @@ export default function ComponentShowcasePage() {
           </h1>
           <Link
             to="/playground/settings-components"
-            className="text-info text-xs underline"
+            className="text-info-fg text-xs underline"
           >
             Settings component specimens
           </Link>

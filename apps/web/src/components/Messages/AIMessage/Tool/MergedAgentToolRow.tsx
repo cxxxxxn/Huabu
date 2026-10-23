@@ -444,7 +444,7 @@ export function MergedAgentToolRow({
         }
       >
         {isExecuting ? (
-          <Loading layout="inline" size="xs" className="text-info" />
+          <Loading layout="inline" size="xs" className="text-info-fg" />
         ) : isError ? (
           <XIcon size={12} className="text-danger" />
         ) : (

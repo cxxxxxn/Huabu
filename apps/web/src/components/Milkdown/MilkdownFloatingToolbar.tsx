@@ -423,7 +423,7 @@ export function MilkdownFloatingToolbar({
                     }}
                     className={cn(
                       type === activeBlock
-                        ? 'text-info bg-info-bg enabled:hover:bg-info-bg'
+                        ? 'text-info-fg bg-info-bg enabled:hover:bg-info-bg'
                         : undefined,
                     )}
                   >

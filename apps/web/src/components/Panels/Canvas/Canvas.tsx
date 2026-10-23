@@ -226,7 +226,7 @@ const FrameFitPreviewOverlay: React.FC<{
   return (
     <div
       data-canvas-grounding-exclude
-      className="bg-info-bg/40 shadow-bottom pointer-events-none absolute z-40 transition-all duration-150"
+      className="bg-canvas-overlay-subtle shadow-bottom pointer-events-none absolute z-40 transition-all duration-150"
       style={{
         left: screenRect.left,
         top: screenRect.top,
@@ -1620,7 +1620,7 @@ const CanvasContent: React.FC<CanvasProps> = ({
         >
           <path
             d={lassoPreviewPath}
-            fill="color-mix(in srgb, var(--color-info) 14%, transparent)"
+            fill="var(--canvas-overlay-selection)"
             stroke="var(--color-info)"
             strokeWidth={1.5}
             strokeLinejoin="round"
@@ -1632,7 +1632,7 @@ const CanvasContent: React.FC<CanvasProps> = ({
       {/* Frame drag preview overlay */}
       {frameDragRect && frameDragRect.width > 2 && (
         <div
-          className="border-info bg-info-bg/40 pointer-events-none absolute z-50 rounded border border-dashed"
+          className="border-info bg-canvas-overlay-subtle pointer-events-none absolute z-50 rounded border border-dashed"
           style={{
             left: frameDragRect.left,
             top: frameDragRect.top,

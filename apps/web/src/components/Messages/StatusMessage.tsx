@@ -29,7 +29,7 @@ const STATUS_CONFIG: Record<
     icon: BadgeInfo,
     labelKey: 'messages.generationInterrupted',
     bg: 'bg-info-bg',
-    iconColor: 'text-info',
+    iconColor: 'text-info-fg',
     textColor: 'text-fg-default',
     retryHoverBg: 'enabled:hover:bg-info-bg-hover',
   },

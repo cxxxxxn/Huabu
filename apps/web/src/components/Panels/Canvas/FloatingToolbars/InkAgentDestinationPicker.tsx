@@ -250,7 +250,7 @@ export function InkAgentDestinationPicker({
                     }
                     className={cn(
                       'h-auto py-2',
-                      selectedNodeId === conversation.nodeId && 'text-info',
+                      selectedNodeId === conversation.nodeId && 'text-info-fg',
                     )}
                     onClick={() => {
                       if (disabled || conversation.disabledReason) return;

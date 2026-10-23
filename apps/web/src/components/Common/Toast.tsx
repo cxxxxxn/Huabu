@@ -98,7 +98,7 @@ export function dismissToast(id: string) {
 /** Color stays on the status icon so messages and controls remain neutral. */
 const toneIconClasses: Record<ToastTone, string> = {
   neutral: 'text-fg-muted',
-  info: 'text-info',
+  info: 'text-info-fg',
   success: 'text-success',
   warning: 'text-warning',
   danger: 'text-danger',
