@@ -694,6 +694,7 @@ export const MessageList = memo(function MessageList({
                   <div key={msg.id} data-chat-message-id={msg.id}>
                     <UserMessage
                       content={msg.content}
+                      isFirst={i === 0}
                       quotedComments={msg.quotedComments}
                       inputKind={msg.inputKind}
                       inkInterpretation={msg.inkInterpretation}

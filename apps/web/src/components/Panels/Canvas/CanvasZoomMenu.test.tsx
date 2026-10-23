@@ -20,7 +20,7 @@ vi.mock('@xyflow/react', () => ({
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
-vi.mock('../CanvasLayerPanel/focusNodesOnCanvas', () => ({
+vi.mock('@/utils/canvasViewport', () => ({
   fitCanvasContent: vi.fn(),
 }));
 

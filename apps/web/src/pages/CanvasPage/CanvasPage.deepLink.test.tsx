@@ -49,7 +49,7 @@ vi.mock('../../components/Space/moveNodesToSpace', () => ({
 vi.mock('../../components/Nodes/previews', () => ({
   hasNodePreview: (type: string) => type === 'note',
 }));
-vi.mock('../../components/Panels/CanvasLayerPanel/focusNodesOnCanvas', () => ({
+vi.mock('@/utils/canvasViewport', () => ({
   revealNodesOnCanvas: mocks.revealNodesOnCanvas,
   fitNodesOnCanvas: mocks.fitNodesOnCanvas,
 }));

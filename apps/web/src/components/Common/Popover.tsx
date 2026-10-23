@@ -33,6 +33,9 @@ import { FLOATING_CHROME_PROPS } from './floatingChrome';
 
 type FloatingPosition = { x: number; y: number };
 
+export const POPOVER_SURFACE_CLASS =
+  'border-edge-default bg-surface rounded-lg border shadow-bottom';
+
 const PopoverContainerContext = createContext<Element | null>(null);
 
 interface EscapeLayer {
@@ -129,7 +132,7 @@ function assignRef<T>(ref: Ref<T> | undefined, value: T | null) {
 
 export type PopoverProps = Pick<
   HTMLAttributes<HTMLDivElement>,
-  'id' | 'role' | 'aria-labelledby' | 'onKeyDown'
+  'id' | 'role' | 'aria-label' | 'aria-labelledby' | 'onKeyDown'
 > & {
   reference?: Element | null;
   placement?: Placement;
@@ -181,7 +184,7 @@ export type PopoverProps = Pick<
 
   /**
    * Extra className(s) merged onto the outer container `<div>`.
-   * The default styled container provides border, shadow, rounded-md, and bg.
+   * The default styled container provides border, shadow, rounded-lg, and bg.
    */
   className?: string;
 
@@ -220,6 +223,7 @@ export type PopoverProps = Pick<
 export const Popover: FC<PopoverProps> = ({
   id,
   role,
+  'aria-label': label,
   'aria-labelledby': labelledBy,
   onKeyDown,
   reference,
@@ -278,10 +282,14 @@ export const Popover: FC<PopoverProps> = ({
       size({
         padding: viewportMargin,
         boundary: boundary ?? undefined,
-        apply({ availableWidth, elements }) {
+        apply({ availableWidth, availableHeight, elements }) {
           elements.floating.style.setProperty(
             '--popover-available-width',
             `${Math.max(0, availableWidth)}px`,
+          );
+          elements.floating.style.setProperty(
+            '--popover-available-height',
+            `${Math.max(0, availableHeight)}px`,
           );
         },
       }),
@@ -324,6 +332,10 @@ export const Popover: FC<PopoverProps> = ({
       '--popover-available-width',
       `${Math.max(0, bounds.right - bounds.left - viewportMargin * 2)}px`,
     );
+    el.style.setProperty(
+      '--popover-available-height',
+      `${Math.max(0, bounds.bottom - bounds.top - viewportMargin * 2)}px`,
+    );
     const panelRect = el.getBoundingClientRect();
     const anchorRight = anchor === 'top-right' || anchor === 'bottom-right';
     const anchorBottom = anchor === 'bottom-left' || anchor === 'bottom-right';
@@ -359,6 +371,7 @@ export const Popover: FC<PopoverProps> = ({
 
   // Re-clamp on window resize so the panel stays within bounds
   useEffect(() => {
+    if (reference) return;
     window.addEventListener('resize', updateClampedPosition);
     if (boundary)
       window.addEventListener('scroll', updateClampedPosition, true);
@@ -367,11 +380,12 @@ export const Popover: FC<PopoverProps> = ({
       if (boundary)
         window.removeEventListener('scroll', updateClampedPosition, true);
     };
-  }, [boundary, updateClampedPosition]);
+  }, [boundary, reference, updateClampedPosition]);
 
   // Re-clamp when the panel's own size changes (e.g. content switches from
   // a loading spinner to a longer list) so it doesn't overflow.
   useEffect(() => {
+    if (reference) return;
     const el = containerRef.current;
     if (!el) return;
 
@@ -379,7 +393,7 @@ export const Popover: FC<PopoverProps> = ({
     ro.observe(el);
     if (boundary) ro.observe(boundary);
     return () => ro.disconnect();
-  }, [boundary, updateClampedPosition]);
+  }, [boundary, reference, updateClampedPosition]);
 
   // Dismiss on outside pointer-down.
   //
@@ -466,14 +480,13 @@ export const Popover: FC<PopoverProps> = ({
   }, [visible, onOpenAutoFocus]);
   const portalContainer = container ?? parentContainer ?? document.body;
 
-  const contextValue = useMemo(() => contentElement, [contentElement]);
-
   const panel = (
-    <PopoverContainerContext.Provider value={contextValue}>
+    <PopoverContainerContext.Provider value={contentElement}>
       {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions -- Callers supply the role and its keyboard contract together. */}
       <div
         id={id}
         role={role}
+        aria-label={label}
         aria-labelledby={labelledBy}
         tabIndex={role === 'menu' || role === 'dialog' ? -1 : undefined}
         onKeyDown={onKeyDown}
@@ -485,7 +498,8 @@ export const Popover: FC<PopoverProps> = ({
         }}
         {...FLOATING_CHROME_PROPS}
         className={cn(
-          'border-edge-default bg-surface fixed max-w-[var(--popover-available-width,calc(100vw-24px))] min-w-0 rounded-md border shadow-lg',
+          POPOVER_SURFACE_CLASS,
+          'fixed max-w-[var(--popover-available-width,calc(100vw-24px))] min-w-0',
           className,
         )}
         style={{

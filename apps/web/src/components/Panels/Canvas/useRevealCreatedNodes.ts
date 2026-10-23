@@ -4,8 +4,7 @@
 import { useEffect } from 'react';
 
 import useCanvasStore from '@/store/canvasStore';
-
-import { revealNodesOnCanvas } from '../CanvasLayerPanel/focusNodesOnCanvas';
+import { revealNodesOnCanvas } from '@/utils/canvasViewport';
 
 /** Wait for remount and viewport restoration without interrupting fullscreen Chat. */
 export function useRevealCreatedNodes(isInitialViewportPending: boolean) {

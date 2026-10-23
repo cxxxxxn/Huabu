@@ -7,6 +7,7 @@ import { WsClient } from '../src/ws-client.js'
 
 const agents: AgentProcess[] = []
 const relays: Relay[] = []
+const sessionSockets: WsClient[] = []
 let live: WeakMap<AgentProcess, boolean>
 let bootstrapFailure = false
 
@@ -35,9 +36,9 @@ function fixture() {
   return { daemon, logger, responses }
 }
 
-async function spawn(daemon: Agentlet, id: number): Promise<void> {
+async function spawn(daemon: Agentlet, id: number, autoRestart = false): Promise<void> {
   const operation = invoke(daemon, 'handleSpawn', id, {
-    appId: `app-${id}`, sessionSpec: { command: 'test-agent-not-executed' },
+    appId: `app-${id}`, sessionSpec: { command: 'test-agent-not-executed', autoRestart },
   })
   await vi.advanceTimersByTimeAsync(300)
   await operation
@@ -46,6 +47,7 @@ async function spawn(daemon: Agentlet, id: number): Promise<void> {
 beforeEach(() => {
   agents.length = 0
   relays.length = 0
+  sessionSockets.length = 0
   live = new WeakMap()
   bootstrapFailure = false
   vi.useFakeTimers()
@@ -71,6 +73,7 @@ beforeEach(() => {
     return true
   })
   vi.spyOn(WsClient.prototype, 'connect').mockImplementation(function (this: WsClient) {
+    sessionSockets.push(this)
     this.emit('handshake_ok', { sessionId: 'test-session' })
   })
   vi.spyOn(Relay.prototype, 'start').mockImplementation(function (this: Relay) {
@@ -85,6 +88,62 @@ afterEach(() => {
 })
 
 describe('cleanup failure ownership', () => {
+  it.each(['during cleanup', 'during restart delay'])(
+    'does not restart after session transport loss %s',
+    async phase => {
+      const { daemon } = fixture()
+      let finish = () => {}
+      Reflect.set(daemon, 'stopAgentProcess', vi.fn(() => new Promise<void>(resolve => {
+        finish = resolve
+      })))
+      await spawn(daemon, 1, true)
+      agents[0].emit('exit', 1, null)
+      if (phase === 'during restart delay') {
+        finish()
+        await vi.advanceTimersByTimeAsync(0)
+      }
+      sessionSockets[0].emit('close')
+      finish()
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(agents).toHaveLength(1)
+      expect(tracked(daemon, 'agents').size).toBe(0)
+    },
+  )
+
+  it('forcefully cleans both pending and managed processes while cooperative shutdown is stalled', async () => {
+    const { daemon } = fixture()
+    await spawn(daemon, 1)
+    const pending = new AgentProcess({ command: 'pending-agent-not-executed' })
+    pending.start()
+    const starting = tracked(daemon, 'startingAgents')
+    if (!(starting instanceof Set)) throw new Error('Expected pending launch set')
+    starting.add(pending)
+    Reflect.set(daemon, 'shutdownInProgress', true)
+    const kill = vi.spyOn(AgentProcess.prototype, 'kill').mockImplementation(async function (this: AgentProcess) {
+      live.set(this, false)
+    })
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+    await daemon.forceStop()
+    expect(kill).toHaveBeenCalledTimes(2)
+    expect(exit).toHaveBeenCalledWith(1)
+  })
+
+  it('does not confirm cleanup if forced process-tree termination fails', async () => {
+    const entries = vi.fn()
+    const daemon = new Agentlet({
+      server: 'ws://127.0.0.1:1', token: 'test-token', agentletId: 'cleanup-test',
+      allowInsecure: true, reconnectMax: 1, bufferLimit: 10, heartbeat: 0,
+      logLevel: 'error', maxAgents: 2,
+    }, new Logger('error', undefined, entries))
+    await spawn(daemon, 1)
+    vi.spyOn(AgentProcess.prototype, 'kill').mockRejectedValue(new Error('Injected kill failure'))
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+    await daemon.forceStop()
+    expect(entries).toHaveBeenCalledWith(expect.objectContaining({ event: 'forced_shutdown_cleanup_failed' }))
+    expect(entries).not.toHaveBeenCalledWith(expect.objectContaining({ event: 'stopped' }))
+    expect(exit).toHaveBeenCalledWith(1)
+  })
+
   it.each(['shutdownInProgress', 'serverRestartInProgress'])(
     'rejects new launches while %s is active',
     async flag => {

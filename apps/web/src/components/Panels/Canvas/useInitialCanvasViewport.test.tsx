@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/store/canvasStore', () => ({
   default: { getState: () => mocks },
 }));
-vi.mock('../CanvasLayerPanel/focusNodesOnCanvas', () => ({
+vi.mock('@/utils/canvasViewport', () => ({
   fitNodesOnCanvas: mocks.fit,
 }));
 

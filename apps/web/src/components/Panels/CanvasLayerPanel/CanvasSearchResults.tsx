@@ -36,9 +36,9 @@ import { useTranslation } from 'react-i18next';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 
 import { usePreviewSearchStore } from '@/store/previewSearchStore';
+import { revealNodesOnCanvas } from '@/utils/canvasViewport';
 
 import { shouldCanvasSearchOwnKeyboard } from './canvasSearchKeyboard';
-import { revealNodesOnCanvas } from './focusNodesOnCanvas';
 import { CanvasSearchNodeIcon } from './LayerNodeIcon';
 import {
   LAYER_ROW_ICON_CLASS,

@@ -437,6 +437,9 @@ describe('embedded PDF reader', () => {
     ).find((element) => element.textContent === 'node.pdfFitPage');
     act(() => fitPage?.click());
     expect(document.querySelector('[role="menu"]')).toBeNull();
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
     expect(document.activeElement).toBe(button('node.pdfZoomMenu'));
     expect(Number.parseFloat(shell?.style.width ?? '')).toBeLessThan(400);
     expect(

@@ -281,12 +281,25 @@ describe('agentlet daemon integration', () => {
     ownedPids.length = 0
     expect(controlHello?.agentletId).toBe('machine-a')
     expect(await request(17, ServerMethods.LIST, {})).toMatchObject({ result: { agents: [] } })
+    const beforeSessionLoss = sessionSocket
     expect(await request(18, ServerMethods.SPAWN, {
       appId: 'thread-after-restart',
       sessionSpec: { command: `node ${JSON.stringify(mockAgentPath)}` },
     })).toMatchObject({ result: { sessionId: 'native-bootstrap' } })
+    await waitUntil(() => sessionSocket !== beforeSessionLoss && sessionSocket?.readyState === WebSocket.OPEN)
+    sessionSocket?.terminate()
+    let afterSessionLoss: JsonRpcMessage | undefined
+    for (let attempt = 0; attempt < 50; attempt++) {
+      afterSessionLoss = await request(200 + attempt, ServerMethods.LIST, {})
+      if (afterSessionLoss && 'result' in afterSessionLoss &&
+        typeof afterSessionLoss.result === 'object' && afterSessionLoss.result !== null &&
+        'agents' in afterSessionLoss.result && Array.isArray(afterSessionLoss.result.agents) &&
+        afterSessionLoss.result.agents.length === 0) break
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+    expect(afterSessionLoss).toMatchObject({ result: { agents: [] } })
     expect(await request(19, ServerMethods.STOP, { sessionId: 'native-bootstrap' }))
-      .toMatchObject({ result: { stopped: true } })
+      .toMatchObject({ result: { stopped: true, disposition: 'already_absent' } })
     const pendingAgentPath = join(fixtureDir, 'pending-agent.cjs')
     const pendingStarted = join(fixtureDir, 'pending-started')
     writeFileSync(pendingAgentPath, [

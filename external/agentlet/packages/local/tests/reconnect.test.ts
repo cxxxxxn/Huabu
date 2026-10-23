@@ -54,8 +54,8 @@ function handshake(): void {
   })), false)
 }
 
-async function startDaemon(): Promise<Logger> {
-  const logger = new Logger('error')
+async function startDaemon(onEntry?: ConstructorParameters<typeof Logger>[2]): Promise<Logger> {
+  const logger = new Logger('error', undefined, onEntry)
   vi.spyOn(logger, 'error').mockImplementation(() => undefined)
   const daemon = new Agentlet({
     server: 'ws://127.0.0.1:3001/bridge', token: 'test-token',
@@ -88,6 +88,20 @@ afterEach(async () => {
 })
 
 describe('control reconnect lifecycle', () => {
+  it('reports the device identity rather than the server session ID on readiness', async () => {
+    const onEntry = vi.fn()
+    await startDaemon(onEntry)
+    const socket = currentSocket()
+    socket.readyState = 1
+    socket.emit('open')
+    socket.emit('message', Buffer.from(JSON.stringify({
+      jsonrpc: '2.0', id: 1, result: { sessionId: 'control-session' },
+    })), false)
+    expect(onEntry).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'daemon_ready', agentletId: 'machine-a', daemonId: 'control-session',
+    }))
+  })
+
   it('uses exact exponential delays capped at 30 seconds and resets after a successful handshake', async () => {
     await startDaemon()
     handshake()
@@ -119,6 +133,7 @@ describe('control reconnect lifecycle', () => {
     expect(process.exit).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1000)
     expect(sockets).toHaveLength(2)
+    handshake()
     socket.emit('close', 1001, Buffer.from('server_shutting_down'))
     await vi.advanceTimersByTimeAsync(30000)
     expect(sockets).toHaveLength(2)
@@ -154,6 +169,17 @@ describe('control reconnect lifecycle', () => {
     currentSocket().emit('unexpected-response', {}, { statusCode: 503, resume() {} })
     await vi.advanceTimersByTimeAsync(1000)
     expect(process.exit).not.toHaveBeenCalled()
+    expect(sockets).toHaveLength(2)
+  })
+
+  it('retries a stalled connection without waiting for a peer close', async () => {
+    await startDaemon()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(sockets).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(sockets).toHaveLength(2)
+    handshake()
+    await vi.advanceTimersByTimeAsync(30_000)
     expect(sockets).toHaveLength(2)
   })
 })

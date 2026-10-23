@@ -72,7 +72,7 @@ vi.mock('@/hooks/useTextHighlight', () => ({ useTextHighlight: vi.fn() }));
 vi.mock('@/hooks/searchDom', () => ({ scheduleScrollToMatch }));
 vi.mock('../../Common/Toast', () => ({ toast }));
 vi.mock('./LayerNodeIcon', () => ({ CanvasSearchNodeIcon: () => null }));
-vi.mock('./focusNodesOnCanvas', () => ({ revealNodesOnCanvas: vi.fn() }));
+vi.mock('@/utils/canvasViewport', () => ({ revealNodesOnCanvas: vi.fn() }));
 vi.mock('../../Nodes/previews', () => ({ hasNodePreview: () => true }));
 vi.mock('react-virtuoso', () => ({
   Virtuoso: ({

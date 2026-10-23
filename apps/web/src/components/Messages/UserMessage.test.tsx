@@ -11,7 +11,7 @@ import { UserMessage } from './UserMessage';
 
 import type { InkInterpretation } from '@huabu/shared';
 
-vi.mock('../Common/NodeRef', () => ({
+vi.mock('@/components/Nodes/NodeRef/NodeRef', () => ({
   NodeRef: ({
     nodeId,
     strokeCount,
@@ -37,6 +37,22 @@ afterEach(() => {
 });
 
 describe('UserMessage', () => {
+  it.each([true, false])(
+    'removes only the leading message top margins when isFirst=%s',
+    (isFirst) => {
+      container = document.createElement('div');
+      const root = createRoot(container);
+      act(() => root.render(<UserMessage content="Hello" isFirst={isFirst} />));
+      const message = container.querySelector('[data-chat-user-message]');
+      expect(message?.classList.contains('mt-0')).toBe(isFirst);
+      expect(message?.firstElementChild?.classList.contains('mt-2')).toBe(
+        !isFirst,
+      );
+      expect(message?.classList.contains('my-3')).toBe(true);
+      act(() => root.unmount());
+    },
+  );
+
   it.each(['', 'Overall instructions'])(
     'renders quoted comments as cards alongside user text %j',
     (content) => {

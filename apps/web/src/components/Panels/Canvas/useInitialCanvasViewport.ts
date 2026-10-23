@@ -4,8 +4,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import useCanvasStore from '@/store/canvasStore';
-
-import { fitNodesOnCanvas } from '../CanvasLayerPanel/focusNodesOnCanvas';
+import { fitNodesOnCanvas } from '@/utils/canvasViewport';
 
 import type { CanvasViewport } from '@huabu/shared';
 import type { ReactFlowInstance } from '@xyflow/react';

@@ -3,11 +3,11 @@
 
 import { useTranslation } from 'react-i18next';
 
-import { Tooltip } from './Tooltip';
-import { NODE_ICON } from '../../config/nodeIcons';
-import useCanvasStore from '../../store/canvasStore';
-import { useSpaceShortcutTarget } from '../Nodes/spacePreview/useSpaceShortcutTarget';
-import { revealNodesOnCanvas } from '../Panels/CanvasLayerPanel/focusNodesOnCanvas';
+import { Tooltip } from '@/components/Common/Tooltip';
+import { useSpaceShortcutTarget } from '@/components/Nodes/spacePreview/useSpaceShortcutTarget';
+import { NODE_ICON } from '@/config/nodeIcons';
+import useCanvasStore from '@/store/canvasStore';
+import { revealNodesOnCanvas } from '@/utils/canvasViewport';
 
 import type { CanvasNodeType, ChatAttachment } from '@huabu/shared';
 
