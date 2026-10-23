@@ -346,6 +346,14 @@ function registerLocalAgent(origin: string): void {
     }
   };
   const manager = new LocalAgentManager({
+    forceTerminate: (child) => {
+      const pid = child.pid;
+      if (pid === undefined)
+        throw new Error(
+          'The local Agent worker PID is unavailable for forced termination.',
+        );
+      process.kill(pid, 'SIGKILL');
+    },
     readDevice: async () => {
       const runtime = await loadRuntime();
       const artifacts = runtime.resolveRuntimeArtifacts({

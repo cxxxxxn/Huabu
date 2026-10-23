@@ -5,15 +5,18 @@ import { EventEmitter } from 'node:events';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { LocalAgentManager, type LocalAgentCredential } from './local-agent';
+import {
+  LocalAgentManager,
+  type LocalAgentChild,
+  type LocalAgentCredential,
+} from './local-agent';
 
 class Child extends EventEmitter {
   postMessage = vi.fn(() => {
-    queueMicrotask(() => this.emit('exit', 0));
-  });
-  kill = vi.fn(() => {
-    this.emit('exit', 1);
-    return true;
+    queueMicrotask(() => {
+      this.emit('message', { type: 'agentlet:stopped' });
+      this.emit('exit', 0);
+    });
   });
 }
 
@@ -34,6 +37,7 @@ function setup(saved: LocalAgentCredential | null = null) {
       children.push(child);
       return child;
     }),
+    forceTerminate: vi.fn((_child: LocalAgentChild) => undefined),
     onState: vi.fn(),
   };
   return {
@@ -85,7 +89,7 @@ describe('desktop local Agent lifecycle', () => {
     expect(options.saveCredential).toHaveBeenLastCalledWith(null);
     expect(manager.getState().status).toBe('disabled');
     expect(manager.getState().agentletId).toBeUndefined();
-    expect(children[0].kill).not.toHaveBeenCalled();
+    expect(options.forceTerminate).not.toHaveBeenCalled();
   });
 
   it('keeps the device ID while reconnecting and rejects readiness without an ID', async () => {
@@ -123,6 +127,7 @@ describe('desktop local Agent lifecycle', () => {
     const { manager, options, children } = setup();
     await manager.setEnabled(true);
     children[0].emit('message', { type: 'agentlet:authorization-required' });
+    children[0].emit('message', { type: 'agentlet:stopped' });
     children[0].emit('exit', 1);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(manager.getState().status).toBe('authorization-required');
@@ -134,6 +139,7 @@ describe('desktop local Agent lifecycle', () => {
     const { manager, options, children } = setup();
     await manager.setEnabled(true);
     children[0].emit('message', { type: 'agentlet:rejected' });
+    children[0].emit('message', { type: 'agentlet:stopped' });
     children[0].emit('exit', 1);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(manager.getState()).toMatchObject({
@@ -143,18 +149,20 @@ describe('desktop local Agent lifecycle', () => {
     expect(options.start).toHaveBeenCalledTimes(1);
   });
 
-  it('stops retrying after five crashes in one minute', async () => {
+  it('blocks automatic and manual restart after an unverified worker exit', async () => {
     vi.useFakeTimers();
     const { manager, options, children } = setup();
     await manager.setEnabled(true);
-    for (const delay of [1000, 2000, 4000, 8000]) {
-      children.at(-1)?.emit('exit', 1);
-      await vi.advanceTimersByTimeAsync(delay);
-    }
-    children.at(-1)?.emit('exit', 1);
+    children[0].emit('exit', 1);
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(options.start).toHaveBeenCalledTimes(5);
-    expect(manager.getState().status).toBe('error');
+    await manager.setEnabled(true);
+    expect(options.start).toHaveBeenCalledTimes(1);
+    expect(options.saveCredential).toHaveBeenLastCalledWith(null);
+    expect(manager.getState()).toMatchObject({
+      enabled: false,
+      status: 'error',
+      error: expect.stringContaining('Stop any remaining local Agent tasks'),
+    });
   });
 
   it('awaits a starting child and stops it before shutdown completes', async () => {
@@ -212,17 +220,17 @@ describe('desktop local Agent lifecycle', () => {
     expect(options.start).not.toHaveBeenCalled();
   });
 
-  it('restarts crashes with backoff and cancels pending restart on disable', async () => {
+  it('allows explicit reconnection after a verified clean exit', async () => {
     vi.useFakeTimers();
     const { manager, options, children } = setup();
     await manager.setEnabled(true);
-    children[0].emit('exit', 1);
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(options.start).toHaveBeenCalledTimes(2);
-    children[1].emit('exit', 1);
-    await manager.setEnabled(false);
+    children[0].emit('message', { type: 'agentlet:stopped' });
+    children[0].emit('exit', 0);
     await vi.advanceTimersByTimeAsync(60_000);
+    expect(options.start).toHaveBeenCalledTimes(1);
+    await manager.setEnabled(true);
     expect(options.start).toHaveBeenCalledTimes(2);
+    await manager.shutdown();
   });
 
   it('rejects concurrent operations rather than starting duplicate workers', async () => {
@@ -259,29 +267,96 @@ describe('desktop local Agent lifecycle', () => {
 
   it('surfaces cleanup timeout instead of reporting a successful disconnect', async () => {
     vi.useFakeTimers();
-    const { manager, children } = setup();
+    const { manager, children, options } = setup();
     await manager.setEnabled(true);
     children[0].postMessage.mockImplementation(() => undefined);
     const stopping = manager.setEnabled(false);
     await vi.advanceTimersByTimeAsync(12_000);
+    expect(children[0].postMessage).toHaveBeenLastCalledWith({
+      type: 'agentlet:force-stop',
+    });
+    expect(options.forceTerminate).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(options.forceTerminate).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(2000);
     await stopping;
-    expect(children[0].kill).toHaveBeenCalledTimes(1);
     expect(manager.getState()).toMatchObject({
       enabled: false,
       status: 'error',
     });
   });
 
-  it('clears the shutdown deadline when the parent channel rejects the stop request', async () => {
+  it('forces termination and awaits exit when the parent channel rejects stop', async () => {
     vi.useFakeTimers();
-    const { manager, children } = setup();
+    const { manager, children, options } = setup();
     await manager.setEnabled(true);
     children[0].postMessage.mockImplementation(() => {
       throw new Error('Parent channel closed');
     });
-    await manager.setEnabled(false);
-    expect(manager.getState().error).toBe('Parent channel closed');
+    const stopping = manager.setEnabled(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(options.forceTerminate).toHaveBeenCalledTimes(1);
+    children[0].emit('exit', 1);
+    await stopping;
+    expect(manager.getState().error).toContain(
+      'cleanup could not be confirmed',
+    );
     expect(vi.getTimerCount()).toBe(0);
-    children[0].emit('exit', 0);
+  });
+
+  it('stops tasks even if removing the saved authorization fails', async () => {
+    const { manager, options, children } = setup();
+    await manager.setEnabled(true);
+    options.saveCredential.mockImplementation(() => {
+      throw new Error('Vault write failed');
+    });
+    await manager.setEnabled(false);
+    expect(children[0].postMessage).toHaveBeenCalledWith({
+      type: 'agentlet:stop',
+    });
+    expect(manager.getState()).toMatchObject({
+      enabled: true,
+      status: 'error',
+      error: 'Vault write failed',
+    });
+  });
+
+  it('keeps disconnect available when a crash cannot remove saved authorization', async () => {
+    const { manager, options, children } = setup();
+    await manager.setEnabled(true);
+    options.saveCredential.mockImplementationOnce(() => {
+      throw new Error('Vault write failed');
+    });
+    children[0].emit('exit', 1);
+    expect(manager.getState()).toMatchObject({
+      enabled: true,
+      status: 'error',
+      error: expect.stringContaining(
+        'Saved authorization could not be removed',
+      ),
+    });
+    await manager.setEnabled(false);
+    expect(options.saveCredential).toHaveBeenLastCalledWith(null);
+    expect(manager.getState()).toMatchObject({
+      enabled: false,
+      status: 'error',
+    });
+  });
+
+  it('accepts verified process-tree cleanup during forced shutdown without claiming success', async () => {
+    vi.useFakeTimers();
+    const { manager, options, children } = setup();
+    await manager.setEnabled(true);
+    children[0].postMessage.mockImplementation(() => undefined);
+    const stopping = manager.setEnabled(false);
+    await vi.advanceTimersByTimeAsync(12_000);
+    children[0].emit('message', { type: 'agentlet:stopped' });
+    children[0].emit('exit', 1);
+    await stopping;
+    expect(manager.getState().status).toBe('error');
+    expect(options.forceTerminate).not.toHaveBeenCalled();
+    await manager.setEnabled(true);
+    expect(options.start).toHaveBeenCalledTimes(2);
+    await manager.shutdown();
   });
 });

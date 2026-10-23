@@ -22,8 +22,8 @@ export interface LocalAgentCredential {
 }
 
 export interface LocalAgentChild {
+  readonly pid?: number;
   postMessage(message: unknown): void;
-  kill(): boolean;
   on(event: 'message', listener: (message: unknown) => void): this;
   once(event: 'exit', listener: (code: number) => void): this;
 }
@@ -38,6 +38,7 @@ interface LocalAgentOptions {
   saveCredential(credential: LocalAgentCredential | null): void;
   requestCredential(): Promise<LocalAgentCredential>;
   start(credential: LocalAgentCredential): Promise<LocalAgentChild>;
+  forceTerminate(child: LocalAgentChild): void;
   onState(state: LocalAgentState): void;
 }
 
@@ -49,8 +50,7 @@ export class LocalAgentManager {
   };
   private child: LocalAgentChild | null = null;
   private credential: LocalAgentCredential | null = null;
-  private restartTimer: ReturnType<typeof setTimeout> | null = null;
-  private crashes: number[] = [];
+  private cleanupError: Error | null = null;
   private busy = false;
   private quitting = false;
   private stopPromise: Promise<void> | null = null;
@@ -93,16 +93,23 @@ export class LocalAgentManager {
     this.busy = true;
     try {
       if (!enabled) {
-        this.options.saveCredential(null);
         this.credential = null;
         this.publish({ enabled: false });
-        await this.stop();
+        try {
+          this.options.saveCredential(null);
+        } catch (error) {
+          this.publish({ enabled: true });
+          throw error;
+        } finally {
+          await this.stop();
+        }
         this.publish({
           status: 'disabled',
           error: null,
           agentletId: undefined,
         });
       } else {
+        if (this.cleanupError) throw this.cleanupError;
         await this.stop();
         this.publish({
           status: 'connecting',
@@ -114,7 +121,6 @@ export class LocalAgentManager {
         if (this.quitting) return this.getState();
         this.options.saveCredential(credential);
         this.credential = credential;
-        this.crashes = [];
         this.publish({ enabled: true });
         await this.run();
       }
@@ -144,12 +150,24 @@ export class LocalAgentManager {
   }
 
   private async startChild(): Promise<void> {
+    if (this.cleanupError) throw this.cleanupError;
     if (this.child || !this.credential || this.quitting || !this.state.enabled)
       return;
     this.publish({ status: 'connecting', error: null });
     const child = await this.options.start(this.credential);
     this.child = child;
+    let cleanupConfirmed = false;
     child.on('message', (message) => {
+      if (
+        this.child === child &&
+        message &&
+        typeof message === 'object' &&
+        'type' in message &&
+        message.type === 'agentlet:stopped'
+      ) {
+        cleanupConfirmed = true;
+        return;
+      }
       if (
         this.child !== child ||
         !this.state.enabled ||
@@ -197,61 +215,85 @@ export class LocalAgentManager {
     child.once('exit', (code) => {
       if (this.child !== child) return;
       this.child = null;
+      if (!cleanupConfirmed) {
+        this.blockUnverifiedCleanup();
+        return;
+      }
       if (this.stopPromise || this.quitting || !this.state.enabled) return;
       if (this.connectionRejected) return;
-      if (code === 0) {
-        this.fail(
-          new Error(
-            'The local Agent worker stopped. Reconnect to start it again.',
-          ),
-        );
-        return;
-      }
-      this.crashes = this.crashes.filter((time) => Date.now() - time < 60_000);
-      this.crashes.push(Date.now());
-      if (this.crashes.length >= 5) {
-        this.fail(
-          new Error(
-            'The local Agent worker repeatedly exited. Reconnect to try again.',
-          ),
-        );
-        return;
-      }
-      this.publish({ status: 'reconnecting', error: null });
-      this.restartTimer = setTimeout(
-        () => {
-          this.restartTimer = null;
-          void this.run().catch((error: unknown) => this.fail(error));
-        },
-        Math.min(1000 * 2 ** (this.crashes.length - 1), 30_000),
+      this.fail(
+        new Error(
+          `The local Agent worker stopped (${code}). Reconnect to start it again.`,
+        ),
       );
     });
   }
 
+  private blockUnverifiedCleanup(): Error {
+    if (this.cleanupError) return this.cleanupError;
+    let message =
+      'Local Agent process-tree cleanup could not be confirmed. Stop any remaining local Agent tasks, then restart Huabu before reconnecting.';
+    let removalFailed = false;
+    this.credential = null;
+    try {
+      this.options.saveCredential(null);
+    } catch (error) {
+      removalFailed = true;
+      message += ` Saved authorization could not be removed: ${error instanceof Error ? error.message : String(error)}. Disconnect again before restarting Huabu.`;
+    }
+    this.cleanupError = new Error(message);
+    this.publish({ enabled: removalFailed, agentletId: undefined });
+    this.fail(this.cleanupError);
+    return this.cleanupError;
+  }
+
   private async stop(): Promise<void> {
-    if (this.restartTimer) clearTimeout(this.restartTimer);
-    this.restartTimer = null;
     await this.starting;
     if (this.stopPromise) return this.stopPromise;
     const child = this.child;
-    if (!child) return;
+    if (!child) {
+      if (this.cleanupError) throw this.cleanupError;
+      return;
+    }
     this.publish({ status: 'stopping', error: null });
     this.stopPromise = new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        try {
-          child.kill();
+      let escalated = false;
+      let timer: ReturnType<typeof setTimeout>;
+      const forceTerminate = () => {
+        this.blockUnverifiedCleanup();
+        timer = setTimeout(() => {
           reject(
             new Error(
-              'Local Agent cleanup timed out; termination was requested. Check for unfinished tasks.',
+              `${this.cleanupError?.message} Worker exit could not be confirmed after forced termination.`,
             ),
           );
+        }, 2000);
+        try {
+          this.options.forceTerminate(child);
         } catch (error) {
-          reject(error);
+          clearTimeout(timer);
+          reject(
+            new Error(
+              `${this.cleanupError?.message} Forced worker termination failed: ${error instanceof Error ? error.message : String(error)}`,
+            ),
+          );
+          return;
+        }
+      };
+      timer = setTimeout(() => {
+        escalated = true;
+        timer = setTimeout(forceTerminate, 3000);
+        try {
+          child.postMessage({ type: 'agentlet:force-stop' });
+        } catch {
+          clearTimeout(timer);
+          forceTerminate();
         }
       }, 12_000);
       child.once('exit', (code) => {
         clearTimeout(timer);
-        if (code === 0) resolve();
+        if (this.cleanupError) reject(this.cleanupError);
+        else if (code === 0 && !escalated) resolve();
         else
           reject(
             new Error(
@@ -263,7 +305,8 @@ export class LocalAgentManager {
         child.postMessage({ type: 'agentlet:stop' });
       } catch (error) {
         clearTimeout(timer);
-        reject(error);
+        this.fail(error);
+        forceTerminate();
       }
     });
     try {
