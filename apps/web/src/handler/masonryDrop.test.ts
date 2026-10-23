@@ -152,6 +152,88 @@ describe.each(['column', 'row'] as const)('%s gap insertion', (axis) => {
     ).toBeNull();
   });
 
+  it.each([0.5, 1, 2])(
+    'clips gaps to overflowing manual Frame bounds at zoom %s',
+    (zoom) => {
+      const original = scene();
+      const point = gapPoint(1);
+      const full = resolveMasonryDrop(original, 'frame', axis, point, {
+        zoom,
+      }).gap;
+      if (!full) throw new Error('Missing internal gap');
+      const size = { width: point.x + 2, height: point.y + 2 };
+      const nodes = original.map((node) =>
+        node.id === 'frame'
+          ? {
+              ...node,
+              data: { ...node.data, sizing: 'manual' },
+              style: size,
+              measured: size,
+            }
+          : node,
+      );
+      const clipped = resolveMasonryDrop(nodes, 'frame', axis, point, {
+        zoom,
+      }).gap;
+      expect(clipped).toEqual({
+        ...full,
+        width: Math.min(full.x + full.width, size.width) - full.x,
+        height: Math.min(full.y + full.height, size.height) - full.y,
+      });
+      for (const outside of [
+        gapPoint(2),
+        { x: size.width, y: point.y },
+        { x: point.x, y: size.height },
+        { x: size.width + 1, y: point.y },
+        { x: point.x, y: size.height + 1 },
+      ]) {
+        expect(
+          resolveMasonryDrop(nodes, 'frame', axis, outside, { zoom }).gap,
+        ).toBeNull();
+      }
+    },
+  );
+
+  it.each([
+    { cachedSlot: 0, releaseSlot: 1, gutter: false },
+    { cachedSlot: 1, releaseSlot: 0, gutter: false },
+    { cachedSlot: 0, releaseSlot: 0, gutter: true },
+    { cachedSlot: 1, releaseSlot: 1, gutter: true },
+  ])(
+    'rechecks release coordinates with cached track $cachedSlot (gutter: $gutter)',
+    ({ cachedSlot, releaseSlot, gutter }) => {
+      const nodes = scene();
+      const peer = nodes.find((node) => node.id === `child-${releaseSlot * 2}`);
+      if (!peer) throw new Error('Missing track peer');
+      const point = gutter
+        ? gapPoint(1)
+        : { x: peer.position.x + 40, y: peer.position.y + 30 };
+      const result = resolveUiIntent(
+        {
+          type: 'NODE_DRAG_STOP',
+          draggedNodeIds: ['child-1'],
+          pointerFlowPosition: point,
+          cachedDecisions: new Map([
+            ['child-1', { unframe: false, enterFrameId: null }],
+          ]),
+          masonryDrop: {
+            nodeId: 'child-1',
+            frameId: 'frame',
+            target: { kind: 'into-existing', slot: cachedSlot },
+          },
+        },
+        { nodes, edges: [] },
+      );
+      const committed = executeCanvasCommands(
+        { source: 'ui', commands: result.commands },
+        { nodes, edges: [], canvasId: 'canvas' },
+      ).writeResult.nodes;
+      expect(committed.find((node) => node.id === 'child-1')?.data[field]).toBe(
+        releaseSlot,
+      );
+    },
+  );
+
   it.each(
     [0, 1, 2].flatMap((slot) =>
       [true, false].map((cached) => ({ slot, cached })),

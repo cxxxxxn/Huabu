@@ -121,6 +121,7 @@ export type CanvasUiIntent =
       draggedNodeIds: string[];
       pointerFlowPosition?: Point;
       zoom?: number;
+      /** Release-validated insertion intent, or an ordinary track hint for gutters. */
       masonryDrop?: {
         nodeId: string;
         frameId: string;

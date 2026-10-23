@@ -4,6 +4,7 @@
 import { FRAME_GRID_MAX_COUNT } from '@huabu/shared';
 import {
   FRAME_LAYOUT_CONFIG,
+  getNodeSize,
   solveStructuredFrameLayout,
   type FrameAxis,
   type StructuredDropTarget,
@@ -66,6 +67,9 @@ export function resolveMasonryDrop(
     return { target: { kind: 'into-existing', slot: 0 }, gap: null };
 
   const { headerInset, contentSpacing } = FRAME_LAYOUT_CONFIG.metrics;
+  const frame = nodes.find((node) => node.id === frameId);
+  if (!frame) return { target: { kind: 'into-existing', slot: 0 }, gap: null };
+  const frameSize = getNodeSize(frame);
   let gap: TrackDropGap | null = null;
   if (allowInsert && bands.length < FRAME_GRID_MAX_COUNT) {
     for (let slot = 0; slot <= bands.length; slot++) {
@@ -87,8 +91,21 @@ export function resolveMasonryDrop(
           ? layout.frameSize.height - headerInset - contentSpacing
           : width,
       };
-      if (isPointInTrackGap(candidate, point)) {
-        gap = candidate;
+      const x = Math.max(0, candidate.x);
+      const y = Math.max(0, candidate.y);
+      const clipped = {
+        ...candidate,
+        x,
+        y,
+        width: Math.min(frameSize.width, candidate.x + candidate.width) - x,
+        height: Math.min(frameSize.height, candidate.y + candidate.height) - y,
+      };
+      if (
+        clipped.width > 0 &&
+        clipped.height > 0 &&
+        isPointInTrackGap(clipped, point)
+      ) {
+        gap = clipped;
         break;
       }
     }

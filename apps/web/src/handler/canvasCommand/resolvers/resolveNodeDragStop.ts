@@ -411,14 +411,19 @@ function collectGridDropPlans(
         }
       : { x: post.position.x, y: post.position.y };
 
+    const previous =
+      cachedDrop?.nodeId === id && cachedDrop.frameId === frame.id
+        ? cachedDrop.target
+        : undefined;
     const target =
       cfg.axis === 'grid'
         ? pickColumnDropTarget(preDragNodes, frame.id, framePoint.x, edges)
-        : cachedDrop?.nodeId === id && cachedDrop.frameId === frame.id
-          ? cachedDrop.target
+        : previous && (previous.kind === 'insert-new' || !pointerFlowPosition)
+          ? previous
           : resolveMasonryDrop(preDragNodes, frame.id, cfg.axis, framePoint, {
               edges,
               zoom,
+              previous,
               allowInsert: draggedIds.length === 1 && !!pointerFlowPosition,
             }).target;
 
