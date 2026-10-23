@@ -111,7 +111,11 @@ export function resolveMasonryDrop(
   let slot = 0;
   let distance = Infinity;
   bands.forEach((band, index) => {
-    const next = Math.abs(coordinate - (band.start + band.extent / 2));
+    const next = Math.max(
+      band.start - coordinate,
+      coordinate - (band.start + band.extent),
+      0,
+    );
     if (next < distance) {
       slot = index;
       distance = next;

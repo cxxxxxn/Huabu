@@ -281,6 +281,30 @@ describe.each(['column', 'row'] as const)(
         committed.find((node) => node.id === frameId)?.data.gridCount,
       ).toBe(2);
     });
+
+    it('creates beside the nearer boundary of unequal tracks', () => {
+      const dimension = axis === 'column' ? 'width' : 'height';
+      const nodes = scene().map((node) =>
+        node.id === 'other'
+          ? { ...node, style: { ...node.style, [dimension]: 400 } }
+          : node,
+      );
+      const layout = solveStructuredFrameLayout(nodes, frameId);
+      const column = layout?.columnTracks?.[0];
+      const row = layout?.rowTracks?.[0];
+      const end =
+        axis === 'column'
+          ? column && column.left + column.width
+          : row && row.top + row.height;
+      if (end === undefined) throw new Error('Missing first track');
+      const local =
+        axis === 'column' ? { x: end + 1, y: 100 } : { x: 100, y: end + 1 };
+      const committed = createAt(nodes, { x: 100 + local.x, y: 200 + local.y });
+      expect(committed.find((node) => node.id === 'node-new')).toMatchObject({
+        parentId: frameId,
+        data: { [field]: 0 },
+      });
+    });
   },
 );
 

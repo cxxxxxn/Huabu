@@ -131,7 +131,7 @@ Before placing or resizing relative to existing content, query the relevant node
 | Node type              | Default geometry                                                                     |
 | ---------------------- | ------------------------------------------------------------------------------------ |
 | `text`                 | 400px wide; content-driven height                                                    |
-| `note`                 | 400 × 300px; fixed height by default                                                |
+| `note`                 | 400 × 300px; fixed height by default                                                 |
 | `web`, `pdf`, `office` | 400 × 400px                                                                          |
 | `video`                | 400 × 300px                                                                          |
 | `image`                | 400px wide; height follows the source aspect ratio (300px nominal before resolution) |

@@ -94,6 +94,53 @@ describe.each(['column', 'row'] as const)('%s gap insertion', (axis) => {
     ).toBe('into-existing');
   });
 
+  it.each([0, 1])(
+    'chooses the nearest boundary when track %s is wider or taller',
+    (largerTrack) => {
+      const dimension = axis === 'column' ? 'width' : 'height';
+      const nodes = scene().map((node) => {
+        if (node.parentId !== 'frame') return node;
+        const size = {
+          ...node.measured,
+          [dimension]: node.data[field] === largerTrack ? 400 : 120,
+        };
+        return { ...node, style: { ...node.style, ...size }, measured: size };
+      });
+      const layout = solveStructuredFrameLayout(nodes, 'frame');
+      const bands =
+        axis === 'column'
+          ? layout?.columnTracks?.map((track) => ({
+              start: track.left,
+              extent: track.width,
+            }))
+          : layout?.rowTracks?.map((track) => ({
+              start: track.top,
+              extent: track.height,
+            }));
+      if (!bands || bands.length !== 2)
+        throw new Error('Missing fixture tracks');
+      const end = bands[0].start + bands[0].extent;
+      for (const [coordinate, slot] of [
+        [bands[0].start - 1, 0],
+        [end, 0],
+        [end + 1, 0],
+        [(end + bands[1].start) / 2, 0],
+        [bands[1].start - 1, 1],
+        [bands[1].start, 1],
+        [bands[1].start + bands[1].extent + 1, 1],
+      ]) {
+        const point =
+          axis === 'column'
+            ? { x: coordinate, y: 100 }
+            : { x: 100, y: coordinate };
+        expect(resolveMasonryDrop(nodes, 'frame', axis, point).target).toEqual({
+          kind: 'into-existing',
+          slot,
+        });
+      }
+    },
+  );
+
   it('does not offer insertion for multiple nodes or at the track limit', () => {
     expect(
       resolveMasonryDrop(scene(), 'frame', axis, gapPoint(1), {
