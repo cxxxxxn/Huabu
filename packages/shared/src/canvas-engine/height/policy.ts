@@ -13,9 +13,8 @@
  *  - `REF_WIDTHS` in `apps/web/src/hooks/useNodeScale.ts`
  *  - a scatter of inline `typeof style.height === 'number'` checks
  *
- * The two type sets differ by exactly one entry (`note`), which is the
- * observation this table encodes: `note` is the only type whose owner
- * can change at runtime. See `docs/proposals/node-height-ownership-model.md`.
+ * Note is the only type whose owner can change at runtime. New Notes
+ * default to fixed height; stored and legacy ownership remain authoritative.
  */
 
 import type { HeightMode } from '../../types/canvas/node.js';
@@ -26,7 +25,7 @@ import type { Node } from '@xyflow/react';
  *
  * - `content` — always derived from rendered content. The user cannot pin
  *   it, so a top-level `style.height` is never authored geometry.
- * - `toggleable` — derived by default, but the user can pin it. The owner
+ * - `toggleable` — fixed by default, but the user can enable auto height. The owner
  *   is recorded per node in `data.heightMode`.
  * - `manual` — the height is authored (creation default or resize gesture)
  *   and content never drives it.
@@ -150,13 +149,12 @@ export function isAlwaysAutoHeightType(nodeType: string | undefined): boolean {
 
 /**
  * True when a node type is content-driven by default at creation time —
- * `content` and `toggleable` alike. Creation must not bake a nominal
- * layout height into `style.height` for these.
+ * only `content` types. Toggleable Notes start fixed unless explicitly auto.
  */
 export function isAutoHeightByDefaultType(
   nodeType: string | undefined,
 ): boolean {
-  return getHeightPolicy(nodeType).kind !== 'manual';
+  return getHeightPolicy(nodeType).kind === 'content';
 }
 
 /** Who currently owns a node's height. Re-exported for convenience. */

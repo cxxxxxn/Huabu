@@ -123,7 +123,10 @@ export function useCanvasPointerRouter(
       core.handleDown(event);
       const owner = core.ownerOf(event.pointerId)?.id;
       suppressOwnedClick = owner === 'note-content' || owner === 'ink-sigil';
-      if (suppressOwnedClick && event.pointerType === 'touch')
+      if (
+        (suppressOwnedClick || owner === 'node-drag') &&
+        event.pointerType === 'touch'
+      )
         suppressOwnedTouch = true;
     };
     const onMove = (event: PointerEvent) => {

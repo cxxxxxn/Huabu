@@ -95,7 +95,7 @@ export function SpaceNavigation({
     <nav
       ref={navRef}
       aria-label={t('spaceHierarchy.breadcrumb')}
-      className="relative h-7 min-w-0"
+      className="relative h-7 min-w-0 text-[15px]"
     >
       <div
         ref={measureRef}

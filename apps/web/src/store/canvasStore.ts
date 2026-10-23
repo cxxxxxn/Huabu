@@ -72,8 +72,10 @@ import {
 } from '@/handler/canvasCommand/uiIntent';
 import {
   compensateDetachedDragPosition,
+  getDragPointerPosition,
   mergeLiveDragGeometry,
 } from '@/handler/liveDragGeometry';
+import { isPointInTrackGap, resolveMasonryDrop } from '@/handler/masonryDrop';
 import { projectStructuredTargetGeometry } from '@/handler/projectStructuredTargetGeometry';
 import {
   applySnap,
@@ -2868,6 +2870,7 @@ const useCanvasStore = create<RFState>()(
     },
 
     onNodeDragStart: (event, _draggedNode, draggedNodes) => {
+      useGesturePreviewStore.getState().clearStructuredDropPreview();
       // Snapshot the true pre-drag positions before any intermediate
       // position updates are applied by ReactFlow.
       get().beginGesture('SET_NODE_GEOMETRY');
@@ -2907,17 +2910,20 @@ const useCanvasStore = create<RFState>()(
     onNodeDrag: (_event, draggedNode, draggedNodes) => {
       // Capture the cursor's screen position now (before the rAF) so the
       // structured-frame drop indicator can be placed at the actual
-      // pointer, not where the dragged node settled. Guarded against
-      // touch / programmatic emits that lack client coords.
-      const ptrEvent = _event as
-        | { clientX?: number; clientY?: number }
-        | undefined;
-      const pointerScreen =
-        ptrEvent &&
-        typeof ptrEvent.clientX === 'number' &&
-        typeof ptrEvent.clientY === 'number'
-          ? { x: ptrEvent.clientX, y: ptrEvent.clientY }
-          : null;
+      // pointer, not where the dragged node settled.
+      const pointerScreen = getDragPointerPosition(_event);
+      const pendingDrop =
+        useGesturePreviewStore.getState().structuredDropPreview;
+      const pointer = pointerScreen
+        ? get().rfInstance?.screenToFlowPosition(pointerScreen)
+        : undefined;
+      if (
+        pendingDrop?.masonry?.gap &&
+        pointer &&
+        !isPointInTrackGap(pendingDrop.masonry.gap, pointer)
+      ) {
+        useGesturePreviewStore.getState().clearStructuredDropPreview();
+      }
 
       // Throttle the heavy preview computation to once per animation frame.
       // Mouse events can fire at 120 Hz+ on high-refresh displays; capping at
@@ -3308,6 +3314,26 @@ const useCanvasStore = create<RFState>()(
                 }
               : undefined;
 
+          const previousDrop =
+            useGesturePreviewStore.getState().structuredDropPreview;
+          const masonry =
+            framePoint && gridCfg.axis !== 'grid'
+              ? resolveMasonryDrop(
+                  projectedGestureNodes,
+                  targetFrameId,
+                  gridCfg.axis,
+                  framePoint,
+                  {
+                    edges,
+                    zoom: get().rfInstance?.getZoom() ?? 1,
+                    allowInsert: draggedNodes.length === 1 && !!pointerFlow,
+                    previous:
+                      previousDrop?.frameId === targetFrameId
+                        ? previousDrop.masonry?.target
+                        : undefined,
+                  },
+                )
+              : undefined;
           const zone = framePoint
             ? describeStructuredDropZone(
                 projectedGestureNodes,
@@ -3316,7 +3342,7 @@ const useCanvasStore = create<RFState>()(
                 gridCfg.axis,
                 resolveFrameTrackCount(projectedGestureNodes, targetFrameId),
                 draggedRect,
-                { edges },
+                { edges, target: masonry?.target },
               )
             : null;
 
@@ -3329,19 +3355,28 @@ const useCanvasStore = create<RFState>()(
               y: frameAbs.y + rect.y,
             });
             useGesturePreviewStore.getState().setStructuredDropPreview({
+              nodeId: draggedNode.id,
               frameId: targetFrameId,
               kind: zone.kind,
               x: frameAbs.x + zone.x,
               y: frameAbs.y + zone.y,
               width: zone.width,
               height: zone.height,
+              ...(masonry
+                ? {
+                    masonry: {
+                      target: masonry.target,
+                      gap: masonry.gap ? toAbsoluteRect(masonry.gap) : null,
+                    },
+                  }
+                : {}),
               context: {
                 ...zone.context,
                 tracks: zone.context.tracks.map(toAbsoluteRect),
                 rows: zone.context.rows.map(toAbsoluteRect),
               },
             });
-            if (getFrameSizing(targetFrame) === 'hug') {
+            if (!masonry?.gap && getFrameSizing(targetFrame) === 'hug') {
               const structuredFramePreview: FrameFitPreview = {
                 frameId: targetFrameId,
                 position: frameAbs,
@@ -3358,12 +3393,14 @@ const useCanvasStore = create<RFState>()(
                 previews.push(structuredFramePreview);
               }
             }
-            projectedGestureNodes = projectStructuredTargetGeometry({
-              nodes: projectedGestureNodes,
-              targetFrameId,
-              zone,
-              edges,
-            });
+            if (!masonry?.gap) {
+              projectedGestureNodes = projectStructuredTargetGeometry({
+                nodes: projectedGestureNodes,
+                targetFrameId,
+                zone,
+                edges,
+              });
+            }
             publishGeometryProjection(projectedGestureNodes);
             publishFrameIntentPreviews(projectedGestureNodes);
             // Solver owns the slot here → suppress free-alignment guides.
@@ -3390,6 +3427,7 @@ const useCanvasStore = create<RFState>()(
         cancelAnimationFrame(_dragPreviewRafId);
         _dragPreviewRafId = null;
       }
+      const lastDrop = useGesturePreviewStore.getState().structuredDropPreview;
       useGesturePreviewStore.getState().clearFrameFitPreview();
       useGesturePreviewStore.getState().clearStructuredDropPreview();
       // Withdraw the peer slide-aside. Purely visual — the nodes never
@@ -3437,28 +3475,29 @@ const useCanvasStore = create<RFState>()(
       // Convert the cursor's screen position to flow space so the
       // resolver can assign grid-frame columns based on where the
       // mouse actually was (not where the dragged node settled).
-      // Guarded against unusual event shapes (touch, programmatic
-      // emits) — the resolver gracefully falls back to node X.
-      let pointerFlowPosition: { x: number; y: number } | undefined;
-      const mouseEvent = _event as
-        | { clientX?: number; clientY?: number }
-        | undefined;
-      if (
-        mouseEvent &&
-        typeof mouseEvent.clientX === 'number' &&
-        typeof mouseEvent.clientY === 'number'
-      ) {
-        const flow = get().rfInstance?.screenToFlowPosition({
-          x: mouseEvent.clientX,
-          y: mouseEvent.clientY,
-        });
-        if (flow) pointerFlowPosition = flow;
-      }
+      // Touch end uses changedTouches because touches is empty at release.
+      const pointerScreen = getDragPointerPosition(_event);
+      const pointerFlowPosition = pointerScreen
+        ? get().rfInstance?.screenToFlowPosition(pointerScreen)
+        : undefined;
 
       get().dispatchUiIntent({
         type: 'NODE_DRAG_STOP',
         draggedNodeIds: draggedNodes.map((n) => n.id),
         pointerFlowPosition,
+        zoom: get().rfInstance?.getZoom() ?? 1,
+        masonryDrop:
+          lastDrop?.masonry &&
+          (lastDrop.masonry.target.kind !== 'insert-new' ||
+            (pointerFlowPosition &&
+              lastDrop.masonry.gap &&
+              isPointInTrackGap(lastDrop.masonry.gap, pointerFlowPosition)))
+            ? {
+                nodeId: lastDrop.nodeId,
+                frameId: lastDrop.frameId,
+                target: lastDrop.masonry.target,
+              }
+            : undefined,
         bypassReparent,
         allowNestedFrameEntry,
         cachedDecisions,

@@ -792,6 +792,8 @@
     "setCapturedAreaAsPdfCover": "Set captured area as PDF cover",
     "frameLayoutFree": "Free",
     "frameLayoutColumn": "Column",
+    "frameDropNewColumn": "New column",
+    "frameDropNewRow": "New row",
     "frameLayoutRow": "Row",
     "frameLayoutGrid": "Grid",
     "columns": "Columns",

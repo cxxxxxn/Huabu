@@ -4,13 +4,13 @@
 /** Fixed canvas-unit typography shared by Notes and PDF/Web cards. */
 export const NODE_TYPOGRAPHY = {
   title: { size: 24, lineHeight: 1.3, weight: 600 },
-  h2: { size: 20, lineHeight: 1.3, weight: 500 },
-  h3: { size: 18, lineHeight: 1.35, weight: 500 },
-  h4: { size: 14, lineHeight: 1.4, weight: 500 },
-  h5: { size: 14, lineHeight: 1.4, weight: 500 },
-  h6: { size: 14, lineHeight: 1.4, weight: 500 },
+  h2: { size: 22, lineHeight: 1.3, weight: 500 },
+  h3: { size: 20, lineHeight: 1.35, weight: 500 },
+  h4: { size: 18, lineHeight: 1.4, weight: 500 },
+  h5: { size: 18, lineHeight: 1.4, weight: 500 },
+  h6: { size: 18, lineHeight: 1.4, weight: 500 },
   cardTitle: { size: 24, lineHeight: 1.3, weight: 500 },
-  noteBody: { size: 16, lineHeight: 1.4 },
+  noteBody: { size: 18, lineHeight: 1.4 },
   body: { size: 18, lineHeight: 1.4 },
   metadata: { size: 16, lineHeight: 1.4 },
 } as const;

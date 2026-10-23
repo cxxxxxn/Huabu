@@ -30,11 +30,9 @@ import type { Node } from '@xyflow/react';
 
 /**
  * The values the height policy table replaced. Kept here verbatim so the
- * table is pinned to the behaviour that shipped before it existed — this
- * suite is the proof that introducing the table changed nothing.
+ * table's intentional changes remain explicit alongside legacy behaviour.
  */
 const LEGACY_ALWAYS_AUTO = new Set(['text', 'question']);
-const LEGACY_AUTO_BY_DEFAULT = new Set(['text', 'note', 'question']);
 const LEGACY_REF_WIDTHS: Record<string, number> = {
   web: 400,
   pdf: 400,
@@ -76,11 +74,11 @@ describe('height policy table', () => {
     }
   });
 
-  it('adds shortcuts to the legacy auto-height-by-default type set', () => {
+  it('defaults only content-owned types to auto height', () => {
     for (const type of ALL_NODE_TYPES) {
       expect([type, isAutoHeightByDefaultType(type)]).toEqual([
         type,
-        LEGACY_AUTO_BY_DEFAULT.has(type) || type === 'spacePreview',
+        LEGACY_ALWAYS_AUTO.has(type) || type === 'spacePreview',
       ]);
     }
   });
@@ -94,13 +92,13 @@ describe('height policy table', () => {
     }
   });
 
-  it('keeps legacy sizing except for content-height shortcuts', () => {
+  it('pins new Notes but keeps content-owned types auto-sized', () => {
     for (const type of ALL_NODE_TYPES) {
       expect(isAlwaysAutoHeightNodeType(type)).toBe(
         LEGACY_ALWAYS_AUTO.has(type) || type === 'spacePreview',
       );
       expect(getNodeCreationStyle(type, { width: 400, height: 300 })).toEqual(
-        LEGACY_AUTO_BY_DEFAULT.has(type) || type === 'spacePreview'
+        LEGACY_ALWAYS_AUTO.has(type) || type === 'spacePreview'
           ? { width: 400 }
           : { width: 400, height: 300 },
       );

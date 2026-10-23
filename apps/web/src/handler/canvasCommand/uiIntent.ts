@@ -48,7 +48,10 @@ import type {
   RecentAction,
   EdgeStyle,
 } from '@huabu/shared';
-import type { StructuredGutterSizes } from '@huabu/shared/canvas-engine';
+import type {
+  StructuredDropTarget,
+  StructuredGutterSizes,
+} from '@huabu/shared/canvas-engine';
 import type { Edge, Node } from '@xyflow/react';
 
 // ---------------------------------------------------------------------------
@@ -117,6 +120,13 @@ export type CanvasUiIntent =
       type: 'NODE_DRAG_STOP';
       draggedNodeIds: string[];
       pointerFlowPosition?: Point;
+      zoom?: number;
+      /** Release-validated insertion intent, or an ordinary track hint for gutters. */
+      masonryDrop?: {
+        nodeId: string;
+        frameId: string;
+        target: StructuredDropTarget;
+      };
       /**
        * When true, the user was holding Space at drag-stop (the "opt
        * out of auto-reparent" gesture). The resolver should leave

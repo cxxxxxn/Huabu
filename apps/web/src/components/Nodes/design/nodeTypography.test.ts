@@ -26,9 +26,9 @@ describe('shared node typography', () => {
     );
   });
 
-  it('keeps compact Note body typography independent of other card descriptions', () => {
-    expect(NODE_TYPOGRAPHY.noteBody).toEqual({ size: 16, lineHeight: 1.4 });
-    expect(NODE_TYPOGRAPHY_STYLE['--node-body-size']).toBe('16px');
+  it('keeps readable Note body typography independent of other card descriptions', () => {
+    expect(NODE_TYPOGRAPHY.noteBody).toEqual({ size: 18, lineHeight: 1.4 });
+    expect(NODE_TYPOGRAPHY_STYLE['--node-body-size']).toBe('18px');
     expect(NODE_TYPOGRAPHY_STYLE['--node-body-line']).toBe(1.4);
     expect(NODE_TYPOGRAPHY.body).toEqual({ size: 18, lineHeight: 1.4 });
   });
@@ -48,11 +48,11 @@ describe('shared node typography', () => {
   });
 
   it.each([
-    ['h2', 20],
-    ['h3', 18],
-    ['h4', 14],
-    ['h5', 14],
-    ['h6', 14],
+    ['h2', 22],
+    ['h3', 20],
+    ['h4', 18],
+    ['h5', 18],
+    ['h6', 18],
   ] as const)(
     'publishes explicit %s typography for canvas Notes and their measurer',
     (level, size) => {
