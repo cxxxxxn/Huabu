@@ -6,6 +6,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from '@/api/_client';
+import { ThreadChatInput } from '@/components/Panels/ChatPanel/ThreadChatInput';
+import { ChatSessionProvider } from '@/hooks/useChatSession';
 import { useAcpThreadChangesStore } from '@/store/acpThreadChangesStore';
 import useCanvasStore from '@/store/canvasStore';
 import {
@@ -48,6 +50,26 @@ const mocks = vi.hoisted(() => ({
   draft: vi.fn(),
   history: vi.fn(),
   reconnect: vi.fn(),
+}));
+
+vi.mock('react-i18next', async (original) => ({
+  ...((await original()) as object),
+  useTranslation: () => ({ t: (key: string) => key }),
+}));
+vi.mock('@/components/Panels/ChatPanel/ContextUsageRing', () => ({
+  ContextUsageRing: () => null,
+}));
+vi.mock('@/components/Panels/ChatPanel/ChatContextSources', () => ({
+  ChatContextSources: () => null,
+}));
+vi.mock('@/components/Panels/ChatPanel/useSlashCommandTypeahead', () => ({
+  useSlashCommandTypeahead: () => ({
+    slashState: null,
+    slashMenuRef: { current: null },
+    syncCaret: vi.fn(),
+    acceptSlashCommand: vi.fn(),
+    handleKeyDown: () => false,
+  }),
 }));
 
 vi.mock('@/api/agent', () => ({
@@ -504,9 +526,13 @@ describe('queued composer turns', () => {
     },
   );
 
-  it.each([true, false])(
-    'reconciles lost acceptance after reconnect (accepted=%s) without advancing the queue',
-    async (accepted) => {
+  it.each(
+    [true, false].flatMap((accepted) =>
+      ['eof', 'error'].map((closure) => ({ accepted, closure })),
+    ),
+  )(
+    'reconciles lost acceptance after reconnect (accepted=$accepted, closure=$closure) without advancing the queue',
+    async ({ accepted, closure }) => {
       act(() =>
         useChatStore.getState().setThreadLoading(session.threadId, true),
       );
@@ -517,7 +543,9 @@ describe('queued composer turns', () => {
       );
       mocks.stream.mockImplementationOnce(
         async (_content, _thread, _mode, callbacks: AgentStreamCallbacks) =>
-          callbacks.onComplete(),
+          closure === 'eof'
+            ? callbacks.onComplete()
+            : callbacks.onError(new Error('Disconnected before acceptance')),
       );
       await act(async () => {
         resumeAgentTurnQueue(session);
@@ -529,6 +557,16 @@ describe('queued composer turns', () => {
         );
       });
       const requestId = mocks.stream.mock.calls[0][4].requestId;
+      act(() =>
+        useChatStore.getState().setHistoryLoaded(session.threadId, true),
+      );
+      if (closure === 'error') {
+        expect(
+          selectThreadMessages(useChatStore.getState(), session.threadId).at(
+            -1,
+          ),
+        ).toMatchObject({ role: 'status', status: 'error' });
+      }
       mocks.stop.mockResolvedValueOnce({
         stopped: false,
         acceptance: null,
@@ -576,6 +614,140 @@ describe('queued composer turns', () => {
         session.threadId,
       );
       expect(mocks.stop).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(['draft', 'validate', 'save', 'flush'] as const)(
+    'exposes Stop and queue actions in the actual composer during direct %s preparation',
+    async (stage) => {
+      const pending = deferred();
+      const operation =
+        stage === 'flush'
+          ? vi.mocked(useCanvasStore.getState().flushCanvasEvents)
+          : mocks[stage];
+      operation.mockReturnValueOnce(pending.promise);
+      let sending: Promise<void> | undefined;
+      if (container) document.body.appendChild(container);
+      function Composer() {
+        const stream = useAgentStream(questionSession);
+        return createElement(ChatSessionProvider, {
+          value: questionSession,
+          children: createElement(ThreadChatInput, {
+            mode: 'operate',
+            isStreaming: stream.isLoading,
+            onStop: stream.stopStream,
+            onSubmit: (event, mode, draft) => {
+              event.preventDefault();
+              sending = stream.startStream(draft, mode);
+            },
+          }),
+        });
+      }
+      await act(async () => {
+        useChatStore.getState().setDraft(session.threadId, 'Direct request');
+        root?.render(createElement(Composer));
+      });
+      try {
+        await act(async () => {
+          const send = container?.querySelector<HTMLButtonElement>(
+            '[aria-label="chat.send"]',
+          );
+          expect(send?.disabled).toBe(false);
+          send?.click();
+          await vi.waitFor(() => expect(operation).toHaveBeenCalledOnce());
+        });
+        expect(mocks.stream).not.toHaveBeenCalled();
+        expect(
+          container?.querySelector('[aria-label="chat.addToQueue"]'),
+        ).not.toBeNull();
+        const stop = container?.querySelector<HTMLButtonElement>(
+          '[aria-label="chat.stop"]',
+        );
+        expect(stop).not.toBeNull();
+        expect(stop?.disabled).toBe(false);
+        await act(async () => {
+          stop?.click();
+          await sending;
+        });
+        expect(
+          hasAgentStreamClaim(session.ownerCanvasId, session.threadId),
+        ).toBe(false);
+        expect(container?.querySelector('[aria-label="chat.stop"]')).toBeNull();
+        expect(
+          container?.querySelector('[aria-label="chat.send"]'),
+        ).not.toBeNull();
+        expect(mocks.stream).not.toHaveBeenCalled();
+        expect(mocks.stop).not.toHaveBeenCalled();
+      } finally {
+        pending.resolve();
+        await act(async () => {
+          await sending;
+        });
+      }
+    },
+  );
+
+  it.each(
+    [true, false].flatMap((accepted) =>
+      [true, false].map((anchored) => ({ accepted, anchored })),
+    ),
+  )(
+    'reconciles a cached direct-send error without a running owner (accepted=$accepted, anchored=$anchored)',
+    async ({ accepted, anchored }) => {
+      const owner = anchored ? questionSession : session;
+      if (anchored) {
+        useCanvasStore.getState()._setStateNoAutosave({
+          nodes: [
+            {
+              id: 'question-1',
+              type: 'question',
+              position: { x: 0, y: 0 },
+              data: { threadId: session.threadId, status: 'idle' },
+            },
+          ],
+        });
+        vi.spyOn(
+          useAcpThreadChangesStore.getState(),
+          'load',
+        ).mockResolvedValue();
+      }
+      mocks.stream.mockImplementationOnce(
+        async (_content, _thread, _mode, callbacks: AgentStreamCallbacks) =>
+          callbacks.onError(new Error('Disconnected before acceptance')),
+      );
+      const onAccepted = vi.fn();
+      const onAcceptanceRejected = vi.fn();
+      await dispatchAgentTurn(request('text', owner), {
+        onAccepted,
+        onAcceptanceRejected,
+      });
+      useChatStore.getState().setHistoryLoaded(session.threadId, true);
+      expect(
+        selectThreadMessages(useChatStore.getState(), session.threadId).at(-1),
+      ).toMatchObject({ role: 'status', status: 'error' });
+      const requestId = mocks.stream.mock.calls[0][4].requestId;
+      mocks.stop.mockResolvedValueOnce({
+        stopped: false,
+        acceptance: null,
+        request: { id: requestId, accepted },
+      });
+      function Reopen() {
+        useChatHistory(owner, useChatStore.getState().setThreadLoading);
+        return null;
+      }
+      await act(async () => root?.render(createElement(Reopen)));
+      expect(mocks.reconnect).toHaveBeenCalledOnce();
+      expect(mocks.stop).toHaveBeenCalledWith(
+        session.threadId,
+        session.ownerCanvasId,
+        requestId,
+      );
+      expect(onAccepted).toHaveBeenCalledTimes(accepted ? 1 : 0);
+      expect(onAcceptanceRejected).toHaveBeenCalledTimes(accepted ? 0 : 1);
+      expect(hasAgentStreamClaim(session.ownerCanvasId, session.threadId)).toBe(
+        false,
+      );
+      expect(mocks.stream).toHaveBeenCalledOnce();
     },
   );
 
@@ -1845,6 +2017,9 @@ describe('shared Agent turn input', () => {
     });
     expect(mocks.stream).not.toHaveBeenCalled();
     expect(hasAgentStreamClaim('canvas-1', 'thread-1')).toBe(false);
+    expect(useChatStore.getState().threadsById['thread-1'].isPreparing).toBe(
+      false,
+    );
   });
 
   it('leaves server-owned Question lifecycle untouched when preparation saving fails', async () => {

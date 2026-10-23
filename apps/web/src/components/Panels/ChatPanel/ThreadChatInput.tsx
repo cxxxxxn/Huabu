@@ -33,6 +33,9 @@ export function ThreadChatInput({ onSubmit, ...props }: ThreadChatInputProps) {
   const session = useChatSession();
   const { threadId } = session;
   const { t } = useTranslation();
+  const preparing = useChatStore(
+    (state) => state.threadsById[threadId]?.isPreparing ?? false,
+  );
   const queuedTurns = useChatStore((state) =>
     selectThreadQueuedTurns(state, threadId),
   );
@@ -80,6 +83,7 @@ export function ThreadChatInput({ onSubmit, ...props }: ThreadChatInputProps) {
                 size="sm"
                 disabled={
                   props.isStreaming ||
+                  preparing ||
                   props.disabled ||
                   props.submitDisabled ||
                   queuedTurns[0].status !== 'pending'
@@ -134,9 +138,12 @@ export function ThreadChatInput({ onSubmit, ...props }: ThreadChatInputProps) {
         {...props}
         isStreaming={
           props.isStreaming ||
+          preparing ||
           queuedTurns.some((turn) => turn.status !== 'pending')
         }
-        queueSubmission={props.isStreaming || queuedTurns.length > 0}
+        queueSubmission={
+          props.isStreaming || preparing || queuedTurns.length > 0
+        }
         value={draft}
         onChange={handleChange}
         onSubmit={handleSubmit}

@@ -28,6 +28,7 @@ import { usePreviewWorkspaceStore } from '@/store/previewWorkspace/store';
 import { claimAgentStream } from './agentStreamCoordinator';
 import {
   clearInkInterpretationStream,
+  hasUnreconciledAgentTurn,
   inkTurnOutcome,
   observeAgentTurnAcceptance,
   reconcileAgentTurnAfterReconnect,
@@ -449,7 +450,16 @@ export function useChatHistory(
     const lastMessage = msgs[msgs.length - 1];
     const historyLooksIncomplete =
       lastMessage?.role === 'user' || lastMessage?.historyTurnActive === true;
-    if (ownerStatus !== 'running' && !historyLooksIncomplete) return;
+    const hasOutstandingRequest = hasUnreconciledAgentTurn(
+      ownerCanvasId,
+      threadId,
+    );
+    if (
+      ownerStatus !== 'running' &&
+      !historyLooksIncomplete &&
+      !hasOutstandingRequest
+    )
+      return;
 
     let cancelled = false;
     const ownerThreadId = threadId;
@@ -624,7 +634,11 @@ export function useChatHistory(
               | { status?: unknown }
               | undefined
           )?.status === 'running';
-        if (ownerStillRunning || historyLooksIncomplete) {
+        if (
+          ownerStillRunning ||
+          historyLooksIncomplete ||
+          hasOutstandingRequest
+        ) {
           const delay =
             attachRetryDelayByThread.get(ownerThreadId) ??
             INITIAL_ATTACH_RETRY_MS;

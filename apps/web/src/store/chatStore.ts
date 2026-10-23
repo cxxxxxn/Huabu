@@ -66,6 +66,8 @@ export interface ChatThreadState {
   olderHistoryError: string | null;
   /** Whether an agent run is streaming into this thread right now. */
   isStreaming: boolean;
+  /** Local send preparation before transport dispatch; absent means idle. */
+  isPreparing?: boolean;
   /** Last genuine stream done event, not a transport close or permission wait. */
   completedTurnId?: string;
   /** Last compose mode selected for this thread. */
@@ -259,6 +261,7 @@ export interface ChatState {
 
   /** Mark / unmark a thread as having an active streaming run. */
   setThreadLoading: (threadId: string, loading: boolean) => void;
+  setThreadPreparing: (threadId: string, preparing: boolean) => void;
   enqueueTurn: (threadId: string, turn: QueuedAgentTurn) => void;
   removeQueuedTurn: (threadId: string, id: string) => void;
   setQueuedTurnStatus: (
@@ -757,6 +760,13 @@ export const useChatStore = create<ChatState>()(
           return patchThread(state, threadId, { isStreaming: loading });
         }),
 
+      setThreadPreparing: (threadId, preparing) =>
+        set((state) =>
+          !!threadOf(state, threadId).isPreparing === preparing
+            ? state
+            : patchThread(state, threadId, { isPreparing: preparing }),
+        ),
+
       enqueueTurn: (threadId, turn) =>
         set((state) =>
           patchThread(state, threadId, {
@@ -796,7 +806,12 @@ export const useChatStore = create<ChatState>()(
 
           const pinned = new Set<string>(Object.values(state.threadMap));
           for (const [tid, entry] of Object.entries(state.threadsById)) {
-            if (entry.isStreaming || entry.queuedTurns.length) pinned.add(tid);
+            if (
+              entry.isStreaming ||
+              entry.isPreparing ||
+              entry.queuedTurns.length
+            )
+              pinned.add(tid);
           }
           const evictable = cached.filter((tid) => !pinned.has(tid));
           if (evictable.length === 0) return {};

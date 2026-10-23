@@ -333,6 +333,14 @@ function rejectAgentTurnAcceptance(canvasId: string, threadId: string): void {
   }
 }
 
+export function hasUnreconciledAgentTurn(
+  canvasId: string,
+  threadId: string,
+): boolean {
+  const key = turnKey(canvasId, threadId);
+  return turnAcceptanceSinks.has(key) && !activeTurnRequests.has(key);
+}
+
 export async function reconcileAgentTurnAfterReconnect(
   canvasId: string,
   threadId: string,
@@ -1182,6 +1190,7 @@ async function executeAgentTurn(
     );
     const requestId = createId('request');
     activeTurnRequests.set(acceptanceKey, requestId);
+    useChatStore.getState().setThreadPreparing(threadId, true);
     const userMessage = createAgentTurnUserMessage(prepared);
     userMessage.queuedTurnId = callbacks.queuedTurnId;
     try {
@@ -1245,6 +1254,7 @@ async function executeAgentTurn(
         callbacks.canDispatch?.() === false
       ) {
         preparingTurnCancellations.delete(acceptanceKey);
+        useChatStore.getState().setThreadPreparing(threadId, false);
         activeTurnRequests.delete(acceptanceKey);
         streamClaim.release();
       }
@@ -1344,6 +1354,7 @@ async function executeAgentTurn(
       result.status = 'unknown';
       requestDispatched = true;
       preparingTurnCancellations.delete(acceptanceKey);
+      useChatStore.getState().setThreadPreparing(threadId, false);
       releasePreparation?.();
       releasePreparation = undefined;
       await agentApi.streamMessage(
@@ -1469,6 +1480,7 @@ async function executeAgentTurn(
           error instanceof Error ? error : new Error(String(error));
       } finally {
         preparingTurnCancellations.delete(acceptanceKey);
+        useChatStore.getState().setThreadPreparing(threadId, false);
         activeTurnRequests.delete(acceptanceKey);
         clearHiddenIntentCalls(threadId);
         const retainForReconciliation =
