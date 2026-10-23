@@ -143,9 +143,9 @@ const createNodes: CommandDefinition<Cmd> = {
       const isToggleableHeight =
         getHeightPolicy(nodeType).kind === 'toggleable';
       const heightMode = isToggleableHeight
-        ? typeof geometryStyle.height === 'number'
-          ? 'fixed'
-          : 'auto'
+        ? suppliedData.heightMode === 'auto'
+          ? 'auto'
+          : 'fixed'
         : undefined;
 
       const rawNode: Node = {

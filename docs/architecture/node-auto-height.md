@@ -94,14 +94,14 @@ Proposals are keyed by node, so a burst collapses to one command and therefore o
 ## 8. Lifecycle
 
 ```text
-create ─────────▶ heightMode + materialized minimum   (CREATE_NODES)
+create ─────────▶ fixed 400 × 300, or explicit auto   (CREATE_NODES)
 load ───────────▶ normalize → warm unmeasured → materialize
 measure ────────▶ propose → gate → APPLY_MEASURED_HEIGHT → style.height
                                         │
                                    affectedFrameIds → one fitFrames pass
 ```
 
-**Creation** records `heightMode` and materializes immediately, so the same batch's `fitFrames` and grid solver see a real footprint rather than zero.
+**Creation** defaults new Notes to `heightMode: 'fixed'` and 400 by 300 canvas units. Width-only creation retains the requested width with height 300. Explicit numeric heights remain fixed unless the caller preserves `data.heightMode: 'auto'`, as clipboard and cross-Space moves do for existing auto Notes. Explicit auto creation materializes immediately from a measurement hint, an explicitly supplied numeric seed, or the policy minimum, so the same batch's `fitFrames` and grid solver see a real footprint rather than zero. Load normalization and legacy ownership inference are unchanged; the default does not migrate existing Notes.
 
 **Load** runs [`normalizeNodeHeights`](../../apps/web/src/store/canvasStore/load/normalizeNodeHeights.ts) — write the inferred owner explicitly, then materialize — and then [`warmupNodeHeights`](../../apps/web/src/store/canvasStore/load/warmupNodeHeights.ts), which measures never-measured notes _before_ the canvas is shown, nearest to the restored viewport first, under a wall-clock budget. Warmup applies the completed measurements to the fetched snapshot through the pure canvas executor, so `APPLY_MEASURED_HEIGHT` performs the same freshness checks and parent Frame relayout as an interactive measurement without dispatching through the web store or creating load-time history. Normalization never writes a hint; a canvas saved before this model existed would otherwise paint a wall of collapsed cards and expand them one by one.
 

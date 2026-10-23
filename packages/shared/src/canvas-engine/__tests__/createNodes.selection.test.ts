@@ -65,7 +65,7 @@ describe('CREATE_NODES selection', () => {
     },
   );
 
-  it('uses nominal note and question heights for placement without pinning creation height', () => {
+  it('defaults Notes to fixed height while keeping Questions content-driven', () => {
     const nodes = createNodes({
       type: 'CREATE_NODES',
       nodes: [
@@ -84,10 +84,7 @@ describe('CREATE_NODES selection', () => {
 
     expect(nodes.find((n) => n.id === 'created-note')?.style).toEqual({
       width: 400,
-      // Materialized from the note policy's minimum, not pinned: a
-      // created note must have a real footprint for the same-batch frame
-      // fit and grid solver, and its ownership is recorded explicitly.
-      height: 56,
+      height: 300,
     });
     expect(
       (
@@ -95,10 +92,50 @@ describe('CREATE_NODES selection', () => {
           heightMode?: string;
         }
       ).heightMode,
-    ).toBe('auto');
+    ).toBe('fixed');
     expect(nodes.find((n) => n.id === 'created-question')?.style).toEqual({
       width: 400,
     });
+  });
+
+  it.each([undefined, 420])(
+    'preserves explicit auto ownership with height %s',
+    (height) => {
+      const nodes = createNodes(
+        {
+          type: 'CREATE_NODES',
+          nodes: [
+            {
+              nodeType: 'note',
+              position: { x: 0, y: 0 },
+              data: { heightMode: 'auto' },
+              size: { width: 500, ...(height === undefined ? {} : { height }) },
+            },
+          ],
+        },
+        [],
+      );
+      expect(nodes[0].data.heightMode).toBe('auto');
+      expect(nodes[0].style).toEqual({ width: 500, height: height ?? 56 });
+    },
+  );
+
+  it('uses the default fixed height when only a Note width is supplied', () => {
+    const nodes = createNodes(
+      {
+        type: 'CREATE_NODES',
+        nodes: [
+          {
+            nodeType: 'note',
+            position: { x: 0, y: 0 },
+            size: { width: 500 },
+          },
+        ],
+      },
+      [],
+    );
+    expect(nodes[0].data.heightMode).toBe('fixed');
+    expect(nodes[0].style).toEqual({ width: 500, height: 300 });
   });
 
   it('preserves explicit note height but keeps explicit question height content-driven', () => {
