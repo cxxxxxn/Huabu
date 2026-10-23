@@ -109,14 +109,17 @@ vi.mock('@/components/Nodes/NodeWrapper', () => ({
   NodeWrapper: ({
     children,
     actions,
+    overflow,
     onDoubleClick,
   }: {
     children: ReactNode;
     actions: ReactNode;
+    overflow: ReactNode;
     onDoubleClick: () => void;
   }) => (
     <div data-wrapper onDoubleClick={onDoubleClick}>
-      {actions}
+      <div data-primary-actions>{actions}</div>
+      <div data-overflow-actions>{overflow}</div>
       {children}
     </div>
   ),
@@ -233,6 +236,47 @@ it('leaves canonical entry deletion to the shared More menu instead of adding a 
   ).not.toBeNull();
 });
 describe('Space Shortcut production node', () => {
+  it('places Rename and error Retry in More, leaving Open Space as the primary action', () => {
+    mocks.target.error = 'Offline';
+    render();
+    const primary = host.querySelector('[data-primary-actions]');
+    const overflow = host.querySelector('[data-overflow-actions]');
+    expect(primary?.querySelectorAll('button')).toHaveLength(1);
+    expect(
+      primary?.querySelector('[aria-label="spacePreview.openSpace"]'),
+    ).not.toBeNull();
+    const rename = overflow?.querySelector<HTMLButtonElement>(
+      '[aria-label="spacePreview.rename"]',
+    );
+    const retry = overflow?.querySelector<HTMLButtonElement>(
+      '[aria-label="spacePreview.retry"]',
+    );
+    expect(rename?.getAttribute('role')).toBe('menuitem');
+    expect(rename?.textContent).toBe('spacePreview.rename');
+    expect(retry?.getAttribute('role')).toBe('menuitem');
+    expect(retry?.textContent).toBe('spacePreview.retry');
+    act(() => retry?.click());
+    expect(mocks.target.retry).toHaveBeenCalledOnce();
+    act(() => rename?.click());
+    expect(host.querySelector('input')).not.toBeNull();
+  });
+
+  it('hides Retry from More when healthy and disables Rename for missing targets', () => {
+    render();
+    expect(host.querySelector('[aria-label="spacePreview.retry"]')).toBeNull();
+    mocks.target.status = 'missing';
+    render();
+    expect(
+      host.querySelector<HTMLButtonElement>(
+        '[data-overflow-actions] [aria-label="spacePreview.rename"]',
+      )?.disabled,
+    ).toBe(true);
+    expect(
+      host.querySelector(
+        '[data-overflow-actions] [aria-label="spacePreview.retry"]',
+      ),
+    ).not.toBeNull();
+  });
   it.each(['ready', 'loading', 'error'])(
     'opens the Space from activity-row whitespace while activity is %s',
     (status) => {
