@@ -576,6 +576,17 @@ export type AgentletConnectionCommandResponse = z.infer<
   typeof agentletConnectionCommandResponseSchema
 >;
 
+export const agentletConnectionCredentialsRequestSchema = z.object({}).strict();
+export const agentletConnectionCredentialsSchema = z
+  .object({
+    token: z.string().min(1),
+    maxAgents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  })
+  .strict();
+export type AgentletConnectionCredentials = z.infer<
+  typeof agentletConnectionCredentialsSchema
+>;
+
 /** Schema mirror of {@link AcpProfilesListResponse}. */
 export const connectedAgentletDeviceSchema = z.object({
   agentletId: z.string().min(1),
