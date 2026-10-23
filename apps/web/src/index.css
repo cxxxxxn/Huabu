@@ -11,9 +11,9 @@
   Naming: fg-* (text), bg-* (surfaces), edge-* (borders).
   =================================================================== */
 :root {
+  color-scheme: light;
   --icon-stroke-width: 2;
 
-  /* Text hierarchy */
   /* Calibrated canvas variants. Raw light/dark colors live in ACCENT_PALETTE. */
   --accent-white-fg: #191919;
   --accent-white-bg: #ffffff;
@@ -72,6 +72,7 @@
   --accent-red-text-fg: #b94b63;
   --accent-purple-text-fg: #855dab;
 
+  /* Text hierarchy */
   --fg-default: #191919;
   --fg-muted: #55514a;
   --fg-subtle: #767676;
@@ -147,10 +148,6 @@
 /* Dark theme overrides.
    TODO: migrate system tokens to fg/bg/edge naming in a follow-up pass. */
 .dark {
-  /* --- App design-system tokens --- */
-  --fg-default: oklch(0.985 0 0);
-  --fg-muted: oklch(0.78 0 0);
-  --fg-subtle: oklch(0.53 0 0);
   color-scheme: dark;
   --accent-white-fg: #fafafa;
   --accent-white-bg: #242424;
@@ -206,6 +203,10 @@
   --accent-orange-text-fg: var(--accent-orange-fg);
   --accent-red-text-fg: var(--accent-red-fg);
   --accent-purple-text-fg: var(--accent-purple-fg);
+  /* --- App design-system tokens --- */
+  --fg-default: oklch(0.985 0 0);
+  --fg-muted: oklch(0.78 0 0);
+  --fg-subtle: oklch(0.53 0 0);
   --fg-inverse: #191919;
   --bg-default: oklch(0.145 0 0);
   --bg-surface: oklch(0.22 0 0);
