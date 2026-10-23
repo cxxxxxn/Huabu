@@ -764,6 +764,7 @@
     "frameLayout": "Layout",
     "untitled": "Untitled",
     "rename": "Rename node",
+    "nameRequired": "Enter a node name.",
     "preview": "Preview",
     "navigateUpstream": "Navigate to a source node ({{shortcut}})",
     "navigateDownstream": "Navigate to a destination node ({{shortcut}})",

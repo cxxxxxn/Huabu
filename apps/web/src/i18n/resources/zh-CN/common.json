@@ -764,6 +764,7 @@
     "frameLayout": "布局",
     "untitled": "未命名",
     "rename": "重命名节点",
+    "nameRequired": "请输入节点名称。",
     "preview": "预览",
     "navigateUpstream": "导航到来源节点（{{shortcut}}）",
     "navigateDownstream": "导航到去向节点（{{shortcut}}）",
