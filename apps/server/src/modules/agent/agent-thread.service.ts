@@ -28,7 +28,9 @@ import { planSkillDispatch } from './skill-model-routing.js';
 import { resolveSpacePrompt } from './space-instruction-frames.js';
 import { acquireAgentTurn, waitForAgentTurnRelease } from './turn-lease.js';
 import { loadAgent } from '../../prompt/index.js';
+import { getStructuredStore } from '../storage/index.js';
 import { canvasAcpNamespace } from '../workspace/paths.js';
+import { acquireWorkspaceOperationLease } from '../workspace.js';
 
 import type {
   RealizedExternalAgentThread,
@@ -123,17 +125,29 @@ export function spacePromptFromWorkloadSpec(spec: unknown): string | undefined {
 
 const DEFAULT_DEPENDENCIES: AgentThreadServiceDependencies = {
   hasAcceptedRequest: async (threadId, canvasId, requestId) => {
-    const history = await agenetes.history(
-      canvasAcpNamespace(canvasId ?? ''),
-      threadId,
-      {
+    const hasAcceptedInCanvas = async (id: string): Promise<boolean> => {
+      const history = await agenetes.history(canvasAcpNamespace(id), threadId, {
         withTail: true,
-      },
-    );
-    return history.turns.some(
-      (turn) =>
-        chatEnvelopeFromSubmission(turn.request)?.requestId === requestId,
-    );
+      });
+      return history.turns.some(
+        (turn) =>
+          chatEnvelopeFromSubmission(turn.request)?.requestId === requestId,
+      );
+    };
+    if (canvasId !== undefined) return hasAcceptedInCanvas(canvasId);
+
+    const lease = acquireWorkspaceOperationLease();
+    try {
+      if (await hasAcceptedInCanvas('')) return true;
+      const spaces = getStructuredStore().spaces();
+      if (await hasAcceptedInCanvas(await spaces.worldId())) return true;
+      for (const space of await spaces.list()) {
+        if (await hasAcceptedInCanvas(space.canvasId)) return true;
+      }
+      return false;
+    } finally {
+      lease.release();
+    }
   },
   resolveAgentNode: (canvasId, threadId) =>
     agentThreadResolver.resolveAgentNode(canvasId, threadId),
@@ -300,6 +314,19 @@ export class AgentThreadService {
     private readonly dependencies: AgentThreadServiceDependencies = DEFAULT_DEPENDENCIES,
   ) {}
 
+  private isRequestStopped(
+    threadId: string,
+    canvasId: string | undefined,
+    requestId: string,
+  ): boolean {
+    return (
+      this.stoppedRequests.has(
+        JSON.stringify([canvasId, threadId, requestId]),
+      ) ||
+      this.stoppedRequests.has(JSON.stringify([undefined, threadId, requestId]))
+    );
+  }
+
   beginPreparation(
     threadId: string,
     canvasId?: string,
@@ -313,10 +340,7 @@ export class AgentThreadService {
       canvasId,
       abortController: new AbortController(),
     };
-    if (
-      requestId &&
-      this.stoppedRequests.has(JSON.stringify([canvasId, threadId, requestId]))
-    )
+    if (requestId && this.isRequestStopped(threadId, canvasId, requestId))
       preparation.abortController.abort();
     const pending = this.pendingPreparations.get(threadId) ?? new Set();
     pending.add(preparation);
@@ -405,8 +429,10 @@ export class AgentThreadService {
     options.signal?.throwIfAborted();
     if (
       options.requestId &&
-      this.stoppedRequests.has(
-        JSON.stringify([options.canvasId, options.threadId, options.requestId]),
+      this.isRequestStopped(
+        options.threadId,
+        options.canvasId,
+        options.requestId,
       )
     )
       throw new AgentRequestStoppedError();
@@ -775,13 +801,12 @@ export class AgentThreadService {
               request: {
                 id: requestId,
                 accepted:
-                  state.started &&
-                  (!!state.acceptance ||
-                    (await this.dependencies.hasAcceptedRequest(
-                      threadId,
-                      canvasId,
-                      requestId,
-                    ))),
+                  (state.started && !!state.acceptance) ||
+                  (await this.dependencies.hasAcceptedRequest(
+                    threadId,
+                    canvasId,
+                    requestId,
+                  )),
               },
             }
           : {}),

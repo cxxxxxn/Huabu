@@ -40,7 +40,7 @@ import { agenetes } from './agenetes/drivers.js';
 import { createChatSubmission } from './agenetes/handle.js';
 import { buildHuabuPiWorkloadSpec } from './agenetes/pi-driver.js';
 import { AgentThreadService } from './agent-thread.service.js';
-import { createSpace, space } from '../storage/index.js';
+import { createSpace, getStructuredStore, space } from '../storage/index.js';
 import {
   mountTestWorkspace,
   type MountedTestStorage,
@@ -191,9 +191,13 @@ async function invokeOnce(target: AgentNodeTarget): Promise<void> {
 }
 
 describe('AgentThreadService persisted binding recovery', () => {
-  it.each(['tail', 'folded'] as const)(
-    'reconciles a disconnected request from its durable %s after restart',
-    async (kind) => {
+  it.each(
+    (['tail', 'folded'] as const).flatMap((kind) =>
+      [false, true].map((unscoped) => ({ kind, unscoped })),
+    ),
+  )(
+    'reconciles a disconnected request from its durable $kind after restart (wildcard=$unscoped)',
+    async ({ kind, unscoped }) => {
       const target = await open();
       try {
         const namespace = canvasAcpNamespace(target.canvasId);
@@ -218,7 +222,7 @@ describe('AgentThreadService persisted binding recovery', () => {
         await expect(
           service.stopAndWait(
             target.threadId,
-            target.canvasId,
+            unscoped ? undefined : target.canvasId,
             'request-persisted',
           ),
         ).resolves.toEqual({
@@ -229,7 +233,7 @@ describe('AgentThreadService persisted binding recovery', () => {
         await expect(
           service.stopAndWait(
             target.threadId,
-            target.canvasId,
+            unscoped ? undefined : target.canvasId,
             'request-not-sent',
           ),
         ).resolves.toEqual({
@@ -242,6 +246,62 @@ describe('AgentThreadService persisted binding recovery', () => {
       }
     },
   );
+
+  it.each(['world', 'unnamed'] as const)(
+    'includes the %s namespace in wildcard acceptance reconciliation',
+    async (kind) => {
+      const target = await open();
+      try {
+        const canvasId =
+          kind === 'world' ? await getStructuredStore().spaces().worldId() : '';
+        await conversationEventLogStore.appendTurnStart(
+          canvasAcpNamespace(canvasId),
+          target.threadId,
+          createChatSubmission({ ...ENVELOPE, requestId: 'request-accepted' }),
+        );
+        const service = new AgentThreadService();
+        await expect(
+          service.stopAndWait(
+            target.threadId,
+            target.canvasId,
+            'request-accepted',
+          ),
+        ).resolves.toMatchObject({ request: { accepted: false } });
+        await expect(
+          service.stopAndWait(target.threadId, undefined, 'request-accepted'),
+        ).resolves.toMatchObject({ request: { accepted: true } });
+      } finally {
+        await close();
+      }
+    },
+  );
+
+  it('rejects wildcard reconciliation when scoped history cannot be read', async () => {
+    const target = await open();
+    try {
+      const history = agenetes.history.bind(agenetes);
+      vi.spyOn(agenetes, 'history').mockImplementation(
+        async (...args: Parameters<typeof agenetes.history>) => {
+          if (args[0].name === target.canvasId)
+            throw new Error('History unavailable');
+          return history(...args);
+        },
+      );
+      const service = new AgentThreadService();
+      await expect(
+        service.stopAndWait(target.threadId, undefined, 'request-unknown'),
+      ).rejects.toThrow('History unavailable');
+      const delayed = service.beginPreparation(
+        target.threadId,
+        target.canvasId,
+        'request-unknown',
+      );
+      expect(delayed.signal.aborted).toBe(true);
+      delayed.finish();
+    } finally {
+      await close();
+    }
+  });
 
   it('recovers an external binding from the durable record across a restart', async () => {
     const target = await open();

@@ -305,6 +305,81 @@ describe('AgentThreadService', () => {
     await invocation.dispose();
   });
 
+  it.each([undefined, 'canvas-a', 'canvas-b'])(
+    'fences delayed preparation and invocation in %s after a wildcard Stop',
+    async (canvasId) => {
+      const h = createHarness();
+      await h.service.stopAndWait('thread-a', undefined, 'request-a');
+      const delayed = h.service.beginPreparation(
+        'thread-a',
+        canvasId,
+        'request-a',
+      );
+      const next = h.service.beginPreparation(
+        'thread-a',
+        canvasId,
+        'request-b',
+      );
+      const otherThread = h.service.beginPreparation(
+        'thread-b',
+        canvasId,
+        'request-a',
+      );
+      expect(delayed.signal.aborted).toBe(true);
+      expect(next.signal.aborted).toBe(false);
+      expect(otherThread.signal.aborted).toBe(false);
+      await expect(
+        h.service.invoke({
+          ...invocationOptions(),
+          canvasId,
+          requestId: 'request-a',
+        }),
+      ).rejects.toThrow('stopped before execution');
+      expect(h.runExternal).not.toHaveBeenCalled();
+      delayed.finish();
+      next.finish();
+      otherThread.finish();
+    },
+  );
+
+  it('cancels a matching preparation in any Canvas without cancelling a newer request', async () => {
+    const h = createHarness();
+    const pending = h.service.beginPreparation('thread-a', 'canvas-a', 'old');
+    const next = h.service.beginPreparation('thread-a', 'canvas-a', 'new');
+    await expect(
+      h.service.stopAndWait('thread-a', undefined, 'old'),
+    ).resolves.toMatchObject({
+      stopped: true,
+      request: { id: 'old', accepted: false },
+    });
+    expect(pending.signal.aborted).toBe(true);
+    expect(next.signal.aborted).toBe(false);
+    pending.finish();
+    next.finish();
+  });
+
+  it.each([false, true])(
+    'reconciles persisted acceptance (%s) when a wildcard Stop cancels a matching invocation before dispatch',
+    async (accepted) => {
+      const h = createHarness({ persistedRequestAccepted: accepted });
+      const invocation = await h.service.invoke({
+        ...invocationOptions(),
+        requestId: 'request-a',
+      });
+      try {
+        await expect(
+          h.service.stopAndWait('thread-a', undefined, 'request-a'),
+        ).resolves.toMatchObject({
+          stopped: true,
+          request: { id: 'request-a', accepted },
+        });
+        expect(invocation.signal.aborted).toBe(true);
+      } finally {
+        await invocation.dispose();
+      }
+    },
+  );
+
   it('fences a disconnected preparation even after it leaves the pending registry', async () => {
     const h = createHarness();
     const preparation = h.service.beginPreparation(
