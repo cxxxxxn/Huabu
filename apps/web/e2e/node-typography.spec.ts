@@ -109,7 +109,7 @@ test('Note uses fixed insets and cards retain width-scaled spacing across orient
     ).toHaveCSS('font-size', '24px');
     await expect(
       fixture.locator(`[data-spacing="note-${width}"] .ProseMirror p`).first(),
-    ).toHaveCSS('font-size', '16px');
+    ).toHaveCSS('font-size', '18px');
     for (const type of ['web', 'pdf']) {
       for (const orientation of ['horizontal', 'vertical', 'text']) {
         const card = fixture.locator(
@@ -217,7 +217,7 @@ test('canvas Notes and measurement share typography without affecting expanded p
       `[data-heading-surface="${surface}"] .ProseMirror`,
     );
     await expect(prose.locator('h6')).toBeAttached();
-    for (const [index, size] of [24, 20, 18, 14, 14, 14].entries()) {
+    for (const [index, size] of [24, 22, 20, 18, 18, 18].entries()) {
       await expect(prose.locator(`h${index + 1}`)).toHaveCSS(
         'font-size',
         `${size}px`,
@@ -402,7 +402,7 @@ test('same-width nodes share title sizes and retain distinct Note body typograph
   expect(metrics).toHaveLength(3);
   expect(metrics[0].titleBase).toBe(24);
   const h2 = scene.locator('.ProseMirror h2').first();
-  await expect(h2).toHaveCSS('font-size', '20px');
+  await expect(h2).toHaveCSS('font-size', '22px');
   for (const [index, metric] of metrics.entries()) {
     expect(metric.title).toBeCloseTo(
       index === 0 ? NODE_TYPOGRAPHY.title.size : NODE_TYPOGRAPHY.cardTitle.size,
