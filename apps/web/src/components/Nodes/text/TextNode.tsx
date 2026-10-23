@@ -12,8 +12,6 @@ import {
 import { memo, useCallback, useEffect, useState, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { resolveAccent } from '@huabu/shared';
-
 import {
   DropdownMenuItem,
   DropdownMenuSubmenu,
@@ -88,9 +86,9 @@ export const TextNode = memo(
     // NodeWrapper shares Note's subdued accent fill without a painted border;
     // unaccented Text stays transparent. Locally we retain the foreground tint
     // for the editable body independently of hover and selection outlines.
-    const accent = resolveAccent(style.accent);
+    const accent = style.accent;
     const accentTokens = accent ? getAccentTokens(accent) : null;
-    const textColor = accentTokens?.fg ?? undefined;
+    const textColor = accentTokens?.textFg;
 
     const fontOpts = getTextNodeFontOpts(style);
 

@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { createId, resolveAccent } from '@huabu/shared';
+import { createId } from '@huabu/shared';
 
 import { SKETCH_STROKE_MERGE_MAX_DISTANCE_SCREEN_PX } from '@/config/canvas';
 import { resolveFrameAtPoint } from '@/handler/canvasCommand/utils';
@@ -25,6 +25,7 @@ import {
   useInkSigilStore,
 } from '@/store/inkSigilStore';
 import { useToolStore } from '@/store/toolStore';
+import { resolveAccentCss } from '@/utils/accentColor';
 
 import { findSketchStrokeHits } from './sketchHitTest';
 import {
@@ -174,8 +175,8 @@ export function SketchOverlay({
   const eraserScreenRadius = sketchDraft.eraserSize;
   const eraserFlowRadius = eraserScreenRadius / zoom;
   // Live-preview fill: resolve the stored palette token to a CSS color.
-  // `resolveAccent` passes legacy hex strings through unchanged.
-  const resolvedColor = resolveAccent(strokeColor) ?? strokeColor;
+  // Legacy hex strings pass through unchanged.
+  const resolvedColor = resolveAccentCss(strokeColor) ?? strokeColor;
 
   // Raw clientX/clientY, fed to screenToFlowPosition on commit to build the
   // node. Kept alongside `livePtsRef` (the same stroke in overlay-relative

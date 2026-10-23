@@ -106,6 +106,7 @@ import {
 import { NodeToolbar } from './CanvasToolbar.tsx';
 import { CanvasZoomMenu } from './CanvasZoomMenu';
 import { ConnectedNodePicker } from './ConnectedNodePicker.tsx';
+import { renderEdgeAccent } from './edges/edgeAccent';
 import {
   EDIT_EDGE_LABEL_EVENT,
   LabelledEdge,
@@ -873,7 +874,7 @@ const CanvasContent: React.FC<CanvasProps> = ({
     };
 
     const result = edges.map((e) => {
-      const styled = styleEdge(e);
+      const styled = styleEdge(renderEdgeAccent(e));
       const z = edgeZIndex(zByNode, nodesById, e.source, e.target);
 
       // Reuse the wrapped edge emitted last render when the

@@ -28,6 +28,7 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
 import { useCloseOnEscape } from '@/hooks/useCloseOnEscape';
+import { resolveAccentCss, resolveColorPresetCss } from '@/utils/accentColor';
 
 import { Button } from './Button';
 import { cn } from './cn';
@@ -348,8 +349,10 @@ function ToolbarColorPicker({
 
   // Resolve the token to a CSS color for the trigger swatch.
   // Legacy hex / CSS keyword passes through unchanged.
-  const triggerColor =
-    colors.find((c) => c.token === value)?.value ?? value ?? 'transparent';
+  const preset = colors.find((c) => c.token === value);
+  const triggerColor = preset
+    ? resolveColorPresetCss(preset)
+    : (resolveAccentCss(value) ?? 'transparent');
   const isTransparent = !triggerColor || triggerColor === 'transparent';
 
   // Mirror the checkerboard rendering used by the picker swatches so a
