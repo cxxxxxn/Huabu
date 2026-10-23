@@ -107,15 +107,27 @@ const createNodes: CommandDefinition<Cmd> = {
       //    input. Position defaults to (0,0) and is adjusted in step 5.
       // ---------------------------------------------------------------
       const explicitSize = input.size;
-      const size = explicitSize ?? getNodeDefaultSize(nodeType);
+      const autoHeight = explicitSize?.height === 'auto';
+      const size = explicitSize
+        ? {
+            width: explicitSize.width,
+            height:
+              typeof explicitSize.height === 'number'
+                ? explicitSize.height
+                : undefined,
+          }
+        : getNodeDefaultSize(nodeType);
+      const suppliedData: Record<string, unknown> = {
+        ...input.data,
+        ...(autoHeight && nodeType === 'note' ? { heightMode: 'auto' } : {}),
+      };
       const geometryStyle = getNodeCreationStyle(nodeType, size, {
-        data: input.data,
+        data: suppliedData,
         heightIsExplicit: typeof explicitSize?.height === 'number',
       });
 
       // Apply the per-type default accent, but only if the caller did
       // not explicitly set one (preserves clipboard paste / undo data).
-      const suppliedData = (input.data ?? {}) as Record<string, unknown>;
       const inputData =
         nodeType === 'question'
           ? {

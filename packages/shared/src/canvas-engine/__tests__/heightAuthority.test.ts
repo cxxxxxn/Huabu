@@ -40,6 +40,36 @@ function dataOf(nodes: CanvasNode[], id: string) {
   return nodes.find((n) => n.id === id)?.data as Record<string, unknown>;
 }
 
+describe("CREATE_NODES height: 'auto'", () => {
+  it.each([undefined, 'fixed', 'auto'] as const)(
+    'honors explicit auto size with supplied ownership %s',
+    (heightMode) => {
+      const { writeResult } = run(
+        [
+          {
+            type: 'CREATE_NODES',
+            nodes: [
+              {
+                nodeType: 'note',
+                position: { x: 0, y: 0 },
+                size: { width: 400, height: 'auto' },
+                data: {
+                  content: CONTENT,
+                  ...(heightMode ? { heightMode } : {}),
+                  autoHeight: { intrinsicHeight: 260, measuredFor: KEY },
+                },
+              },
+            ],
+          },
+        ],
+        [],
+      );
+      expect(writeResult.nodes[0].data.heightMode).toBe('auto');
+      expect(writeResult.nodes[0].style).toEqual({ width: 400, height: 264 });
+    },
+  );
+});
+
 describe("SET_NODE_GEOMETRY height: 'auto'", () => {
   it('materializes a numeric height instead of clearing it', () => {
     const { writeResult } = run(

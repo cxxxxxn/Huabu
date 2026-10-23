@@ -30,7 +30,7 @@ function normalizeAgentAuthoredContent(
 }
 
 /**
- * Normalize creation sizes and add server-owned authorship metadata and optional built-in-agent read-set revisions before canonical execution.
+ * Add server-owned authorship metadata and optional built-in-agent read-set revisions before canonical execution.
  */
 export function prepareAgentCanvasCommands(
   commands: readonly AgentOperationCommand[],
@@ -43,16 +43,10 @@ export function prepareAgentCanvasCommands(
         ...command,
         nodes: command.nodes.map((node) => {
           const data = node.data ?? {};
-          const size = node.size;
-          const autoHeight = size?.height === 'auto';
           return {
             ...node,
-            ...(autoHeight ? { size: { width: size.width } } : {}),
             data: {
               ...data,
-              ...(autoHeight && node.nodeType === 'note'
-                ? { heightMode: 'auto' as const }
-                : {}),
               origin,
               ...(typeof data.label === 'string'
                 ? { labelSource: 'agent' as const }

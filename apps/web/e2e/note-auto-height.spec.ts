@@ -114,10 +114,9 @@ async function createAgentNote(
           data: {
             label: 'Agent long note',
             content: markdown,
-            heightMode: 'auto',
           },
           position: { x: 100, y: 100 },
-          size: { width: 560 },
+          size: { width: 560, height: 'auto' },
           ...(parentId ? { parentId } : {}),
         },
       ],

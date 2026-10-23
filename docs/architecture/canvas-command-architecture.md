@@ -22,7 +22,7 @@ selection.
 
 `getNodeDefaultSize()` supplies a uniform 400-unit default width for new nodes, including Text, Audio, and Space shortcuts. New Notes default to fixed height 300; explicit auto ownership is preserved, and the toolbar can still switch height modes. Other types retain their height policies. Explicit dimensions from creation, drawing, media geometry, or saved nodes remain authoritative; these defaults do not migrate existing geometry or ownership. Space shortcuts and World placement share `SPACE_SHORTCUT_SIZE.defaultWidth`.
 
-Agent creation accepts `size.height: "auto"` on the wire. `prepareAgentCanvasCommands` converts that spelling to `data.heightMode: "auto"` for Notes and removes the nonnumeric height before emitting the shared `CREATE_NODES` command. The engine then materializes numeric geometry using its existing auto-height policy; numeric heights and omitted-height fixed defaults are unchanged.
+`CREATE_NODES` accepts `size.height: "auto"` as an explicit height intent. The shared command records `data.heightMode: "auto"` for Notes and removes the nonnumeric height before materializing geometry through the existing auto-height policy. This applies equally to direct `/execute` calls, built-in tools, and Space operations; numeric heights and omitted-height fixed defaults are unchanged. Clipboard paste resolves each source Note's height ownership with `resolveHeightMode` before creation, preserving legacy auto Notes instead of treating them as newly authored fixed-height Notes.
 
 ## Layer 1: CanvasUiIntent
 

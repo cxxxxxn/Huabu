@@ -4,14 +4,22 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  autoHeightKey,
   executeCanvasCommands,
   solveStructuredFrameLayout,
 } from '@huabu/shared/canvas-engine';
 
+import { parseHuabuClipboard } from '@/utils/io/clipboard';
+
 import resolveAddNodes from '../resolveAddNodes';
 import resolvePasteClipboard from '../resolvePasteClipboard';
 
-import type { CanvasNodeType, Point, SketchStroke } from '@huabu/shared';
+import type {
+  CanvasNodeId,
+  CanvasNodeType,
+  Point,
+  SketchStroke,
+} from '@huabu/shared';
 import type { Node } from '@xyflow/react';
 
 const ui = { nodes: [], edges: [] };
@@ -309,6 +317,91 @@ describe.each(['column', 'row'] as const)(
 );
 
 describe('resolvePasteClipboard', () => {
+  it.each([
+    {
+      name: 'legacy auto',
+      height: undefined,
+      heightMode: undefined,
+      expected: 56,
+      mode: 'auto',
+    },
+    {
+      name: 'legacy fixed',
+      height: 172,
+      heightMode: undefined,
+      expected: 172,
+      mode: 'fixed',
+    },
+    {
+      name: 'explicit auto',
+      height: 388,
+      heightMode: 'auto',
+      expected: 388,
+      mode: 'auto',
+    },
+    {
+      name: 'explicit fixed',
+      height: 224,
+      heightMode: 'fixed',
+      expected: 224,
+      mode: 'fixed',
+    },
+  ] as const)(
+    'preserves $name ownership when pasting serialized Notes',
+    ({ height, heightMode, expected, mode }) => {
+      const source: Node = {
+        id: 'source',
+        type: 'note',
+        position: { x: 0, y: 0 },
+        style: { width: 560, ...(height === undefined ? {} : { height }) },
+        data: {
+          content: 'Copied content',
+          ...(heightMode ? { heightMode } : {}),
+        },
+      };
+      const clipboard = parseHuabuClipboard(
+        JSON.stringify({ __huabu_nodes__: [source] }),
+      );
+      if (!clipboard) throw new Error('Invalid clipboard fixture');
+      const before = JSON.stringify(clipboard.nodes);
+      const resolution = resolvePasteClipboard(
+        {
+          type: 'PASTE_CLIPBOARD',
+          clipboardNodes: clipboard.nodes as Node[],
+        },
+        ui,
+      );
+      const nodes = executeCanvasCommands(
+        { source: 'ui', commands: resolution.commands },
+        { ...ui, canvasId: 'canvas' },
+      ).writeResult.nodes;
+      const note = nodes[0];
+      expect(note.id).not.toBe(source.id);
+      expect(note.data.heightMode).toBe(mode);
+      expect(note.style).toMatchObject({ width: 560, height: expected });
+      const measured = executeCanvasCommands(
+        {
+          source: 'system',
+          commands: [
+            {
+              type: 'APPLY_MEASURED_HEIGHT',
+              items: [
+                {
+                  nodeId: note.id as CanvasNodeId,
+                  intrinsicHeight: 420,
+                  measuredFor: autoHeightKey(note),
+                },
+              ],
+            },
+          ],
+        },
+        { nodes, edges: [], canvasId: 'canvas' },
+      ).writeResult.nodes[0];
+      expect(measured.style?.height).toBe(mode === 'auto' ? 424 : expected);
+      expect(JSON.stringify(clipboard.nodes)).toBe(before);
+    },
+  );
+
   it('rebases surviving children before paste placement and drops incident edges', () => {
     const nodes: Node[] = [
       { id: 'old', type: 'canvasRef', position: { x: 100, y: 200 }, data: {} },
