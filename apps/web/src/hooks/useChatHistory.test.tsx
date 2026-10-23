@@ -21,7 +21,11 @@ import {
   useConversationTitleStore,
 } from '@/store/conversationTitleStore';
 
-import { claimAgentStream } from './agentStreamCoordinator';
+import {
+  claimAgentStream,
+  hasAgentStreamClaim,
+} from './agentStreamCoordinator';
+import * as turnController from './agentTurnController';
 import { useChatHistory } from './useChatHistory';
 
 import type { ChatSession } from './useChatSession';
@@ -141,6 +145,8 @@ function seedStore(isStreaming: boolean) {
         binding: { kind: 'internal' },
         settings: { modelId: null, reasoningEffort: null },
         pendingAttachments: [],
+        queuedTurns: [],
+        queuePaused: false,
       },
     },
   });
@@ -197,6 +203,47 @@ afterEach(() => {
 });
 
 describe('useChatHistory paging', () => {
+  it.each(['done', 'cancelled', 'error', 'close', 'aborted'])(
+    'settles the queue only after releasing the reconnect claim: %s',
+    async (terminal) => {
+      seedStore(false);
+      const settle = vi
+        .spyOn(turnController, 'settleAgentTurnQueue')
+        .mockImplementation((session, completed) => {
+          expect(
+            hasAgentStreamClaim(session.ownerCanvasId, session.threadId),
+          ).toBe(false);
+          expect(completed).toBe(terminal === 'done');
+        });
+      apiMocks.reconnectStream.mockImplementationOnce(
+        async (_thread, _canvas, callbacks) => {
+          if (terminal === 'error')
+            callbacks.onError(new Error('Disconnected'));
+          else {
+            if (terminal !== 'close')
+              callbacks.onEvent({
+                type: 'done',
+                data: {
+                  message: '',
+                  meta: {
+                    stopReason: terminal === 'cancelled' ? 'cancelled' : 'stop',
+                  },
+                },
+              });
+            callbacks.onComplete();
+          }
+          return { status: terminal === 'aborted' ? 'aborted' : 'completed' };
+        },
+      );
+      try {
+        await renderHarness();
+        expect(settle).toHaveBeenCalledOnce();
+      } finally {
+        settle.mockRestore();
+      }
+    },
+  );
+
   it.each([false, true])(
     'does not request history for a newly created thread with node=%s',
     async (node) => {

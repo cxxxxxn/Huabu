@@ -103,6 +103,7 @@ function createHarness(options?: {
   skipTurnStarted?: boolean;
   internalGate?: Promise<void>;
   internalEvents?: StreamEvent[];
+  persistedRequestAccepted?: boolean;
 }) {
   const release = vi.fn();
   const startLifecycle = options?.startError
@@ -177,6 +178,9 @@ function createHarness(options?: {
     },
   );
   const service = new AgentThreadService({
+    hasAcceptedRequest: vi.fn(
+      async () => options?.persistedRequestAccepted ?? false,
+    ),
     resolveAgentNode: async () =>
       options && 'agentTarget' in options
         ? (options.agentTarget ?? null)
@@ -237,6 +241,90 @@ function invocationOptions() {
 }
 
 describe('AgentThreadService', () => {
+  it.each([true, false])(
+    'reconciles an inactive request from durable history: accepted=%s',
+    async (accepted) => {
+      const h = createHarness({ persistedRequestAccepted: accepted });
+      await expect(
+        h.service.stopAndWait('thread-a', 'canvas-a', 'request-a'),
+      ).resolves.toEqual({
+        stopped: false,
+        acceptance: null,
+        request: { id: 'request-a', accepted },
+      });
+    },
+  );
+
+  it('fences a delayed POST after Stop but leaves other request and Canvas identities alone', async () => {
+    const h = createHarness();
+    await h.service.stopAndWait('thread-a', 'canvas-a', 'request-a');
+    const delayed = h.service.beginPreparation(
+      'thread-a',
+      'canvas-a',
+      'request-a',
+    );
+    const next = h.service.beginPreparation(
+      'thread-a',
+      'canvas-a',
+      'request-b',
+    );
+    const otherCanvas = h.service.beginPreparation(
+      'thread-a',
+      'canvas-b',
+      'request-a',
+    );
+    expect(delayed.signal.aborted).toBe(true);
+    expect(next.signal.aborted).toBe(false);
+    expect(otherCanvas.signal.aborted).toBe(false);
+    await expect(
+      h.service.invoke({
+        ...invocationOptions(),
+        requestId: 'request-a',
+        signal: delayed.signal,
+      }),
+    ).rejects.toThrow();
+    expect(h.runExternal).not.toHaveBeenCalled();
+    delayed.finish();
+    next.finish();
+    otherCanvas.finish();
+  });
+
+  it('does not stop a replacement request when an older Stop arrives late', async () => {
+    const h = createHarness();
+    const invocation = await h.service.invoke({
+      ...invocationOptions(),
+      requestId: 'request-new',
+    });
+    await expect(
+      h.service.stopAndWait('thread-a', 'canvas-a', 'request-old'),
+    ).resolves.toMatchObject({
+      stopped: false,
+      request: { id: 'request-old', accepted: false },
+    });
+    expect(invocation.signal.aborted).toBe(false);
+    await invocation.dispose();
+  });
+
+  it('fences a disconnected preparation even after it leaves the pending registry', async () => {
+    const h = createHarness();
+    const preparation = h.service.beginPreparation(
+      'thread-a',
+      'canvas-a',
+      'request-a',
+    );
+    preparation.finish();
+    await h.service.stopAndWait('thread-a', 'canvas-a', 'request-a');
+    expect(preparation.signal.aborted).toBe(false);
+    await expect(
+      h.service.invoke({
+        ...invocationOptions(),
+        requestId: 'request-a',
+        signal: preparation.signal,
+      }),
+    ).rejects.toThrow('stopped before execution');
+    expect(h.runExternal).not.toHaveBeenCalled();
+  });
+
   it('forwards verified external Ink events without publishing chat text', async () => {
     const h = createHarness({
       externalEvents: [
@@ -1441,6 +1529,7 @@ describe('AgentThreadService', () => {
       return events([{ type: 'done', data: { message: 'Done' } }]);
     });
     const service = new AgentThreadService({
+      hasAcceptedRequest: vi.fn(async () => false),
       resolveAgentNode: async () => TARGET,
       resolveFixedAgentNode: async () => TARGET,
       resolvePersistedExternalBinding: () => null,

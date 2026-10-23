@@ -31,6 +31,7 @@ import {
   selectThreadBinding,
   selectThreadIsLoading,
   selectThreadMessages,
+  selectThreadQueuedTurns,
   selectThreadSettings,
   useChatStore,
 } from '@/store/chatStore';
@@ -58,6 +59,7 @@ import { isPageUnloading } from '@/utils/pageLifecycle';
 import {
   abortAgentStreamClaim,
   claimAgentStream,
+  hasAgentStreamClaim,
 } from './agentStreamCoordinator';
 
 import type { AssistantSegment, ChatMessage } from '../store/chatTypes';
@@ -183,11 +185,14 @@ export type AcpSessionMetaStreamEvent = Extract<
 type AcpSessionMetaSink = (event: AcpSessionMetaStreamEvent) => void;
 const acpSessionMetaSinks = new Map<string, AcpSessionMetaSink>();
 interface TurnAcceptanceSink {
+  requestId: string;
   afterTurnStartSeq: number;
-  accept: (accepted: AgentTurnAccepted) => void;
+  accept: (accepted: AgentTurnAcceptance) => void;
   reject: () => void;
 }
 const turnAcceptanceSinks = new Map<string, TurnAcceptanceSink>();
+const preparingTurnCancellations = new Map<string, () => void>();
+const activeTurnRequests = new Map<string, string>();
 const latestAcceptanceSeqByThread = new Map<string, number>();
 const hiddenInkIntentToolCalls = new Map<
   string,
@@ -308,6 +313,7 @@ export function observeAgentTurnAcceptance(
   if (accepted.turnStartSeq <= latestSeq) return;
   latestAcceptanceSeqByThread.set(key, accepted.turnStartSeq);
   const sink = turnAcceptanceSinks.get(key);
+  if (accepted.requestId && sink?.requestId !== accepted.requestId) return;
   if (!sink || accepted.turnStartSeq <= sink.afterTurnStartSeq) return;
   sink.accept(accepted);
   if (turnAcceptanceSinks.get(key) === sink) {
@@ -329,6 +335,8 @@ function rejectAgentTurnAcceptance(canvasId: string, threadId: string): void {
 
 export function resetAgentTurnAcceptanceObserversForTests(): void {
   turnAcceptanceSinks.clear();
+  preparingTurnCancellations.clear();
+  activeTurnRequests.clear();
   latestAcceptanceSeqByThread.clear();
   hiddenInkIntentToolCalls.clear();
 }
@@ -834,17 +842,22 @@ export type AgentTurnAccepted = Parameters<
   NonNullable<AgentStreamCallbacks['onAccepted']>
 >[0];
 
+type AgentTurnAcceptance = AgentTurnAccepted | { requestId: string };
+
 export interface AgentTurnCallbacks {
+  queuedTurnId?: string;
   canDispatch?: () => boolean;
   onStarted?: () => void;
-  onAccepted?: (accepted: AgentTurnAccepted) => void;
+  onAccepted?: (accepted: AgentTurnAcceptance) => void;
   onAcceptanceRejected?: () => void;
 }
 
 export interface AgentTurnResult {
   status: 'completed' | 'failed' | 'stopped' | 'rejected' | 'unknown' | 'busy';
-  accepted?: AgentTurnAccepted;
+  accepted?: AgentTurnAcceptance;
   error?: Error;
+  /** True only after a successful done event, never just a transport close. */
+  completedNormally?: boolean;
 }
 
 export function captureAgentTurnSources(
@@ -1027,6 +1040,23 @@ export async function dispatchAgentTurn(
   input: PreparedAgentTurn,
   callbacks: AgentTurnCallbacks = {},
 ): Promise<AgentTurnResult> {
+  try {
+    const result = await executeAgentTurn(input, callbacks);
+    settleAgentTurnQueue(
+      input.session,
+      result.status === 'completed' && result.completedNormally === true,
+    );
+    return result;
+  } catch (error) {
+    settleAgentTurnQueue(input.session, false);
+    throw error;
+  }
+}
+
+async function executeAgentTurn(
+  input: PreparedAgentTurn,
+  callbacks: AgentTurnCallbacks = {},
+): Promise<AgentTurnResult> {
   const prepared = structuredClone(input);
   const {
     session,
@@ -1095,6 +1125,13 @@ export async function dispatchAgentTurn(
       result.status = 'busy';
       return;
     }
+    preparingTurnCancellations.set(acceptanceKey, () =>
+      abortAgentStreamClaim(requestScope.canvasId, threadId),
+    );
+    const requestId = createId('request');
+    activeTurnRequests.set(acceptanceKey, requestId);
+    const userMessage = createAgentTurnUserMessage(prepared);
+    userMessage.queuedTurnId = callbacks.queuedTurnId;
     try {
       if (
         prepared.sources.canvasId !== requestScope.canvasId ||
@@ -1128,6 +1165,7 @@ export async function dispatchAgentTurn(
       if (callbacks.canDispatch?.() === false) return;
     } catch (error) {
       result.error = error instanceof Error ? error : new Error(String(error));
+      if (callbacks.queuedTurnId) addMessage(threadId, userMessage);
       addMessage(threadId, {
         id: createId('status'),
         role: 'status',
@@ -1140,13 +1178,15 @@ export async function dispatchAgentTurn(
         result.error ||
         streamClaim.signal.aborted ||
         callbacks.canDispatch?.() === false
-      )
+      ) {
+        preparingTurnCancellations.delete(acceptanceKey);
+        activeTurnRequests.delete(acceptanceKey);
         streamClaim.release();
+      }
     }
     setThreadLastAction(threadId, agentMode);
     callbacks.onStarted?.();
 
-    const userMessage = createAgentTurnUserMessage(prepared);
     const userMessageId = userMessage.id;
     addMessage(threadId, userMessage);
 
@@ -1186,7 +1226,7 @@ export async function dispatchAgentTurn(
         );
     };
 
-    const acceptTurn = (accepted: AgentTurnAccepted) => {
+    const acceptTurn = (accepted: AgentTurnAcceptance) => {
       if (result.accepted) return;
       result.accepted = accepted;
       if (isComposingQuestion && !serverSettingsConfirmed) {
@@ -1200,9 +1240,13 @@ export async function dispatchAgentTurn(
       }
     };
     const acceptanceSink: TurnAcceptanceSink = {
+      requestId,
       afterTurnStartSeq: latestAcceptanceSeqByThread.get(acceptanceKey) ?? 0,
       accept: acceptTurn,
-      reject: () => callbacks.onAcceptanceRejected?.(),
+      reject: () => {
+        result.status = 'rejected';
+        callbacks.onAcceptanceRejected?.();
+      },
     };
     turnAcceptanceSinks.set(acceptanceKey, acceptanceSink);
     // Make sure any buffered behavioural events have hit the server
@@ -1231,6 +1275,7 @@ export async function dispatchAgentTurn(
       // above — it is the conversation anchor, not a separate source.
       result.status = 'unknown';
       requestDispatched = true;
+      preparingTurnCancellations.delete(acceptanceKey);
       releasePreparation?.();
       releasePreparation = undefined;
       await agentApi.streamMessage(
@@ -1243,6 +1288,10 @@ export async function dispatchAgentTurn(
           },
           onEvent: (event: AgentStreamEvent) => {
             if (streamClaim.signal.aborted) return;
+            if (event.type === 'done') {
+              result.completedNormally =
+                inkTurnOutcome(event.data.meta?.stopReason) === 'done';
+            }
             if (!conversationView && !titleCreationConfirmed) {
               titleCreationConfirmed = true;
               refreshConversationTitleAfterStream(
@@ -1288,6 +1337,7 @@ export async function dispatchAgentTurn(
           },
         },
         {
+          requestId: acceptanceSink.requestId,
           inputKind,
           groundingVisual: prepared.groundingVisual,
           inkResources: prepared.inkResources,
@@ -1348,6 +1398,8 @@ export async function dispatchAgentTurn(
         result.error ??=
           error instanceof Error ? error : new Error(String(error));
       } finally {
+        preparingTurnCancellations.delete(acceptanceKey);
+        activeTurnRequests.delete(acceptanceKey);
         clearHiddenIntentCalls(threadId);
         const retainForReconciliation =
           result.status === 'unknown' && !result.accepted;
@@ -1392,6 +1444,7 @@ export async function dispatchAgentTurn(
 
 export function stopAgentTurn(session: ChatSession): void {
   const { threadId, ownerCanvasId, conversationView } = session;
+  useChatStore.getState().setQueuePaused(threadId, true);
   const { addMessage, updateMessage, setThreadLoading } =
     useChatStore.getState();
   // Stop this session's thread. Keep the local subscription and claim alive
@@ -1405,12 +1458,28 @@ export function stopAgentTurn(session: ChatSession): void {
     conversationView,
     ownerCanvasId,
   ).canvasId;
+  const key = turnKey(scopedCanvasId, tid);
+  const cancelPreparation = preparingTurnCancellations.get(key);
+  if (cancelPreparation) {
+    cancelPreparation();
+    return;
+  }
+  const sink = turnAcceptanceSinks.get(key);
+  const requestId = activeTurnRequests.get(key) ?? sink?.requestId;
   void agentApi
-    .stopThread(tid, scopedCanvasId)
+    .stopThread(tid, scopedCanvasId, requestId)
     .then((response) => {
-      if (!response.stopped) return;
+      // A late Stop response must never settle a replacement request.
+      const currentRequestId =
+        activeTurnRequests.get(key) ?? turnAcceptanceSinks.get(key)?.requestId;
+      if (requestId !== currentRequestId) return;
+      const reconciled = !!requestId && response.request?.id === requestId;
+      if (!response.stopped && !reconciled) return;
       if (response.acceptance) {
         observeAgentTurnAcceptance(scopedCanvasId, response.acceptance);
+      } else if (reconciled && response.request?.accepted && sink) {
+        turnAcceptanceSinks.delete(key);
+        sink.accept({ requestId: sink.requestId });
       } else {
         rejectAgentTurnAcceptance(scopedCanvasId, tid);
       }
@@ -1423,6 +1492,9 @@ export function stopAgentTurn(session: ChatSession): void {
       }
       clearHiddenIntentCalls(tid);
       setThreadLoading(tid, false);
+      if (reconciled && response.request?.accepted && !response.stopped) {
+        useChatStore.getState().setHistoryLoaded(tid, false);
+      }
 
       addMessage(tid, {
         id: createId('status'),
@@ -1461,4 +1533,102 @@ export function stopAgentTurn(session: ChatSession): void {
         error,
       );
     });
+}
+
+const drainingQueues = new Set<string>();
+
+/** Called after the stream claim and preparation lease have been released. */
+export function settleAgentTurnQueue(
+  session: Pick<ChatSession, 'threadId' | 'ownerCanvasId'>,
+  completedNormally: boolean,
+): void {
+  const chat = useChatStore.getState();
+  if (!selectThreadQueuedTurns(chat, session.threadId).length) return;
+  if (!completedNormally) {
+    chat.setQueuePaused(session.threadId, true);
+    return;
+  }
+  void drainAgentTurnQueue(session);
+}
+
+export function resumeAgentTurnQueue(session: ChatSession): void {
+  useChatStore.getState().setQueuePaused(session.threadId, false);
+  void drainAgentTurnQueue(session);
+}
+
+async function drainAgentTurnQueue(
+  session: Pick<ChatSession, 'threadId' | 'ownerCanvasId'>,
+): Promise<void> {
+  const { threadId, ownerCanvasId } = session;
+  const key = turnKey(ownerCanvasId, threadId);
+  if (drainingQueues.has(key)) return;
+  drainingQueues.add(key);
+  try {
+    while (true) {
+      const chat = useChatStore.getState();
+      const thread = chat.threadsById[threadId];
+      const next = thread?.queuedTurns[0];
+      if (!next || thread.queuePaused) return;
+      if (
+        next.status !== 'pending' ||
+        selectThreadIsLoading(chat, threadId) ||
+        hasAgentStreamClaim(ownerCanvasId, threadId) ||
+        turnAcceptanceSinks.has(key) ||
+        resolveConversationPreparation(next.prepared.session).pending
+      ) {
+        chat.setQueuePaused(threadId, true);
+        return;
+      }
+      chat.setQueuedTurnStatus(threadId, next.id, 'sending');
+      const reject = () => {
+        const current = useChatStore.getState();
+        current.setQueuedTurnStatus(threadId, next.id, 'pending');
+        current.setQueuePaused(threadId, true);
+      };
+      try {
+        const result = await executeAgentTurn(next.prepared, {
+          queuedTurnId: next.id,
+          onAccepted: () =>
+            useChatStore.getState().removeQueuedTurn(threadId, next.id),
+          onAcceptanceRejected: reject,
+        });
+        if (!result.accepted) {
+          if (result.status === 'unknown') {
+            useChatStore
+              .getState()
+              .setQueuedTurnStatus(threadId, next.id, 'uncertain');
+          } else if (!result.completedNormally) {
+            reject();
+          }
+        }
+        if (result.status !== 'completed' || !result.completedNormally) {
+          useChatStore.getState().setQueuePaused(threadId, true);
+          return;
+        }
+        // Older transports can complete without an acceptance envelope.
+        useChatStore.getState().removeQueuedTurn(threadId, next.id);
+      } catch (error) {
+        reject();
+        console.error('Failed to send queued Agent turn', error);
+        useChatStore.getState().addMessage(threadId, {
+          id: createId('status'),
+          role: 'status',
+          status: 'error',
+          detail: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+    }
+  } catch (error) {
+    useChatStore.getState().setQueuePaused(threadId, true);
+    console.error('Failed to advance Agent queue', error);
+    useChatStore.getState().addMessage(threadId, {
+      id: createId('status'),
+      role: 'status',
+      status: 'error',
+      detail: error instanceof Error ? error.message : String(error),
+    });
+  } finally {
+    drainingQueues.delete(key);
+  }
 }

@@ -27,6 +27,8 @@ import {
   prepareAgentTurn,
   prepareAgentTurnRetry,
   resetAgentTurnAcceptanceObserversForTests,
+  resumeAgentTurnQueue,
+  settleAgentTurnQueue,
   stopAgentTurn,
 } from './agentTurnController';
 import { useAgentStream, type UseAgentStreamReturn } from './useAgentStream';
@@ -95,6 +97,594 @@ function request(inputKind: 'text' | 'ink-intent' = 'text', owner = session) {
     sources: captureAgentTurnSources(owner),
   });
 }
+
+describe('queued composer turns', () => {
+  let hook: UseAgentStreamReturn;
+
+  beforeEach(async () => {
+    function Harness() {
+      hook = useAgentStream(session);
+      return null;
+    }
+    container = document.createElement('div');
+    root = createRoot(container);
+    await act(async () => root?.render(createElement(Harness)));
+  });
+
+  async function enqueue(content: string) {
+    await act(async () => {
+      useChatStore.getState().setDraft(session.threadId, content);
+      await hook.startStream(content, 'operate', ['review']);
+    });
+  }
+
+  function finish(
+    callbacks: AgentStreamCallbacks,
+    threadId = session.threadId,
+  ) {
+    callbacks.onAccepted?.({
+      threadId,
+      turnStartSeq: mocks.stream.mock.calls.length * 10,
+    });
+    callbacks.onEvent({ type: 'done', data: { message: 'Done' } });
+    callbacks.onComplete();
+  }
+
+  async function waitForQueue() {
+    await act(async () => {
+      await vi.waitFor(() => {
+        expect(
+          hasAgentStreamClaim(session.ownerCanvasId, session.threadId),
+        ).toBe(false);
+        expect(
+          useChatStore.getState().threadsById[session.threadId].queuedTurns,
+        ).toEqual([]);
+      });
+    });
+  }
+
+  it('drains FIFO after genuine completion even after the composer unmounts', async () => {
+    const gate = deferred();
+    mocks.stream.mockImplementation(
+      async (content, threadId, _mode, callbacks: AgentStreamCallbacks) => {
+        if (content === 'First') await gate.promise;
+        finish(callbacks, threadId);
+      },
+    );
+    let running!: Promise<void>;
+    await act(async () => {
+      running = hook.startStream('First', 'operate');
+    });
+    await enqueue('Second');
+    await enqueue('Third');
+    expect(mocks.stream).toHaveBeenCalledTimes(1);
+    expect(useChatStore.getState().threadsById[session.threadId].draft).toBe(
+      '',
+    );
+    act(() => root?.unmount());
+    root = undefined;
+    gate.resolve();
+    await running;
+    await waitForQueue();
+    expect(mocks.stream.mock.calls.map(([content]) => content)).toEqual([
+      'First',
+      'Second',
+      'Third',
+    ]);
+  });
+
+  it('captures source, settings, slash skills, quotes and attachments once per queued item', async () => {
+    act(() => useChatStore.getState().setThreadLoading(session.threadId, true));
+    const chat = useChatStore.getState();
+    const attachment: ChatAttachment = {
+      type: 'image',
+      source: 'upload',
+      url: '/snapshot.png',
+      label: 'Snapshot',
+    };
+    const excerpt: ChatAttachment = {
+      type: 'file',
+      source: 'selection',
+      content: 'Excerpt',
+      label: 'Excerpt',
+    };
+    const quote = {
+      quote: 'Original',
+      comment: 'Explain',
+      contextBefore: '',
+      contextAfter: '',
+    };
+    act(() => {
+      chat.addPendingAttachment(session.threadId, attachment);
+      chat.setSelectionAttachment(excerpt);
+      chat.addQuotedComment(session.threadId, quote);
+      chat.setThreadSettings(session.threadId, {
+        modelId: 'captured-model',
+        reasoningEffort: null,
+      });
+    });
+    await enqueue('Second');
+    act(() =>
+      chat.setThreadSettings(session.threadId, {
+        modelId: 'new-model',
+        reasoningEffort: null,
+      }),
+    );
+    useCanvasStore.getState()._setStateNoAutosave({ nodes: [] });
+    await enqueue('Third');
+    const [second, third] =
+      useChatStore.getState().threadsById[session.threadId].queuedTurns;
+    expect(second.prepared).toMatchObject({
+      attachments: [attachment, excerpt],
+      quotedComments: [quote],
+      invokedSkills: ['review'],
+      settings: { modelId: 'captured-model' },
+      sources: {
+        canvasContext: {
+          selectedNodes: expect.arrayContaining([
+            expect.objectContaining({ id: 'note-1' }),
+          ]),
+        },
+      },
+    });
+    expect(third.prepared.attachments).toEqual([]);
+    expect(third.prepared.quotedComments).toBeUndefined();
+    expect(third.prepared.settings.modelId).toBe('new-model');
+    expect(useChatStore.getState().selectionAttachment).toBeNull();
+  });
+
+  it('does not copy an unaccepted active turn attachment into the next queued message', async () => {
+    const gate = deferred();
+    mocks.stream.mockImplementationOnce(
+      async (_content, _thread, _mode, callbacks: AgentStreamCallbacks) => {
+        await gate.promise;
+        finish(callbacks);
+      },
+    );
+    act(() =>
+      useChatStore.getState().addPendingAttachment(session.threadId, {
+        type: 'image',
+        source: 'upload',
+        url: '/first.png',
+        label: 'First',
+      }),
+    );
+    let running!: Promise<void>;
+    await act(async () => {
+      running = hook.startStream('First', 'operate');
+    });
+    await enqueue('Second');
+    expect(
+      useChatStore.getState().threadsById[session.threadId].queuedTurns[0]
+        .prepared.attachments,
+    ).toEqual([]);
+    act(() => useChatStore.getState().setQueuePaused(session.threadId, true));
+    gate.resolve();
+    await act(async () => {
+      await running;
+    });
+  });
+
+  it.each(['error', 'aborted', 'cancelled', 'transport-close'])(
+    'pauses instead of advancing on %s',
+    async (reason) => {
+      const gate = deferred();
+      mocks.stream.mockImplementationOnce(
+        async (_content, _thread, _mode, callbacks: AgentStreamCallbacks) => {
+          await gate.promise;
+          if (reason !== 'transport-close')
+            callbacks.onEvent({
+              type: 'done',
+              data: { message: '', meta: { stopReason: reason } },
+            });
+          callbacks.onComplete();
+        },
+      );
+      let running!: Promise<void>;
+      await act(async () => {
+        running = hook.startStream('First', 'operate');
+      });
+      await enqueue('Second');
+      gate.resolve();
+      await act(async () => {
+        await running;
+      });
+      const thread = useChatStore.getState().threadsById[session.threadId];
+      expect(thread.queuePaused).toBe(true);
+      expect(thread.queuedTurns).toHaveLength(1);
+      expect(mocks.stream).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('keeps Stop paused even if completion wins the stop race, and resumes explicitly', async () => {
+    const gate = deferred();
+    mocks.stop.mockResolvedValueOnce({ stopped: false, acceptance: null });
+    mocks.stream.mockImplementation(
+      async (content, threadId, _mode, callbacks: AgentStreamCallbacks) => {
+        if (content === 'First') await gate.promise;
+        finish(callbacks, threadId);
+      },
+    );
+    let running!: Promise<void>;
+    await act(async () => {
+      running = hook.startStream('First', 'operate');
+    });
+    await enqueue('Second');
+    await act(async () => hook.stopStream());
+    gate.resolve();
+    await act(async () => {
+      await running;
+    });
+    expect(mocks.stream).toHaveBeenCalledTimes(1);
+    expect(
+      useChatStore.getState().threadsById[session.threadId].queuePaused,
+    ).toBe(true);
+    await act(async () => {
+      resumeAgentTurnQueue(session);
+      resumeAgentTurnQueue(session);
+    });
+    await waitForQueue();
+    expect(mocks.stream).toHaveBeenCalledTimes(2);
+  });
+
+  it('retains rejected items, supports removal, and keeps other thread queues independent', async () => {
+    act(() => useChatStore.getState().setThreadLoading(session.threadId, true));
+    await enqueue('Rejected');
+    await enqueue('Removed');
+    const other = { ...session, threadId: 'other-thread' };
+    const chat = useChatStore.getState();
+    chat.enqueueTurn(other.threadId, {
+      id: 'other',
+      prepared: request('text', other),
+      status: 'pending',
+    });
+    act(() => {
+      chat.removeQueuedTurn(
+        session.threadId,
+        chat.threadsById[session.threadId].queuedTurns[1].id,
+      );
+      chat.setThreadLoading(session.threadId, false);
+    });
+    mocks.stream.mockImplementationOnce(
+      async (_content, _thread, _mode, callbacks: AgentStreamCallbacks) =>
+        callbacks.onError(new ApiError(400, {}, 'Rejected')),
+    );
+    await act(async () => {
+      settleAgentTurnQueue(session, true);
+      await vi.waitFor(() =>
+        expect(
+          useChatStore.getState().threadsById[session.threadId].queuePaused,
+        ).toBe(true),
+      );
+    });
+    expect(
+      useChatStore.getState().threadsById[session.threadId].queuedTurns,
+    ).toMatchObject([{ status: 'pending', prepared: { content: 'Rejected' } }]);
+    expect(
+      useChatStore.getState().threadsById[other.threadId].queuedTurns,
+    ).toHaveLength(1);
+    expect(mocks.stream).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks ambiguous delivery retries until acceptance reconciliation', async () => {
+    act(() => useChatStore.getState().setThreadLoading(session.threadId, true));
+    await enqueue('Uncertain');
+    act(() =>
+      useChatStore.getState().setThreadLoading(session.threadId, false),
+    );
+    mocks.stream.mockImplementationOnce(
+      async (_content, _thread, _mode, callbacks: AgentStreamCallbacks) =>
+        callbacks.onError(new Error('Disconnected')),
+    );
+    await act(async () => {
+      settleAgentTurnQueue(session, true);
+      await vi.waitFor(() =>
+        expect(
+          useChatStore.getState().threadsById[session.threadId].queuedTurns[0]
+            .status,
+        ).toBe('uncertain'),
+      );
+      resumeAgentTurnQueue(session);
+    });
+    expect(mocks.stream).toHaveBeenCalledTimes(1);
+    act(() =>
+      observeAgentTurnAcceptance(session.ownerCanvasId, {
+        threadId: session.threadId,
+        turnStartSeq: 5,
+      }),
+    );
+    expect(
+      useChatStore.getState().threadsById[session.threadId].queuedTurns,
+    ).toEqual([]);
+  });
+
+  it('cancels a queued turn locally while its save is pending, even with no server run', async () => {
+    const save = deferred();
+    act(() => useChatStore.getState().setThreadLoading(session.threadId, true));
+    await enqueue('Second');
+    act(() =>
+      useChatStore.getState().setThreadLoading(session.threadId, false),
+    );
+    mocks.save.mockReturnValueOnce(save.promise);
+    mocks.stop.mockResolvedValueOnce({ stopped: false, acceptance: null });
+    await act(async () => {
+      resumeAgentTurnQueue(session);
+      await vi.waitFor(() => expect(mocks.save).toHaveBeenCalledOnce());
+      stopAgentTurn(session);
+      save.resolve();
+      await vi.waitFor(() =>
+        expect(
+          hasAgentStreamClaim(session.ownerCanvasId, session.threadId),
+        ).toBe(false),
+      );
+    });
+    expect(mocks.stream).not.toHaveBeenCalled();
+    expect(mocks.stop).not.toHaveBeenCalled();
+    expect(useChatStore.getState().threadsById[session.threadId]).toMatchObject(
+      {
+        queuePaused: true,
+        queuedTurns: [{ status: 'pending' }],
+      },
+    );
+    mocks.stream.mockImplementation(async (_content, tid, _mode, callbacks) =>
+      finish(callbacks, tid),
+    );
+    await act(async () => resumeAgentTurnQueue(session));
+    await waitForQueue();
+    expect(mocks.stream).toHaveBeenCalledOnce();
+  });
+
+  it.each(['save', 'transport'])(
+    'routes transcript Retry through the original queue item after %s rejection',
+    async (failure) => {
+      act(() =>
+        useChatStore.getState().setThreadLoading(session.threadId, true),
+      );
+      await enqueue('Retry once');
+      act(() =>
+        useChatStore.getState().setThreadLoading(session.threadId, false),
+      );
+      if (failure === 'save')
+        mocks.save.mockRejectedValueOnce(new Error('Save failed'));
+      else
+        mocks.stream.mockImplementationOnce(
+          async (_content, _tid, _mode, callbacks) =>
+            callbacks.onError(new ApiError(400, {}, 'Rejected')),
+        );
+      await act(async () => {
+        resumeAgentTurnQueue(session);
+        await vi.waitFor(() =>
+          expect(
+            useChatStore.getState().threadsById[session.threadId].queuePaused,
+          ).toBe(true),
+        );
+      });
+      const message = selectThreadMessages(
+        useChatStore.getState(),
+        session.threadId,
+      ).find((m) => m.role === 'user');
+      if (!message || message.role !== 'user')
+        throw new Error('Missing retry message');
+      expect(message.queuedTurnId).toBeDefined();
+      mocks.stream.mockImplementation(async (_content, tid, _mode, callbacks) =>
+        finish(callbacks, tid),
+      );
+      await act(async () => hook.retryStream(message, 'operate'));
+      await waitForQueue();
+      await act(async () => resumeAgentTurnQueue(session));
+      expect(mocks.stream).toHaveBeenCalledTimes(failure === 'save' ? 1 : 2);
+    },
+  );
+
+  it.each([true, false])(
+    'reconciles uncertain delivery against persisted acceptance=%s when no run is active',
+    async (accepted) => {
+      act(() =>
+        useChatStore.getState().setThreadLoading(session.threadId, true),
+      );
+      await enqueue('Unknown');
+      act(() =>
+        useChatStore.getState().setThreadLoading(session.threadId, false),
+      );
+      mocks.stream.mockImplementationOnce(
+        async (_content, _tid, _mode, callbacks) =>
+          callbacks.onError(new Error('Connection lost')),
+      );
+      await act(async () => {
+        resumeAgentTurnQueue(session);
+        await vi.waitFor(() =>
+          expect(
+            useChatStore.getState().threadsById[session.threadId].queuedTurns[0]
+              .status,
+          ).toBe('uncertain'),
+        );
+      });
+      const requestId = mocks.stream.mock.calls[0][4].requestId;
+      mocks.stop.mockResolvedValueOnce({
+        stopped: false,
+        acceptance: null,
+        request: { id: requestId, accepted },
+      });
+      await act(async () => {
+        stopAgentTurn(session);
+        await vi.waitFor(() => {
+          const turns =
+            useChatStore.getState().threadsById[session.threadId].queuedTurns;
+          if (accepted) expect(turns).toEqual([]);
+          else expect(turns[0].status).toBe('pending');
+        });
+      });
+      expect(mocks.stop).toHaveBeenCalledWith(
+        session.threadId,
+        session.ownerCanvasId,
+        requestId,
+      );
+      expect(
+        useChatStore.getState().threadsById[session.threadId].queuePaused,
+      ).toBe(true);
+      expect(mocks.stream).toHaveBeenCalledOnce();
+      mocks.stream.mockImplementation(async (_content, tid, _mode, callbacks) =>
+        finish(callbacks, tid),
+      );
+      await act(async () => resumeAgentTurnQueue(session));
+      await waitForQueue();
+      expect(mocks.stream).toHaveBeenCalledTimes(accepted ? 1 : 2);
+      if (!accepted)
+        expect(mocks.stream.mock.calls[1][4].requestId).not.toBe(requestId);
+    },
+  );
+
+  it('keeps an uncertain item blocked when Stop reconciliation fails', async () => {
+    act(() => useChatStore.getState().setThreadLoading(session.threadId, true));
+    await enqueue('Unknown');
+    act(() =>
+      useChatStore.getState().setThreadLoading(session.threadId, false),
+    );
+    mocks.stream.mockImplementationOnce(
+      async (_content, _tid, _mode, callbacks) =>
+        callbacks.onError(new Error('Connection lost')),
+    );
+    await act(async () => {
+      resumeAgentTurnQueue(session);
+      await vi.waitFor(() =>
+        expect(
+          useChatStore.getState().threadsById[session.threadId].queuedTurns[0]
+            .status,
+        ).toBe('uncertain'),
+      );
+    });
+    mocks.stop.mockRejectedValueOnce(new Error('Still offline'));
+    await act(async () => stopAgentTurn(session));
+    expect(
+      useChatStore.getState().threadsById[session.threadId].queuedTurns[0]
+        .status,
+    ).toBe('uncertain');
+    expect(mocks.stream).toHaveBeenCalledOnce();
+  });
+
+  it('does not overwrite rejection reconciliation when the failed transport finishes later', async () => {
+    act(() => useChatStore.getState().setThreadLoading(session.threadId, true));
+    await enqueue('Unknown');
+    act(() =>
+      useChatStore.getState().setThreadLoading(session.threadId, false),
+    );
+    const gate = deferred();
+    mocks.stream.mockImplementationOnce(
+      async (_content, _tid, _mode, callbacks) => {
+        callbacks.onError(new Error('Connection lost'));
+        await gate.promise;
+      },
+    );
+    mocks.stop.mockImplementationOnce(async (_tid, _canvasId, requestId) => ({
+      stopped: false,
+      acceptance: null,
+      request: { id: requestId, accepted: false },
+    }));
+    await act(async () => {
+      resumeAgentTurnQueue(session);
+      await vi.waitFor(() => expect(mocks.stream).toHaveBeenCalledOnce());
+      stopAgentTurn(session);
+      await vi.waitFor(() =>
+        expect(
+          useChatStore.getState().threadsById[session.threadId].queuedTurns[0]
+            .status,
+        ).toBe('pending'),
+      );
+      gate.resolve();
+      await vi.waitFor(() =>
+        expect(
+          hasAgentStreamClaim(session.ownerCanvasId, session.threadId),
+        ).toBe(false),
+      );
+    });
+    expect(
+      useChatStore.getState().threadsById[session.threadId].queuedTurns[0]
+        .status,
+    ).toBe('pending');
+  });
+
+  it('pins queued threads in memory without persisting queued submissions', async () => {
+    act(() => useChatStore.getState().setThreadLoading(session.threadId, true));
+    await enqueue('Keep this queued');
+    act(() => {
+      const chat = useChatStore.getState();
+      chat.setThreadLoading(session.threadId, false);
+      chat.evictInactiveThreads(0);
+    });
+    expect(
+      useChatStore.getState().threadsById[session.threadId].queuedTurns,
+    ).toHaveLength(1);
+    expect(
+      useChatStore.persist.getOptions().partialize?.(useChatStore.getState()),
+    ).not.toHaveProperty('threadsById');
+  });
+
+  it.each([
+    { external: false, anchored: false },
+    { external: true, anchored: false },
+    { external: false, anchored: true },
+    { external: true, anchored: true },
+  ])(
+    'dispatches queued turns through the shared owner/binding pipeline: %j',
+    async ({ external, anchored }) => {
+      const owner = anchored ? questionSession : session;
+      const binding = external
+        ? { kind: 'external' as const, profileId: 'profile-1', alias: 'Agent' }
+        : { kind: 'internal' as const };
+      vi.spyOn(useAcpThreadChangesStore.getState(), 'load').mockResolvedValue();
+      act(() => {
+        const chat = useChatStore.getState();
+        chat.setAgentBinding(owner.threadId, binding);
+        chat.enqueueTurn(owner.threadId, {
+          id: 'queued-owner',
+          prepared: request('text', owner),
+          status: 'pending',
+        });
+      });
+      mocks.stream.mockImplementation(
+        async (_content, threadId, _mode, callbacks: AgentStreamCallbacks) =>
+          finish(callbacks, threadId),
+      );
+      await act(async () => resumeAgentTurnQueue(owner));
+      await waitForQueue();
+      expect(mocks.stream).toHaveBeenCalledOnce();
+      expect(mocks.stream.mock.calls[0][4]).toMatchObject({
+        agentBinding: binding,
+        anchorNodeId: anchored ? 'question-1' : undefined,
+      });
+    },
+  );
+
+  it('restores captured attachments on definitive rejection without discarding newly staged ones', async () => {
+    const first: ChatAttachment = {
+      type: 'image',
+      source: 'upload',
+      url: '/first.png',
+      label: 'First',
+    };
+    const later: ChatAttachment = {
+      type: 'image',
+      source: 'upload',
+      url: '/later.png',
+      label: 'Later',
+    };
+    act(() => {
+      useChatStore.getState().setDraft(session.threadId, 'First');
+      useChatStore.getState().addPendingAttachment(session.threadId, first);
+    });
+    mocks.save.mockImplementationOnce(async () => {
+      useChatStore.getState().addPendingAttachment(session.threadId, later);
+      throw new Error('Save failed');
+    });
+    await act(async () => hook.startStream('First', 'operate'));
+    expect(useChatStore.getState().threadsById[session.threadId]).toMatchObject(
+      {
+        draft: 'First',
+        pendingAttachments: [later, first],
+      },
+    );
+  });
+});
 
 it('records genuine completion by owner thread, not tool updates or repeated done events', () => {
   const ctx = { threadId: 'completed-owner', assistantId: 'assistant-1' };
@@ -1060,7 +1650,7 @@ describe('shared Agent turn input', () => {
     await vi.waitFor(() => expect(mocks.save).toHaveBeenCalledOnce());
 
     stopAgentTurn(questionSession);
-    await vi.waitFor(() => expect(mocks.stop).toHaveBeenCalledOnce());
+    expect(mocks.stop).not.toHaveBeenCalled();
     preparationSave.resolve();
 
     await expect(running).resolves.toMatchObject({ status: 'stopped' });
@@ -1460,14 +2050,20 @@ describe('shared Agent turn input', () => {
       expect(mocks.stream.mock.calls[0][4].quotedComments).toEqual([quote]);
     });
 
-    it('restores a busy submission without changing the active stream claim', async () => {
+    it('queues a busy submission without changing the active stream claim', async () => {
       const claim = claimAgentStream('canvas-1', 'thread-1', 'post');
       if (!claim) throw new Error('Missing stream claim');
       try {
         await act(async () => hook.startStream('Hello', 'operate'));
         const current = useChatStore.getState().threadsById[session.threadId];
-        expect(current.draft).toBe('Hello');
-        expect(current.pendingQuotedComments).toHaveLength(1);
+        expect(current.draft).toBe('');
+        expect(current.pendingQuotedComments).toHaveLength(0);
+        expect(current.queuedTurns).toMatchObject([
+          {
+            status: 'pending',
+            prepared: { content: 'Hello', quotedComments: [quote] },
+          },
+        ]);
         expect(mocks.stream).not.toHaveBeenCalled();
         expect(hasAgentStreamClaim('canvas-1', 'thread-1')).toBe(true);
       } finally {
@@ -1629,7 +2225,11 @@ describe('shared Agent turn input', () => {
     expect(mocks.stream.mock.calls[0][4].signal.aborted).toBe(false);
     stopAgentTurn(session);
     await running;
-    expect(mocks.stop).toHaveBeenCalledWith('thread-1', 'canvas-1');
+    expect(mocks.stop).toHaveBeenCalledWith(
+      'thread-1',
+      'canvas-1',
+      mocks.stream.mock.calls[0][4].requestId,
+    );
     expect(hasAgentStreamClaim('canvas-1', 'thread-1')).toBe(false);
   });
 
@@ -1672,6 +2272,72 @@ describe('shared Agent turn input', () => {
       threadId: 'thread-1',
       turnStartSeq: 9,
     });
+  });
+
+  it('keeps request-scoped Stop available after the acceptance observer is consumed', async () => {
+    const started = deferred();
+    mocks.stream.mockImplementationOnce(
+      async (_content, threadId, _mode, callbacks, options) => {
+        callbacks.onAccepted({
+          threadId,
+          turnStartSeq: 10,
+          requestId: options.requestId,
+        });
+        started.resolve();
+        await new Promise<void>((resolve) =>
+          options.signal.addEventListener('abort', () => resolve(), {
+            once: true,
+          }),
+        );
+        callbacks.onComplete();
+      },
+    );
+    const running = dispatchAgentTurn(request());
+    await started.promise;
+    stopAgentTurn(session);
+    await expect(running).resolves.toMatchObject({ status: 'stopped' });
+    expect(mocks.stop).toHaveBeenCalledWith(
+      'thread-1',
+      'canvas-1',
+      mocks.stream.mock.calls[0][4].requestId,
+    );
+  });
+
+  it('ignores an old Stop response after a replacement request has claimed the thread', async () => {
+    const stopGate = deferred();
+    const firstGate = deferred();
+    const secondGate = deferred();
+    const started = deferred();
+    mocks.stop.mockImplementationOnce(async () => {
+      await stopGate.promise;
+      return { stopped: true, acceptance: null };
+    });
+    mocks.stream.mockImplementation(
+      async (_content, threadId, _mode, callbacks, options) => {
+        const first = mocks.stream.mock.calls.length === 1;
+        callbacks.onAccepted({
+          threadId,
+          turnStartSeq: first ? 1 : 2,
+          requestId: options.requestId,
+        });
+        if (!first) started.resolve();
+        await (first ? firstGate.promise : secondGate.promise);
+        expect(options.signal.aborted).toBe(false);
+        callbacks.onComplete();
+      },
+    );
+    const first = dispatchAgentTurn(request());
+    await vi.waitFor(() => expect(mocks.stream).toHaveBeenCalledOnce());
+    stopAgentTurn(session);
+    firstGate.resolve();
+    await first;
+    const second = dispatchAgentTurn(request());
+    await started.promise;
+    stopGate.resolve();
+    await Promise.resolve();
+    expect(mocks.stream.mock.calls[1][4].signal.aborted).toBe(false);
+    secondGate.resolve();
+    await second;
   });
 
   it('releases an unknown acceptance observer after a definitive pre-acceptance stop', async () => {

@@ -31,8 +31,13 @@ vi.mock('./agent.service.js', async (actual) => ({
   runAgent: mocks.runAgent,
 }));
 
-import { conversationThreadStore } from './agenetes/conversation-stores.js';
+import {
+  conversationEventLogStore,
+  conversationThreadStore,
+  conversationTurnStore,
+} from './agenetes/conversation-stores.js';
 import { agenetes } from './agenetes/drivers.js';
+import { createChatSubmission } from './agenetes/handle.js';
 import { buildHuabuPiWorkloadSpec } from './agenetes/pi-driver.js';
 import { AgentThreadService } from './agent-thread.service.js';
 import { createSpace, space } from '../storage/index.js';
@@ -186,6 +191,58 @@ async function invokeOnce(target: AgentNodeTarget): Promise<void> {
 }
 
 describe('AgentThreadService persisted binding recovery', () => {
+  it.each(['tail', 'folded'] as const)(
+    'reconciles a disconnected request from its durable %s after restart',
+    async (kind) => {
+      const target = await open();
+      try {
+        const namespace = canvasAcpNamespace(target.canvasId);
+        const submission = createChatSubmission({
+          ...ENVELOPE,
+          requestId: 'request-persisted',
+        });
+        await conversationEventLogStore.appendTurnStart(
+          namespace,
+          target.threadId,
+          submission,
+        );
+        if (kind === 'folded') {
+          await conversationTurnStore.append(namespace, target.threadId, {
+            turn: { request: submission, transcript: [] },
+            seqStart: 1,
+            seqEnd: 1,
+          });
+        }
+        await mounted.reopen();
+        const service = new AgentThreadService();
+        await expect(
+          service.stopAndWait(
+            target.threadId,
+            target.canvasId,
+            'request-persisted',
+          ),
+        ).resolves.toEqual({
+          stopped: false,
+          acceptance: null,
+          request: { id: 'request-persisted', accepted: true },
+        });
+        await expect(
+          service.stopAndWait(
+            target.threadId,
+            target.canvasId,
+            'request-not-sent',
+          ),
+        ).resolves.toEqual({
+          stopped: false,
+          acceptance: null,
+          request: { id: 'request-not-sent', accepted: false },
+        });
+      } finally {
+        await close();
+      }
+    },
+  );
+
   it('recovers an external binding from the durable record across a restart', async () => {
     const target = await open();
     try {
