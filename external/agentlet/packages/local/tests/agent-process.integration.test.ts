@@ -1,6 +1,8 @@
 import { once } from 'node:events'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { AgentProcess } from '../src/agent-process.js'
+import { Agentlet } from '../src/agentlet.js'
+import { Logger } from '../src/logger.js'
 
 async function waitForExit(agent: AgentProcess): Promise<void> {
   const deadline = Date.now() + 5000
@@ -11,7 +13,7 @@ async function waitForExit(agent: AgentProcess): Promise<void> {
 }
 
 describe.skipIf(process.platform === 'win32')('owned process tree cleanup', () => {
-  it('retains ownership after the shell exits and kills stubborn child and grandchild processes', async () => {
+  it.each(['direct', 'forced daemon shutdown'])('kills stubborn descendants after the shell exits: %s', async mode => {
     const grandchild = `
       process.on('SIGTERM', () => {});
       setInterval(() => {}, 1000);
@@ -42,7 +44,28 @@ describe.skipIf(process.platform === 'win32')('owned process tree cleanup', () =
       expect(agent.running).toBe(true)
       process.kill(message.pid, 0)
       process.kill(message.childPid, 0)
-      await agent.kill()
+      if (mode === 'direct') {
+        await agent.kill()
+      } else {
+        const entries = vi.fn()
+        const daemon = new Agentlet({
+          server: 'ws://127.0.0.1:1', token: 'test-token', agentletId: 'force-test',
+          allowInsecure: true, reconnectMax: 1, bufferLimit: 10, heartbeat: 0,
+          logLevel: 'error', maxAgents: 1,
+        }, new Logger('error', undefined, entries))
+        const pending: unknown = Reflect.get(daemon, 'startingAgents')
+        if (!(pending instanceof Set)) throw new Error('Expected pending process ownership')
+        pending.add(agent)
+        Reflect.set(daemon, 'shutdownInProgress', true)
+        const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+        try {
+          await daemon.forceStop()
+          expect(exit).toHaveBeenCalledWith(1)
+          expect(entries).toHaveBeenCalledWith(expect.objectContaining({ event: 'stopped' }))
+        } finally {
+          exit.mockRestore()
+        }
+      }
       await waitForExit(agent)
       expect(() => process.kill(message.pid, 0)).toThrow()
       expect(() => process.kill(message.childPid, 0)).toThrow()

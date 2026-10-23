@@ -22,7 +22,8 @@ const logger = new Logger(options.logLevel, fileWriter, (entry) => {
   const type = entry.event === 'daemon_ready' ? 'agentlet:ready'
     : entry.event === 'reconnecting' ? 'agentlet:reconnecting'
       : entry.event === 'authentication_failed' ? 'agentlet:authorization-required'
-        : entry.event === 'handshake_failed' ? 'agentlet:rejected' : null
+        : entry.event === 'handshake_failed' ? 'agentlet:rejected'
+          : entry.event === 'stopped' ? 'agentlet:stopped' : null
   if (type) parentPort?.postMessage({
     type,
     ...(type === 'agentlet:ready' ? { agentletId: entry.agentletId } : {}),
@@ -33,6 +34,8 @@ const agentlet = new Agentlet(options, logger)
 parentPort?.on('message', ({ data }) => {
   if (data && typeof data === 'object' && 'type' in data && data.type === 'agentlet:stop') {
     void agentlet.stop()
+  } else if (data && typeof data === 'object' && 'type' in data && data.type === 'agentlet:force-stop') {
+    void agentlet.forceStop()
   }
 })
 

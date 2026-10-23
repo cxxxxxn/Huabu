@@ -52,6 +52,7 @@ interface ManagedAgent {
   idleTimeoutSecs: number
   /** Set to true when idle suspension is in progress — suppresses autoRestart */
   idleSuspending: boolean
+  transportLost: boolean
 }
 
 /**
@@ -110,6 +111,36 @@ export class Agentlet {
 
   async stop(): Promise<void> {
     await this.shutdown('user_interrupt')
+  }
+
+  async forceStop(): Promise<void> {
+    this.shutdownInProgress = true
+    this.controlHealth?.stop()
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
+    for (const timer of this.startingCleanupTimers.values()) clearTimeout(timer)
+    for (const managed of this.agents.values()) {
+      managed.status = 'stopping'
+      managed.relay?.stop()
+      managed.ws?.close()
+    }
+    const processes = new Set([
+      ...this.startingAgents,
+      ...[...this.agents.values()].map(managed => managed.agent),
+    ])
+    const results = await Promise.allSettled([...processes].map(async agent => {
+      await agent.kill()
+      await this.waitForAgentExit(agent, 2000)
+      if (agent.running) throw new Error(`Agent process did not exit: ${agent.pid}`)
+    }))
+    const failures = results.filter(result => result.status === 'rejected')
+    if (failures.length) {
+      this.logger.error('forced_shutdown_cleanup_failed', {
+        errors: failures.map(result => result.reason instanceof Error ? result.reason.message : String(result.reason)),
+      })
+    } else {
+      this.logger.info('stopped', { reason: 'forced_shutdown' })
+    }
+    process.exit(1)
   }
 
   // ── Resource handling ───────────────────────────────────────────────
@@ -554,6 +585,7 @@ export class Agentlet {
         sessionProfile: bootstrap,
         idleTimeoutSecs: sessionSpec.idleTimeoutSecs ?? 0,
         idleSuspending: false,
+        transportLost: false,
       }
 
       agent.on('exit', async (code, signal) => {
@@ -599,13 +631,15 @@ export class Agentlet {
           autoRestart &&
           code !== 0 &&
           !this.shutdownInProgress &&
+          !managed.transportLost &&
           !managed.idleSuspending &&
           !wasStopping
         ) {
           this.logger.info('agent_restarting', { sessionId })
           setTimeout(() => {
             if (this.agents.has(sessionId) && !this.shutdownInProgress) {
-              if (this.serverRestartInProgress || managed.status === 'stopping') return
+              if (this.serverRestartInProgress || managed.status === 'stopping' ||
+                managed.transportLost || !managed.ws.connected || !managed.relay) return
               agent.start()
               managed.pid = agent.pid ?? 0
               managed.status = 'running'
@@ -686,6 +720,7 @@ export class Agentlet {
       })
 
       agentWs.on('close', () => {
+        managed.transportLost = true
         detachEarlyBuffer()
         managed.relay?.stop()
         managed.relay = null
@@ -982,17 +1017,19 @@ export class Agentlet {
     }
 
     try {
-      await this.shutdownDaemon(reason, exitCode)
+      await this.shutdownDaemon(reason)
     } catch (error) {
       this.logger.error('shutdown_failed', {
         message: error instanceof Error ? error.message : String(error),
       })
       process.exit(1)
+      return
     }
     this.logger.info('stopped', { reason })
+    process.exit(exitCode)
   }
 
-  private async shutdownDaemon(reason: string, exitCode: number): Promise<void> {
+  private async shutdownDaemon(reason: string): Promise<void> {
     const results = await Promise.allSettled([
       ...[...this.startingAgents].map(agent => this.stopStartingAgent(agent)),
       ...[...this.agents.values()].map(async managed => {
@@ -1034,7 +1071,6 @@ export class Agentlet {
         failures.map(result => result.reason), 'Shutdown process-tree cleanup failed',
       )
     }
-    process.exit(exitCode)
   }
 
   private async waitForAgentExit(agent: AgentProcess, ms: number): Promise<void> {
