@@ -65,6 +65,7 @@ import {
 import type * as SpaceDirHandlesModule from '../storage/backends/disk/space-dir-handles.js';
 import type * as StorageModule from '../storage/index.js';
 import type { RecentAction } from '@huabu/shared';
+import type { CanvasNode } from '@huabu/shared/canvas-engine';
 
 let tmp: string;
 
@@ -1322,6 +1323,13 @@ describe('Space export/import persistence', () => {
       // Inspect the unfiltered repository record: composed reads alone would
       // hide a regression that still persisted the imported legacy nodes.
       const record = await getStructuredStore().space(importedId).read();
+      const [frame, note, preview] = record?.state.nodes as CanvasNode[];
+      const importedIds = [frame.id, note.id, preview.id];
+      expect(new Set(importedIds).size).toBe(3);
+      for (const id of importedIds) {
+        expect(id).toMatch(/^node-/);
+        expect(sourceState.nodes.some((node) => node.id === id)).toBe(false);
+      }
       expect(record).toMatchObject({
         canvasId: importedId,
         version: 1,
@@ -1329,33 +1337,57 @@ describe('Space export/import persistence', () => {
           viewport: sourceState.viewport,
           nodes: [
             {
-              id: 'frame',
+              id: frame.id,
               type: 'frame',
               position: { x: 113, y: 224 },
               data: {},
             },
             {
               ...sourceState.nodes[4],
+              id: note.id,
+              parentId: frame.id,
               data: {
                 label: 'Note',
                 src: `/api/canvas/${importedId}/artifact/asset.bin`,
               },
             },
-            sourceState.nodes[5],
+            {
+              ...sourceState.nodes[5],
+              id: preview.id,
+              data: { targetCanvasId: importedId },
+            },
           ],
-          edges: sourceState.edges.slice(3),
+          edges: [
+            {
+              id: expect.stringMatching(/^edge-/),
+              source: frame.id,
+              target: note.id,
+            },
+            {
+              id: expect.stringMatching(/^edge-/),
+              source: 'missing',
+              target: note.id,
+            },
+          ],
         },
       });
-      const frame = (record?.state.nodes as Array<Record<string, unknown>>)[0];
       expect(frame).not.toHaveProperty('parentId');
       expect(frame).not.toHaveProperty('extent');
       const reopened = getCanvasStore(importedId);
-      expect(reopened.readNode('note')?.content).toBe(
+      expect(reopened.readNode(note.id)?.content).toBe(
         'Keep the source content',
       );
-      expect(reopened.readNode('portal')?.content).toBe(
-        'Keep the historical sidecar',
-      );
+      const sidecars = await space(importedId).nodes.list();
+      expect(sidecars.has('note')).toBe(false);
+      expect(sidecars.has('portal')).toBe(false);
+      const historical = [...sidecars.values()].find(
+        (entry) => entry.record.type === 'canvasRef',
+      )?.record;
+      expect(historical).toMatchObject({
+        nodeId: expect.stringMatching(/^node-/),
+        content: 'Keep the historical sidecar',
+      });
+      expect(historical?.nodeId).not.toBe('portal');
       expect(await space(importedId).artifacts.read('asset.bin')).toEqual(blob);
       expect(getCanvasStore('c1').read()).toEqual(sourceBefore);
       expect(await space('c1').artifacts.read('asset.bin')).toEqual(blob);
@@ -1515,8 +1547,15 @@ describe('Space export/import persistence', () => {
       expect(JSON.stringify(record?.state)).toContain(
         `/api/canvas/${importedId}/artifact/asset.bin`,
       );
-      expect(reopened.readNode('n1')?.content).toBe('persisted body');
+      const [note] = record?.state.nodes as CanvasNode[];
+      expect(note.id).toMatch(/^node-/);
+      expect(note.id).not.toBe('n1');
+      expect(reopened.readNode('n1')).toBeNull();
+      expect(reopened.readNode(note.id)?.content).toBe('persisted body');
       const importedSpace = getStructuredStore().space(importedId);
+      expect(await importedSpace.events.read()).toMatchObject([
+        { payload: { node: { id: note.id, label: 'n1' } }, ts: 1 },
+      ]);
       expect(
         (await importedSpace.events.read()).map((event) => event.ts),
       ).toEqual([1]);
