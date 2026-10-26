@@ -10,12 +10,12 @@ Huabu is an infinite-canvas workspace. Interaction feedback should be clear with
 
 Use semantic tokens instead of literal colors, Tailwind palette colors, or component-local status mixtures. The four system-blue roles are:
 
-| Token | Use | Avoid |
-| --- | --- | --- |
-| `info` | Bright graphical emphasis: selected toolbar icons, focus borders, selection outlines, guides, and active connection dots | Ordinary small text or solid backgrounds behind ordinary inverse text |
-| `info-fg` | Blue text and foreground icons; solid info buttons, Prompt badges, and numbered chips carrying `fg-inverse` text | Replacing every graphical accent with this deeper shade |
-| `info-light` | Auxiliary emphasis: idle connection dots, panel resize feedback, and secondary dividers | Using it as the sole necessary focus indicator |
-| `info-bg` | Opaque tinted surfaces: selected rows, active toolbar backgrounds, info badges, and the Chat focus outer ring | Replacing a content-covering selection with an opaque wash |
+| Token        | Use                                                                                                                      | Avoid                                                                 |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| `info`       | Bright graphical emphasis: selected toolbar icons, focus borders, selection outlines, guides, and active connection dots | Ordinary small text or solid backgrounds behind ordinary inverse text |
+| `info-fg`    | Blue text and foreground icons; solid info buttons, Prompt badges, and numbered chips carrying `fg-inverse` text         | Replacing every graphical accent with this deeper shade               |
+| `info-light` | Auxiliary emphasis: idle connection dots, panel resize feedback, and secondary dividers                                  | Using it as the sole necessary focus indicator                        |
+| `info-bg`    | Opaque tinted surfaces: selected rows, active toolbar backgrounds, info badges, and the Chat focus outer ring            | Replacing a content-covering selection with an opaque wash            |
 
 Role names describe usage, not a fixed lightness order across themes. `fg-inverse` is theme-aware: do not hardcode white text on a blue background. `info-bg-hover` reuses the neutral hover surface; it does not introduce another blue.
 
@@ -35,16 +35,16 @@ Ordinary UI surfaces use the fixed roles above. Do not introduce local alpha var
 
 Transparency is appropriate when the user must still see the document or drawing underneath. Reuse the existing tokens rather than writing percentages in consumers:
 
-| Token | Scenario |
-| --- | --- |
-| `--canvas-overlay-subtle` | Retained lasso region and Frame creation/fit previews |
-| `--canvas-overlay-drop` | Structured-frame active tracks and insert targets |
-| `--canvas-overlay-selection` | Live lasso fill |
-| `--pdf-selection-bg` | PDF region selection |
-| `--pdf-highlight-bg` / `--pdf-text-selection-bg` | Search highlights / PDF text selection and search over rendered glyphs |
-| `--editor-selection-bg` | Selection over existing inline text highlights |
-| `--sketch-reference-opacity` / `--sketch-selected-opacity` | Referenced / selected Ink stroke outlines |
-| `--ink-reference-bg` / `--ink-broken-reference-bg` | Resolved / broken Ink reference highlights; preserve the underlying handwriting |
+| Token                                                      | Scenario                                                                        |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `--canvas-overlay-subtle`                                  | Retained lasso region and Frame creation/fit previews                           |
+| `--canvas-overlay-drop`                                    | Structured-frame new-track grid drop targets                                    |
+| `--canvas-overlay-selection`                               | Live lasso fill                                                                 |
+| `--pdf-selection-bg`                                       | PDF region selection                                                            |
+| `--pdf-highlight-bg` / `--pdf-text-selection-bg`           | Search highlights / PDF text selection and search over rendered glyphs          |
+| `--editor-selection-bg`                                    | Selection over existing inline text highlights                                  |
+| `--sketch-reference-opacity` / `--sketch-selected-opacity` | Referenced / selected Ink stroke outlines                                       |
+| `--ink-reference-bg` / `--ink-broken-reference-bg`         | Resolved / broken Ink reference highlights; preserve the underlying handwriting |
 
 These are separate purposes, not interchangeable opacity presets. Apply transparency to the overlay paint, not the parent container or underlying content. Ink reference backgrounds reuse success-bg and warning-bg at 70% opacity, rebound in each theme; they do not introduce separate base colors or depend on status hover colors. PDF text selection uses 20.25% warning-light directly, preserving the previous two-stage dilution. Existing running and approval rings retain their component-owned effect recipes; they are not a precedent for new translucent UI surfaces. Historical playground effects are not production palette guidance.
 
@@ -52,14 +52,14 @@ These are separate purposes, not interchangeable opacity presets. Apply transpar
 
 Reuse [Common components](src/components/Common) and their current contracts. Use `Button` for buttons and `TextInput` for styled text-like controls.
 
-| Surface | Color contract |
-| --- | --- |
-| Solid info button | `info-fg` fill with `fg-inverse` text; hover adds an inset `fg-inverse` ring without changing the fill or dimensions |
-| Chat composer focus | `info` 1px border and opaque `info-bg` 2px outer ring |
-| Side-panel resize handle | `info-light` during both hover and dragging; neutral divider and transparent fill at rest |
-| Selected toolbar control | `info` icon, `info-fg` text/shortcut, and `info-bg` surface |
-| Connection control | Borderless `info-light` idle dot; larger `info` dot when targeted; preserve hit geometry |
-| Resize grip | Surface fill with the existing `info` inset outline; do not copy the connection dot treatment |
+| Surface                  | Color contract                                                                                                       |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| Solid info button        | `info-fg` fill with `fg-inverse` text; hover adds an inset `fg-inverse` ring without changing the fill or dimensions |
+| Chat composer focus      | `info` 1px border and opaque `info-bg` 2px outer ring                                                                |
+| Side-panel resize handle | `info-light` during both hover and dragging; neutral divider and transparent fill at rest                            |
+| Selected toolbar control | `info` icon, `info-fg` text/shortcut, and `info-bg` surface                                                          |
+| Connection control       | Borderless `info-light` idle dot; larger `info` dot when targeted; preserve hit geometry                             |
+| Resize grip              | Surface fill with the existing `info` inset outline; do not copy the connection dot treatment                        |
 
 ## Do's and Don'ts
 

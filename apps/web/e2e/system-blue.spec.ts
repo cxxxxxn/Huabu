@@ -373,6 +373,7 @@ test('real Canvas overlays use shared transparent fills in both themes', async (
       { x: 100, y: 350 },
     ]);
     preview.setStructuredDropPreview({
+      nodeId: 'node-blue-ink',
       frameId: 'blue-overlay-test',
       kind: 'insert-new',
       x: 400,
@@ -393,7 +394,7 @@ test('real Canvas overlays use shared transparent fills in both themes', async (
   });
   const retained = page.locator('[data-stroke-selection-region] polygon');
   const drops = page.locator('.bg-canvas-overlay-drop');
-  await expect(drops).toHaveCount(2);
+  await expect(drops).toHaveCount(1);
   for (const [theme, palette] of Object.entries(palettes)) {
     await page.evaluate((theme) => {
       document.documentElement.classList.toggle('dark', theme === 'dark');
@@ -412,14 +413,36 @@ test('real Canvas overlays use shared transparent fills in both themes', async (
         translucent(palette.main, 0.1),
       );
     }
-    const chip = page
-      .locator('.bg-info-fg.text-fg-inverse')
-      .filter({ hasText: /^1$/ });
-    await expect(chip).toHaveCSS('background-color', palette.foreground);
-    await expectReadable(chip);
+    await expect(drops.locator('svg')).toHaveCSS('color', palette.foreground);
     await page.screenshot({
       path: test.info().outputPath(`canvas-overlays-${theme}.png`),
     });
+  }
+  await page.evaluate(async () => {
+    const load = (path: string) => import(/* @vite-ignore */ path);
+    const { useGesturePreviewStore } = (await load(
+      '/src/store/gesturePreviewStore.ts',
+    )) as typeof GesturePreviewModule;
+    const { structuredDropPreview, setStructuredDropPreview } =
+      useGesturePreviewStore.getState();
+    if (!structuredDropPreview) throw new Error('Missing drop preview');
+    setStructuredDropPreview({
+      ...structuredDropPreview,
+      masonry: {
+        target: { kind: 'insert-new', slot: 0 },
+        gap: { x: 400, y: 150, width: 150, height: 150, slot: 0 },
+      },
+    });
+  });
+  const label = page.locator('[data-track-insert-label]');
+  for (const [theme, palette] of Object.entries(palettes)) {
+    await page.evaluate(
+      (theme) =>
+        document.documentElement.classList.toggle('dark', theme === 'dark'),
+      theme,
+    );
+    await expect(label).toHaveCSS('color', palette.foreground);
+    await expectReadable(label);
   }
 });
 
