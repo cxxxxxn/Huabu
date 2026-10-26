@@ -644,7 +644,7 @@ export const NodeFloatingToolbar = memo(
 
             <DropdownMenuItem
               icon={<Trash2 />}
-              className="text-danger"
+              className="text-danger-fg"
               onClick={() => deleteNodes([id])}
             >
               {t('actions.delete')}

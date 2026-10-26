@@ -470,7 +470,7 @@ test('pressed toolbar icons use main blue while shortcut hints retain foreground
   }
 });
 
-test('running badges use the foreground role without recoloring other status families', async ({
+test('running and approval badges use their semantic foreground roles', async ({
   page,
 }) => {
   await page.goto('/playground/space-previews');
@@ -488,8 +488,7 @@ test('running badges use the foreground role without recoloring other status fam
     await expectReadable(running);
     const colors = await page.evaluate(() => {
       const reference = document.createElement('span');
-      reference.style.color =
-        'color-mix(in srgb, var(--warning) 65%, var(--fg-default))';
+      reference.style.color = 'var(--warning-fg)';
       reference.style.backgroundColor = 'var(--warning-bg)';
       document.body.append(reference);
       const style = getComputedStyle(reference);

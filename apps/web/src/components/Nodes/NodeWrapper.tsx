@@ -925,7 +925,7 @@ export const NodeWrapper = memo(
               duplicate file in the folder, not the node. */}
           {data.contentDuplicate && !frameSuppressed && (
             <div className="border-warning-light bg-surface absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 overflow-hidden rounded-md border border-dashed p-3 text-center">
-              <FileWarning className="text-warning h-7 w-7 shrink-0" />
+              <FileWarning className="text-warning-fg h-7 w-7 shrink-0" />
               <div className="text-fg-default text-sm font-medium">
                 Duplicate files on disk
               </div>

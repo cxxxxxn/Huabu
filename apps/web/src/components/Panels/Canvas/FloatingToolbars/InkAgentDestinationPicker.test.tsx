@@ -346,7 +346,7 @@ describe('InkAgentDestinationPicker', () => {
     await render({ selectedNodeId: 'busy' });
     expect(trigger().textContent).toContain('Busy reviewContinue');
     expect(trigger().disabled).toBe(false);
-    expect(trigger().querySelector('.text-warning')).toBeNull();
+    expect(trigger().querySelector('.text-warning-fg')).toBeNull();
     expect(
       document.getElementById(
         required(trigger().getAttribute('aria-describedby')),
@@ -382,7 +382,7 @@ describe('InkAgentDestinationPicker', () => {
       },
     });
     expect(trigger().textContent).toContain('Conversation unavailableContinue');
-    expect(trigger().querySelector('.text-warning')).not.toBeNull();
+    expect(trigger().querySelector('.text-warning-fg')).not.toBeNull();
     await openMenu();
     expect(menu()?.textContent).toContain('The destination was removed');
     expect(props.onNewConversation).not.toHaveBeenCalled();

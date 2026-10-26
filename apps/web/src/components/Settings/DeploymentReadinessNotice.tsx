@@ -29,7 +29,7 @@ export function DeploymentReadinessNotice() {
   }
 
   return (
-    <div className="border-warning bg-warning-bg text-warning mb-4 rounded-lg border px-3 py-2 text-xs">
+    <div className="border-warning bg-warning-bg text-warning-fg mb-4 rounded-lg border px-3 py-2 text-xs">
       <div className="flex items-start gap-2">
         <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
         <div className="space-y-1">

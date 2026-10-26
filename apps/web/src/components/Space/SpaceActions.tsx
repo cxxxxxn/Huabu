@@ -226,7 +226,7 @@ function SpaceOrganizationDialog({
           ]}
         />
         {feedback && (
-          <p role="alert" className="text-danger mt-3">
+          <p role="alert" className="text-danger-fg mt-3">
             {feedback}
           </p>
         )}

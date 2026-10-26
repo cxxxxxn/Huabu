@@ -37,9 +37,9 @@ const STATUS_CONFIG: Record<
     icon: XCircle,
     labelKey: 'messages.somethingWentWrong',
     bg: 'bg-danger-bg',
-    iconColor: 'text-danger',
-    textColor: 'text-danger',
-    retryHoverBg: 'enabled:hover:bg-danger-bg-hover',
+    iconColor: 'text-danger-fg',
+    textColor: 'text-danger-fg',
+    retryHoverBg: 'enabled:hover:bg-hover',
   },
 };
 

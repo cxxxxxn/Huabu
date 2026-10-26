@@ -525,7 +525,7 @@ function BuiltInAgentStateBadge({
         />
       </div>
       {hasConflict ? (
-        <span className="bg-warning-bg text-warning absolute -top-2.5 -right-3.5 z-20 flex h-6 min-w-6 items-center justify-center gap-0.5 rounded-full px-1.5 text-[11px] font-bold shadow-sm">
+        <span className="bg-warning-bg text-warning-fg absolute -top-2.5 -right-3.5 z-20 flex h-6 min-w-6 items-center justify-center gap-0.5 rounded-full px-1.5 text-[11px] font-bold shadow-sm">
           <AlertTriangle size={12} />2
         </span>
       ) : null}
@@ -883,7 +883,7 @@ function ApprovalStatusMark({
       />
       {awaitingApproval ? (
         <span
-          className="bg-warning text-fg-inverse absolute -top-1.5 -right-1.5 z-20 flex items-center justify-center rounded-full shadow-sm"
+          className="bg-warning-fg text-fg-inverse absolute -top-1.5 -right-1.5 z-20 flex items-center justify-center rounded-full shadow-sm"
           style={{ width: satelliteSize, height: satelliteSize }}
           aria-hidden
         >
@@ -912,7 +912,7 @@ function ApprovalRequiredReference({ icon }: { icon: AgentIconValue }) {
             <h2 className="text-fg-default font-semibold">
               Approval required · production reference
             </h2>
-            <span className="bg-warning-bg text-warning rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase">
+            <span className="bg-warning-bg text-warning-fg rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase">
               Shipped
             </span>
           </div>
@@ -987,7 +987,7 @@ function ApprovalRequiredReference({ icon }: { icon: AgentIconValue }) {
                   className={
                     resolution
                       ? 'text-fg-subtle shrink-0'
-                      : 'text-warning shrink-0'
+                      : 'text-warning-fg shrink-0'
                   }
                   aria-hidden
                 />
@@ -1005,7 +1005,7 @@ function ApprovalRequiredReference({ icon }: { icon: AgentIconValue }) {
                   className="border-edge-default bg-surface mt-auto rounded-xl border"
                 >
                   <div className="flex items-center gap-2 px-3 pt-2.5">
-                    <span className="bg-warning-bg text-warning flex size-6 shrink-0 items-center justify-center rounded-full">
+                    <span className="bg-warning-bg text-warning-fg flex size-6 shrink-0 items-center justify-center rounded-full">
                       <ShieldQuestion size={14} aria-hidden />
                     </span>
                     <span className="text-fg-default text-sm font-medium">
@@ -1014,7 +1014,7 @@ function ApprovalRequiredReference({ icon }: { icon: AgentIconValue }) {
                   </div>
                   <CommandBlock
                     text="npm install"
-                    className="bg-warning-bg/45 [&_pre>span]:text-warning mx-3 mt-2 border-transparent"
+                    className="bg-warning-bg [&_pre>span]:text-warning-fg mx-3 mt-2 border-transparent"
                   />
                   <div className="flex flex-wrap gap-2 p-3 pt-2.5">
                     {APPROVAL_DEMO_OPTIONS.map((option) => (
@@ -1059,7 +1059,7 @@ function ApprovalRequiredReference({ icon }: { icon: AgentIconValue }) {
               State priority
             </h3>
             <div className="text-fg-muted mt-3 flex flex-wrap items-center gap-1.5 text-xs">
-              <span className="bg-warning-bg text-warning rounded-full px-2 py-1 font-medium">
+              <span className="bg-warning-bg text-warning-fg rounded-full px-2 py-1 font-medium">
                 Approval
               </span>
               <span aria-hidden>›</span>
@@ -1616,7 +1616,7 @@ function LodAgentChip({
         </div>
       )}
       {hasConflict ? (
-        <span className="bg-warning-bg text-warning absolute -top-2.5 -right-3.5 z-20 flex h-6 min-w-6 items-center justify-center gap-0.5 rounded-full px-1.5 text-[11px] font-bold shadow-sm">
+        <span className="bg-warning-bg text-warning-fg absolute -top-2.5 -right-3.5 z-20 flex h-6 min-w-6 items-center justify-center gap-0.5 rounded-full px-1.5 text-[11px] font-bold shadow-sm">
           <AlertTriangle size={12} />
           {conflictBadgeCount}
         </span>

@@ -192,7 +192,7 @@ export function InkAgentDestinationPicker({
               </span>
             )}
             {reason?.kind === 'unavailable' && (
-              <AlertCircle size={12} className="text-warning" aria-hidden />
+              <AlertCircle size={12} className="text-warning-fg" aria-hidden />
             )}
             <ChevronDown size={12} aria-hidden />
           </Button>
@@ -204,7 +204,7 @@ export function InkAgentDestinationPicker({
               role="status"
               className={cn(
                 'px-3 py-2 text-xs',
-                reason.kind === 'busy' ? 'text-fg-muted' : 'text-warning',
+                reason.kind === 'busy' ? 'text-fg-muted' : 'text-warning-fg',
               )}
             >
               {reason.message}

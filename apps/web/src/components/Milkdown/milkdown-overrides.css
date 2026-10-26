@@ -60,7 +60,7 @@
   --crepe-color-on-inverse: var(--fg-inverse);
   --crepe-color-inline-area: var(--bg-hover);
   --crepe-color-inline-code: var(--fg-default);
-  --crepe-color-error: var(--danger);
+  --crepe-color-error: var(--danger-fg);
 
   /* Accent palette — Crepe uses `primary` for focus / active states
      (e.g. selected table column header, code-mirror keywords) and

@@ -327,7 +327,7 @@ export function WorkingDirectoryOverride({
                 <div
                   id={errorId}
                   role="alert"
-                  className="text-danger mt-1 text-xs"
+                  className="text-danger-fg mt-1 text-xs"
                 >
                   {error}
                 </div>

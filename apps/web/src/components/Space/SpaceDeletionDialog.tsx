@@ -212,7 +212,7 @@ export function SpaceDeletionDialog({
         />
       ) : null}
       {error && (
-        <div role="alert" className="text-danger mt-3 space-y-2 text-sm">
+        <div role="alert" className="text-danger-fg mt-3 space-y-2 text-sm">
           <p>{error}</p>
           {!rootDeleted && (
             <Button

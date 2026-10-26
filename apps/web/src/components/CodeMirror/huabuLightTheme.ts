@@ -20,7 +20,7 @@
  *   - Markdown markers (`#`, `**`, `>`, `-`) are rendered in
  *     `--fg-subtle` so the **decorated text** carries the visual
  *     weight, not the syntax itself.
- *   - Inline code / fenced-code use `--warning` (warm orange) which
+ *   - Inline code / fenced-code use `--warning-fg` (warm orange) which
  *     reads as "code" without competing with `--info` links/headings.
  *   - Quotes use `--fg-muted` + italic for the dimmed convention.
  *   - Links use `--info` + underline.
@@ -49,9 +49,9 @@ const EDGE_DEFAULT = 'var(--edge-default)';
 const INFO = 'var(--info)';
 const INFO_FG = 'var(--info-fg)';
 const INFO_BG = 'var(--info-bg)';
-const SUCCESS = 'var(--success)';
-const WARNING = 'var(--warning)';
-const DANGER = 'var(--danger)';
+const SUCCESS = 'var(--success-fg)';
+const WARNING = 'var(--warning-fg)';
+const DANGER = 'var(--danger-fg)';
 
 const chrome = EditorView.theme(
   {

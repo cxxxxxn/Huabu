@@ -269,7 +269,7 @@ function SpaceShortcutSpecimen({
                 ) : null}
               </span>
               {unavailable ? (
-                <AlertTriangle className="text-warning" aria-hidden />
+                <AlertTriangle className="text-warning-fg" aria-hidden />
               ) : null}
             </Button>
             {selected

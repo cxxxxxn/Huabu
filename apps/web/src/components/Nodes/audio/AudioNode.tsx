@@ -404,7 +404,7 @@ export const AudioNode = memo(
               e.stopPropagation();
               stopRecording();
             }}
-            className="border-danger/60 nodrag flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 transition-transform hover:scale-105"
+            className="border-danger nodrag flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 transition-transform hover:scale-105"
           >
             <span className="bg-danger block h-3 w-3 rounded-[3px]" />
           </button>
@@ -420,7 +420,7 @@ export const AudioNode = memo(
               />
             ))}
           </div>
-          <span className="text-danger shrink-0 text-[11px] font-medium tabular-nums">
+          <span className="text-danger-fg shrink-0 text-[11px] font-medium tabular-nums">
             {formatSeconds(elapsedMs / 1000)}
           </span>
         </>
@@ -471,7 +471,7 @@ export const AudioNode = memo(
             {body}
             {recState === 'error' && errMsg && (
               <span
-                className="text-danger ml-1 truncate text-[10px]"
+                className="text-danger-fg ml-1 truncate text-[10px]"
                 title={errMsg}
               >
                 {errMsg}

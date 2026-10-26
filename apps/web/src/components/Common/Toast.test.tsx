@@ -57,7 +57,7 @@ describe('ToastContainer', () => {
             ? 'text-fg-muted'
             : tone === 'info'
               ? 'text-info-fg'
-              : `text-${tone}`,
+              : `text-${tone}-fg`,
         ),
       ).toBe(true);
     },

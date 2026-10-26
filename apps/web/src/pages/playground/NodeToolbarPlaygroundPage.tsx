@@ -735,7 +735,7 @@ function Specimen({ type: initialType }: { type: CanvasNodeType }) {
                     复制链接
                   </DropdownMenuItem>
                   <DropdownMenuItem
-                    className="text-danger"
+                    className="text-danger-fg"
                     icon={<Trash2 size={15} />}
                     onClick={() => {
                       setDeleted(true);

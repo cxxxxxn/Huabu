@@ -441,8 +441,8 @@ function InkSigilAnnotation({
       }
       className={
         broken
-          ? 'bg-warning-bg-hover/70 pointer-events-none absolute rounded'
-          : 'bg-ink-reference-highlight/70 pointer-events-none absolute rounded'
+          ? 'bg-ink-broken-reference-bg pointer-events-none absolute rounded'
+          : 'bg-ink-reference-bg pointer-events-none absolute rounded'
       }
       style={{
         left:
@@ -497,7 +497,7 @@ function InkSigilAnnotation({
       <Button
         variant="ghost"
         data-ink-sigil-label
-        className={`absolute touch-none justify-start overflow-hidden rounded-none bg-transparent p-0 text-left font-normal select-none enabled:hover:bg-transparent ${broken ? 'text-warning' : 'text-fg-default'} ${interactive ? 'pointer-events-auto cursor-grab active:cursor-grabbing' : 'pointer-events-none'}`}
+        className={`absolute touch-none justify-start overflow-hidden rounded-none bg-transparent p-0 text-left font-normal select-none enabled:hover:bg-transparent ${broken ? 'text-warning-fg' : 'text-fg-default'} ${interactive ? 'pointer-events-auto cursor-grab active:cursor-grabbing' : 'pointer-events-none'}`}
         tabIndex={interactive ? 0 : -1}
         style={{
           left: layout.labelX,

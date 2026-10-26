@@ -149,7 +149,7 @@ export function ToolCallCard({ part, showIcon = false }: ToolCallCardProps) {
 
   const icon =
     part.status === 'failed' ? (
-      <XIcon size={12} className="text-danger" />
+      <XIcon size={12} className="text-danger-fg" />
     ) : showIcon ? (
       <ToolKindIcon part={part} className="text-fg-muted/60" />
     ) : null;

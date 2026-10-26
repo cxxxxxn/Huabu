@@ -23,16 +23,19 @@
 }
 .question-tone-warning {
   --question-tone: var(--warning);
+  --question-fg: var(--warning-fg);
   --question-light: var(--warning-light);
   --question-bg: var(--warning-bg);
 }
 .question-tone-success {
   --question-tone: var(--success);
+  --question-fg: var(--success-fg);
   --question-light: var(--success-light);
   --question-bg: var(--success-bg);
 }
 .question-tone-danger {
   --question-tone: var(--danger);
+  --question-fg: var(--danger-fg);
   --question-light: var(--danger-light);
   --question-bg: var(--danger-bg);
 }

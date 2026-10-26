@@ -91,7 +91,7 @@ export function SnapshotNodesCard({ part }: SnapshotNodesCardProps) {
   const icon = executing ? (
     <Loading layout="inline" size="xs" className="text-info-fg" />
   ) : failed ? (
-    <XIcon size={12} className="text-danger" />
+    <XIcon size={12} className="text-danger-fg" />
   ) : (
     <Camera size={12} className="text-fg-muted/60" />
   );
@@ -101,7 +101,7 @@ export function SnapshotNodesCard({ part }: SnapshotNodesCardProps) {
     snapshots.length > 0 || error ? (
       <div className="border-edge-default/40 ml-4 flex flex-col gap-2 border-l py-2 pl-3">
         {error ? (
-          <div className="text-danger bg-bg-default rounded-sm px-2 py-1 text-xs whitespace-pre-wrap">
+          <div className="text-danger-fg bg-bg-default rounded-sm px-2 py-1 text-xs whitespace-pre-wrap">
             {error}
           </div>
         ) : null}

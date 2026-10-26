@@ -51,7 +51,7 @@ function RuntimeSaveFeedback({
         </p>
       ) : error ? (
         <div className="flex flex-col items-end gap-2">
-          <p role="alert" className="text-danger [overflow-wrap:anywhere]">
+          <p role="alert" className="text-danger-fg [overflow-wrap:anywhere]">
             {error}
           </p>
           {onRetry && (
@@ -440,7 +440,7 @@ export function AgentConnectionSettings() {
             {t('settings.agentletRunConnectionDescription')}
           </p>
           {localAccessOnly ? (
-            <p role="status" className="text-warning mt-2">
+            <p role="status" className="text-warning-fg mt-2">
               {t(localAccessHint)}
             </p>
           ) : null}
@@ -475,7 +475,7 @@ export function AgentConnectionSettings() {
           {connectionInfo &&
             (connectionInfo.source === 'generated' ||
               connectionInfo.warnings.length > 0) && (
-              <div role="status" className="text-warning mt-2 space-y-1">
+              <div role="status" className="text-warning-fg mt-2 space-y-1">
                 {connectionInfo.source === 'generated' && (
                   <p>{t('settings.agentletGeneratedTokenWarning')}</p>
                 )}

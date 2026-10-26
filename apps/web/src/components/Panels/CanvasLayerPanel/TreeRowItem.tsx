@@ -349,7 +349,7 @@ export const TreeRowItem = React.memo(
                 <span
                   role="img"
                   aria-label={missingFileLabel}
-                  className="text-warning inline-flex"
+                  className="text-warning-fg inline-flex"
                 >
                   <FileWarning className="h-3.5 w-3.5" />
                 </span>

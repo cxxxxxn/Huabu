@@ -195,7 +195,7 @@ export function QuestionConversationCard({
       {titleEditor?.error ? (
         <div
           role="alert"
-          className="text-danger"
+          className="text-danger-fg"
           style={{ fontSize: NODE_TYPOGRAPHY.body.size * scale }}
         >
           {titleEditor.error}

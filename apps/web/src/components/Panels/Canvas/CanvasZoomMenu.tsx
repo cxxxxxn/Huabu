@@ -173,7 +173,7 @@ export function CanvasZoomMenu() {
                 <p
                   id={`${id}-error`}
                   role="alert"
-                  className="text-danger mt-1 text-xs"
+                  className="text-danger-fg mt-1 text-xs"
                 >
                   {t('canvasControls.invalidZoom', {
                     min: MIN_ZOOM * 100,

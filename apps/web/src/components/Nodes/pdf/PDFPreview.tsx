@@ -678,7 +678,7 @@ export const PDFPreview = ({
         title={t('node.highlightText')}
         aria-label={t('node.highlightText')}
         aria-pressed={highlightMode}
-        className={clsx(highlightMode && 'bg-bg-default text-warning-light')}
+        className={clsx(highlightMode && 'bg-bg-default text-warning-fg')}
         onClick={() => {
           const next = !highlightMode;
           setHighlightMode(next);
@@ -750,7 +750,7 @@ export const PDFPreview = ({
               onSourceError={() => setFailedSource(src)}
               loading=""
               error={
-                <div className="text-danger p-4 text-xs">
+                <div className="text-danger-fg p-4 text-xs">
                   {t('node.errorLoadingPdf')}
                   <Button
                     variant="ghost"

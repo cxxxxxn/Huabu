@@ -99,9 +99,9 @@ export function dismissToast(id: string) {
 const toneIconClasses: Record<ToastTone, string> = {
   neutral: 'text-fg-muted',
   info: 'text-info-fg',
-  success: 'text-success',
-  warning: 'text-warning',
-  danger: 'text-danger',
+  success: 'text-success-fg',
+  warning: 'text-warning-fg',
+  danger: 'text-danger-fg',
 };
 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
