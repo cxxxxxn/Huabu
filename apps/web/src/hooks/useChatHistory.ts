@@ -29,9 +29,12 @@ import { usePreviewWorkspaceStore } from '@/store/previewWorkspace/store';
 import { claimAgentStream } from './agentStreamCoordinator';
 import {
   clearInkInterpretationStream,
+  hasUnreconciledAgentTurn,
   inkTurnOutcome,
   observeAgentTurnAcceptance,
+  reconcileAgentTurnAfterReconnect,
   settleTurnInkInterpretation,
+  settleAgentTurnQueue,
 } from './agentTurnController';
 import { handleStreamEvent } from './useAgentStream';
 
@@ -471,13 +474,23 @@ export function useChatHistory(
     const lastMessage = msgs[msgs.length - 1];
     const historyLooksIncomplete =
       lastMessage?.role === 'user' || lastMessage?.historyTurnActive === true;
-    if (ownerStatus !== 'running' && !historyLooksIncomplete) return;
+    const hasOutstandingRequest = hasUnreconciledAgentTurn(
+      ownerCanvasId,
+      threadId,
+    );
+    if (
+      ownerStatus !== 'running' &&
+      !historyLooksIncomplete &&
+      !hasOutstandingRequest
+    )
+      return;
 
     let cancelled = false;
     const ownerThreadId = threadId;
     const ownerView = effectiveConversationView;
     const claim = claimAgentStream(ownerCanvasId, ownerThreadId, 'attach');
     if (!claim) return;
+    let queueCompletedNormally = false;
 
     const tryReconnect = async () => {
       if (ownerView) {
@@ -557,6 +570,7 @@ export function useChatHistory(
               if (cancelled) return;
               if (event.type === 'done') {
                 outcome = inkTurnOutcome(event.data.meta?.stopReason);
+                queueCompletedNormally = outcome === 'done';
               }
               if (!streaming) {
                 streaming = true;
@@ -578,6 +592,7 @@ export function useChatHistory(
             onError: (err) => {
               if (cancelled) return;
               outcome = 'error';
+              queueCompletedNormally = false;
               settleTurnInkInterpretation(streamContext, 'error');
               addMessage(ownerThreadId, {
                 id: createId('status'),
@@ -605,11 +620,14 @@ export function useChatHistory(
         )
         .finally(() => clearInkInterpretationStream(streamContext));
 
+      if (result.status !== 'completed') queueCompletedNormally = false;
       if (result.status === 'inactive' && !cancelled) {
         outcome = 'interrupted';
         settleTurnInkInterpretation(streamContext, 'interrupted');
       }
       if (result.status !== 'aborted' && !cancelled) {
+        await reconcileAgentTurnAfterReconnect(ownerCanvasId, ownerThreadId);
+        if (cancelled) return;
         const finalHistory = await fetchLatestHistoryWindow(
           ownerThreadId,
           ownerCanvasId,
@@ -628,10 +646,15 @@ export function useChatHistory(
 
     void tryReconnect()
       .catch(async (error) => {
+        queueCompletedNormally = false;
         if (cancelled || claim.signal.aborted) return;
         console.error('[useChatHistory] reconnect failed', error);
         const ownerStillRunning = ownerStatus === 'running';
-        if (ownerStillRunning || historyLooksIncomplete) {
+        if (
+          ownerStillRunning ||
+          historyLooksIncomplete ||
+          hasOutstandingRequest
+        ) {
           const delay =
             attachRetryDelayByThread.get(ownerThreadId) ??
             INITIAL_ATTACH_RETRY_MS;
@@ -645,7 +668,13 @@ export function useChatHistory(
         useChatStore.getState().setHistoryLoaded(ownerThreadId, false);
         setIsLoading(ownerThreadId, false);
       })
-      .finally(() => claim.release());
+      .finally(() => {
+        claim.release();
+        settleAgentTurnQueue(
+          { threadId: ownerThreadId, ownerCanvasId },
+          !cancelled && queueCompletedNormally,
+        );
+      });
 
     return () => {
       cancelled = true;

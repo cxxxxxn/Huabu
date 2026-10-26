@@ -77,7 +77,6 @@ describe('NodeRef canvas navigation', () => {
       selectNodes,
       rfInstance: null,
     });
-
     act(() => root.render(<NodeRef nodeId="shortcut" />));
     expect(container.textContent).toBe('Research');
     act(() =>

@@ -30,6 +30,7 @@ import {
   forkThreadBodySchema,
   setChatThreadModelRequestSchema,
   setChatThreadReasoningEffortRequestSchema,
+  stopThreadBodySchema,
 } from '@huabu/shared';
 
 import {
@@ -45,6 +46,7 @@ import { InkModelCapabilityError } from '../agent/agent-submission.js';
 import { AgentThreadResolutionError } from '../agent/agent-thread-resolver.js';
 import {
   AgentThreadBusyError,
+  AgentRequestStoppedError,
   agentThreadService,
 } from '../agent/agent-thread.service.js';
 import {
@@ -75,6 +77,7 @@ import type {
   ForkThreadResponse,
   SetChatThreadSettingResponse,
   StopThreadResponse,
+  StopThreadBody,
 } from '@huabu/shared';
 import type { CanvasNode } from '@huabu/shared/canvas-engine';
 import type { FastifyPluginAsync } from 'fastify';
@@ -445,15 +448,28 @@ const agentRoutes: FastifyPluginAsync = async (
   fastify.post<{
     Params: { threadId: string };
     Querystring: AgentCanvasIdQuery;
+    Body: StopThreadBody;
     Reply: ApiResult<StopThreadResponse>;
   }>('/stop/:threadId', async function (request, reply) {
-    const { threadId } = request.params;
+    const parsedParams = agentHistoryPageParamsSchema.safeParse(request.params);
+    if (!parsedParams.success) {
+      return reply.code(400).send({ message: 'Invalid parameters' });
+    }
+    const { threadId } = parsedParams.data;
+    const parsedBody = stopThreadBodySchema.safeParse(request.body ?? {});
+    if (!parsedBody.success) {
+      return reply.code(400).send({ message: 'Invalid body' });
+    }
     const parsedQuery = agentCanvasIdQuerySchema.safeParse(request.query);
     if (!parsedQuery.success) {
       return reply.code(400).send({ message: 'Invalid query parameters' });
     }
     return reply.send(
-      await agentThreadService.stopAndWait(threadId, parsedQuery.data.canvasId),
+      await agentThreadService.stopAndWait(
+        threadId,
+        parsedQuery.data.canvasId,
+        parsedBody.data.requestId,
+      ),
     );
   });
 
@@ -749,6 +765,7 @@ const agentRoutes: FastifyPluginAsync = async (
       inputKind,
       content,
       threadId,
+      requestId,
       mode = 'ask',
       canvasContext,
       canvasId,
@@ -768,6 +785,7 @@ const agentRoutes: FastifyPluginAsync = async (
     const preparation = agentThreadService.beginPreparation(
       resolvedThreadId,
       canvasId,
+      requestId,
     );
     let preparationFinished = false;
     const finishPreparation = () => {
@@ -840,8 +858,8 @@ const agentRoutes: FastifyPluginAsync = async (
     // message INSIDE the dispatch layer (runAgent / runAcpAgent), so both
     // backends share one render timing and it never enters the persisted
     // transcript (it is re-derived from the envelope on reload).
-    const envelope = () =>
-      buildChatEnvelope({
+    const envelope = async () => ({
+      ...(await buildChatEnvelope({
         inputKind,
         content,
         attachments,
@@ -854,7 +872,9 @@ const agentRoutes: FastifyPluginAsync = async (
         canvasId: canvasId ?? null,
         logger: request.log,
         signal: preparation.signal,
-      });
+      })),
+      ...(requestId ? { requestId } : {}),
+    });
     // Debug-prompt metadata forwarded to the dispatch layer (it assembles
     // the final prompt). No-op unless HUABU_DEBUG_PROMPT is set.
     const debugPrompt = {
@@ -871,6 +891,7 @@ const agentRoutes: FastifyPluginAsync = async (
     try {
       invocation = await agentThreadService.invoke({
         threadId: resolvedThreadId,
+        requestId,
         canvasId,
         content,
         mode: effectiveMode,
@@ -911,7 +932,10 @@ const agentRoutes: FastifyPluginAsync = async (
           code: error.code,
         });
       }
-      if (preparation.signal.aborted) {
+      if (
+        preparation.signal.aborted ||
+        error instanceof AgentRequestStoppedError
+      ) {
         return reply.code(409).send({
           message: 'The Agent request was stopped before execution.',
           code: 'request_stopped',

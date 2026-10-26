@@ -25,6 +25,7 @@ import {
 } from '@/api/conversationTitles';
 import { Button } from '@/components/Common/Button';
 import { toast } from '@/components/Common/Toast';
+import { resetAgentTurnAcceptanceObserversForTests } from '@/hooks/agentTurnController';
 import { useConversationTitles } from '@/hooks/useConversationTitles';
 import { i18n } from '@/i18n';
 import { useAcpThreadChangesStore } from '@/store/acpThreadChangesStore';
@@ -391,6 +392,8 @@ beforeEach(async () => {
   usePanelStore.setState({ isRightCollapsed: false });
   vi.mocked(acknowledgeConversationResult).mockResolvedValue(undefined);
   useRemoteConversationOwnerStore.setState({ entries: {} });
+  saveCanvasForSubmission.mockResolvedValue(undefined);
+  resetAgentTurnAcceptanceObserversForTests();
   sessionMetaState.loading = false;
   sessionMetaState.error = null;
   sessionMetaState.updatedAt = 0;
@@ -755,7 +758,12 @@ describe('rendered conversation titles', () => {
     observeConversationExecution('canvas', 'thread', undefined);
     await saveConversationWorkingDirectory(baseSession, '/chat/project');
     vi.mocked(agentApi.streamMessage).mockImplementation(
-      async (_prompt, _thread, _mode, callbacks) => {
+      async (_prompt, threadId, _mode, callbacks, options) => {
+        callbacks.onAccepted?.({
+          threadId,
+          turnStartSeq: 1,
+          requestId: options?.requestId,
+        });
         callbacks.onComplete();
       },
     );
@@ -1176,7 +1184,12 @@ describe('rendered conversation titles', () => {
     let complete!: () => void;
     let release!: () => void;
     vi.mocked(agentApi.streamMessage).mockImplementation(
-      async (_prompt, _thread, _mode, callbacks) => {
+      async (_prompt, threadId, _mode, callbacks, options) => {
+        callbacks.onAccepted?.({
+          threadId,
+          turnStartSeq: 1,
+          requestId: options?.requestId,
+        });
         event = callbacks.onEvent;
         complete = callbacks.onComplete!;
         await new Promise<void>((resolve) => {
@@ -1260,7 +1273,12 @@ describe('rendered conversation titles', () => {
     let complete!: () => void;
     let release!: () => void;
     vi.mocked(agentApi.streamMessage).mockImplementation(
-      async (_prompt, _thread, _mode, callbacks) => {
+      async (_prompt, threadId, _mode, callbacks, options) => {
+        callbacks.onAccepted?.({
+          threadId,
+          turnStartSeq: 1,
+          requestId: options?.requestId,
+        });
         event = callbacks.onEvent;
         assert(callbacks.onComplete);
         complete = callbacks.onComplete;

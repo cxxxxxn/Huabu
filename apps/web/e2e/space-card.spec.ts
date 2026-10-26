@@ -453,8 +453,8 @@ test('Space cards show activity and rename inline without entering the target', 
   await card.getByText('Card task', { exact: true }).click();
   await expect(card.locator('input')).toHaveCount(0);
   await expect(
-    page.getByRole('button', { name: 'Rename Space', exact: true }),
-  ).toHaveCount(0);
+    card.getByRole('button', { name: 'Rename Space', exact: true }),
+  ).toBeVisible();
   await expect(
     page.getByRole('button', { name: 'Retry', exact: true }),
   ).toHaveCount(0);
@@ -482,10 +482,10 @@ test('Space cards show activity and rename inline without entering the target', 
   await expect(card).toContainText('Renamed task');
   await expect(card).not.toContainText('Cancelled');
   await page.keyboard.press('F2');
-  await input.fill('Saved on blur');
+  await input.fill('Activity card saved on blur');
   await card.locator('[data-space-shortcut-summary]').click();
   await expect(input).toHaveCount(0);
-  await expect(card).toContainText('Saved on blur');
+  await expect(card).toContainText('Activity card saved on blur');
   failActivity = true;
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(card.locator('[role="status"]')).toBeVisible();

@@ -190,10 +190,11 @@ export const agentApi = {
   stopThread: async (
     threadId: string,
     canvasId?: string,
+    requestId?: string,
   ): Promise<StopThreadResponse> => {
     return await apiFetch<StopThreadResponse>(
       routes.agentStop(threadId, canvasId),
-      { method: 'POST' },
+      { method: 'POST', ...(requestId ? { json: { requestId } } : {}) },
     );
   },
 
@@ -251,6 +252,7 @@ export const agentApi = {
     mode: AgentMode,
     callbacks: AgentStreamCallbacks,
     options?: {
+      requestId?: AgentRequest['requestId'];
       inputKind?: AgentInputKind;
       canvasContext?: AgentChatContext;
       canvasId?: string;
@@ -298,6 +300,7 @@ export const agentApi = {
       content,
       inputKind: options?.inputKind,
       threadId,
+      requestId: options?.requestId,
       mode,
       canvasContext: options?.canvasContext,
       canvasId: options?.canvasId,
