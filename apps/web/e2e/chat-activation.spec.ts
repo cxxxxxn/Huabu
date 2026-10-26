@@ -124,7 +124,136 @@ test.beforeEach(async ({ page }, testInfo) => {
   );
 });
 
-test('full cached turns expand locally; warm activation and cold eviction reset the mounted window', async ({
+for (const theme of ['light', 'dark']) {
+  test(`reading-position navigation floats and restores its fixed target (${theme})`, async ({
+    page,
+  }, testInfo) => {
+    await openFixture(page);
+    await page.evaluate((dark) => {
+      document.documentElement.classList.toggle('dark', dark);
+    }, theme === 'dark');
+    await panel(page).evaluate((element) => {
+      element.style.width = '360px';
+      element.style.alignSelf = 'center';
+    });
+    await expand(page);
+    await scrollHistory(page, false);
+    const scroller = panel(page).locator('[data-chat-thread-root]');
+    const saved = await scroller.evaluate((element) => {
+      const top = element.getBoundingClientRect().top;
+      const anchor = Array.from(
+        element.querySelectorAll<HTMLElement>('[data-chat-message-id]'),
+      ).find((row) => row.getBoundingClientRect().bottom > top);
+      if (!anchor) throw new Error('Missing reading anchor');
+      return {
+        id: anchor.dataset.chatMessageId,
+        offset: anchor.getBoundingClientRect().top - top,
+      };
+    });
+    await activate(page, 'b');
+    await page
+      .getByRole('button', { name: 'Add background turn to A' })
+      .click();
+    await activate(page, 'a');
+    const button = panel(page).getByRole('button', {
+      name: 'Back to last reading position',
+      exact: true,
+    });
+    await expect(button).toBeVisible();
+    await expect(button.locator('svg')).toHaveCount(0);
+    expect(
+      await button.evaluate((element) =>
+        element.closest('[data-chat-thread-root]'),
+      ),
+    ).toBeNull();
+    const initialBox = await button.boundingBox();
+    await scrollHistory(page, false);
+    await expect(button).toBeVisible();
+    expect(await button.boundingBox()).toEqual(initialBox);
+    const bounds = await panel(page).boundingBox();
+    if (!initialBox || !bounds) throw new Error('Missing navigation geometry');
+    expect(initialBox.height).toBeLessThanOrEqual(42);
+    expect(initialBox.x).toBeGreaterThanOrEqual(bounds.x);
+    expect(initialBox.x + initialBox.width).toBeLessThanOrEqual(
+      bounds.x + bounds.width,
+    );
+    await expect(
+      panel(page).getByRole('button', { name: 'Back to bottom', exact: true }),
+    ).toBeVisible();
+    await page.screenshot({
+      path: testInfo.outputPath(`reading-position-${theme}.png`),
+    });
+    await button.focus();
+    await page.keyboard.press('Enter');
+    await expect(button).toBeHidden();
+    await expect(scroller).toBeFocused();
+    await expect
+      .poll(() =>
+        scroller.evaluate((element, target) => {
+          const anchor = Array.from(
+            element.querySelectorAll<HTMLElement>('[data-chat-message-id]'),
+          ).find((row) => row.dataset.chatMessageId === target.id);
+          if (!anchor) throw new Error('Reading target was not revealed');
+          return Math.abs(
+            anchor.getBoundingClientRect().top -
+              element.getBoundingClientRect().top -
+              target.offset,
+          );
+        }, saved),
+      )
+      .toBeLessThanOrEqual(2);
+    await scrollHistory(page, true);
+    await expect(button).toBeHidden();
+  });
+}
+
+for (const action of ['scroll', 'bottom', 'submit']) {
+  test(`reading return retires when continuing with ${action}`, async ({
+    page,
+  }) => {
+    await openFixture(page);
+    await expand(page);
+    await scrollHistory(page, false);
+    await activate(page, 'b');
+    await page
+      .getByRole('button', { name: 'Add background turn to A' })
+      .click();
+    await activate(page, 'a');
+    const button = panel(page).getByRole('button', {
+      name: 'Back to last reading position',
+      exact: true,
+    });
+    await expect(button).toBeVisible();
+    await scrollHistory(page, false);
+    if (action === 'scroll') {
+      const scroller = panel(page).locator('[data-chat-thread-root]');
+      await scroller.hover();
+      await page.mouse.wheel(0, 40);
+      await expect(button).toBeVisible();
+      const viewportHeight = await scroller.evaluate(
+        (element) => element.clientHeight,
+      );
+      await page.mouse.wheel(0, viewportHeight + 40);
+    } else if (action === 'bottom') {
+      await panel(page)
+        .getByRole('button', { name: 'Back to bottom', exact: true })
+        .click();
+    } else {
+      const input = panel(page).locator('textarea[name="agent-message"]');
+      await input.fill('Continue here');
+      await input.press('Enter');
+      await expect(panel(page)).toHaveAttribute(
+        'data-submitted-draft',
+        'Continue here',
+      );
+    }
+    await expect(button).toBeHidden();
+    await scrollHistory(page, false);
+    await expect(button).toBeHidden();
+  });
+}
+
+test('unchanged history preserves its expanded window on warm activation and cold eviction', async ({
   page,
 }) => {
   await openFixture(page);
@@ -142,25 +271,21 @@ test('full cached turns expand locally; warm activation and cold eviction reset 
   await activate(page, 'b');
   await expect(panel(page)).toBeHidden();
   await activate(page, 'a');
-  await expectTurns(page, 'a', 10, 12);
+  await expectTurns(page, 'a', 7, 12);
   await expect(panel(page)).toHaveAttribute('data-mount-id', originalMount);
   await expect(panel(page)).not.toHaveAttribute(
     'data-activation-id',
     originalActivation,
   );
   await expand(page);
-  await expectTurns(page, 'a', 7, 12);
+  await expectTurns(page, 'a', 4, 12);
   await activate(page, 'b');
   await activate(page, 'c');
   await expect(panel(page)).toHaveCount(0);
   await activate(page, 'a');
-  await expectTurns(page, 'a', 10, 12);
+  await expectTurns(page, 'a', 4, 12);
   await expect(panel(page)).not.toHaveAttribute('data-mount-id', originalMount);
   await expect(panel(page)).toHaveAttribute('data-cached-messages', '36');
-  await expand(page);
-  await expectTurns(page, 'a', 7, 12);
-  await expand(page);
-  await expectTurns(page, 'a', 4, 12);
   await expand(page);
   await expectTurns(page, 'a', 1, 12);
   await expect(
@@ -168,17 +293,76 @@ test('full cached turns expand locally; warm activation and cold eviction reset 
   ).toHaveCount(0);
 });
 
+for (const cold of [false, true]) {
+  test(`unchanged tab restores the reading offset (${cold ? 'cold' : 'warm'})`, async ({
+    page,
+  }) => {
+    await openFixture(page);
+    await expand(page);
+    await scrollHistory(page, false);
+    const scroller = panel(page).locator('[data-chat-thread-root]');
+    await scroller.evaluate((element) => {
+      element.scrollTop = 150;
+      element.dispatchEvent(new Event('scroll', { bubbles: true }));
+    });
+    const anchor = panel(page).locator(
+      '[data-chat-message-id="a-turn-7-user"]',
+    );
+    const before = await anchor.boundingBox();
+    if (!before) throw new Error('Missing reading target geometry');
+    await activate(page, 'b');
+    if (cold) await activate(page, 'c');
+    await activate(page, 'a');
+    await expectTurns(page, 'a', 7, 12);
+    await expect
+      .poll(async () => {
+        const after = await anchor.boundingBox();
+        if (!after) throw new Error('Reading target was not restored');
+        return Math.abs(after.y - before.y);
+      })
+      .toBeLessThanOrEqual(2);
+    await expect(
+      panel(page).getByRole('button', {
+        name: 'Back to last reading position',
+      }),
+    ).toBeHidden();
+  });
+}
+
 test('a genuine completed turn compacts a following reader without deleting cached history', async ({
   page,
 }) => {
   await openFixture(page);
+  const scroller = panel(page).locator('[data-chat-thread-root]');
+  await expect(scroller).toHaveCSS('overflow-anchor', 'none');
   await scrollHistory(page, true);
   await page.getByRole('button', { name: 'Start turn', exact: true }).click();
   await expectTurns(page, 'a', 10, 13);
+  await expect
+    .poll(() =>
+      scroller.evaluate(
+        (element) =>
+          element.scrollHeight - element.clientHeight - element.scrollTop,
+      ),
+    )
+    .toBeLessThanOrEqual(2);
   await page
     .getByRole('button', { name: 'Complete turn', exact: true })
     .click();
   await expectTurns(page, 'a', 11, 13);
+  await expect
+    .poll(() =>
+      scroller.evaluate(
+        (element) =>
+          element.scrollHeight - element.clientHeight - element.scrollTop,
+      ),
+    )
+    .toBeLessThanOrEqual(2);
+  await expect(
+    panel(page).getByRole('button', {
+      name: /^(Back to bottom|New message)$/,
+    }),
+  ).toBeHidden();
   await expect(panel(page)).toHaveAttribute('data-cached-messages', '39');
   await expand(page);
   await expectTurns(page, 'a', 8, 13);

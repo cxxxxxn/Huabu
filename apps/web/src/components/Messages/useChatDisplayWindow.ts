@@ -66,24 +66,30 @@ export function useChatDisplayWindow(
   count: number | undefined,
   viewKey: string | undefined,
   activationId: number | undefined,
+  restoreFirstMessageId?: string,
 ) {
   const turns = useMemo(() => chatDisplayTurns(messages), [messages]);
   const latestIndex =
     count === undefined ? 0 : recentDisplayTurnIndex(turns, messages, count);
   const boundaryAt = (index: number): WindowBoundary | null =>
     turns[index] ? { key: turns[index].key, index } : null;
+  const restoreIndex = restoreFirstMessageId
+    ? messages.findIndex((message) => message.id === restoreFirstMessageId)
+    : -1;
+  const initialIndex =
+    restoreIndex >= 0 ? turnAtMessageIndex(turns, restoreIndex) : latestIndex;
   const [window, setWindow] = useState(() => ({
     viewKey,
     activationId,
-    boundary: boundaryAt(latestIndex),
+    boundary: boundaryAt(initialIndex),
   }));
 
   let boundary = window.boundary;
   if (window.viewKey !== viewKey || window.activationId !== activationId) {
-    boundary = boundaryAt(latestIndex);
+    boundary = boundaryAt(initialIndex);
     setWindow({ viewKey, activationId, boundary });
   } else if (!boundary && turns.length > 0) {
-    boundary = boundaryAt(latestIndex);
+    boundary = boundaryAt(initialIndex);
     setWindow({ ...window, boundary });
   }
 

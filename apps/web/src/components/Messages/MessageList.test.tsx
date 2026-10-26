@@ -318,6 +318,7 @@ describe('MessageList bottom navigation', () => {
     expect(bottomButton()).toBeUndefined();
     scrollTo(749);
     expect(bottomButton()?.textContent).toContain('Back to bottom');
+    expect(bottomButton()?.querySelector('svg')).toBeNull();
     scrollTo(750);
     expect(bottomButton()).toBeUndefined();
   });
@@ -579,7 +580,136 @@ describe('MessageList bottom navigation', () => {
     expect(top).toBe(800);
   });
 
-  it('selects the recent window before a retained Activity reconnects', () => {
+  it.each(['warm', 'cold', 'hydration'])(
+    'restores unchanged history and its reading offset after %s activation',
+    (kind) => {
+      const viewKey = `unchanged-${kind}`;
+      vi.spyOn(
+        HTMLElement.prototype,
+        'getBoundingClientRect',
+      ).mockImplementation(function (this: HTMLElement) {
+        const id = this.dataset.chatMessageId;
+        const y = id ? (id === 'u4' ? 400 : 0) - top : 0;
+        return new DOMRect(0, y, 300, id ? 200 : 200);
+      });
+      const view = (
+        active: boolean,
+        activationId: number,
+        hydrating = false,
+      ) => (
+        <Activity mode={active ? 'visible' : 'hidden'}>
+          <MessageList
+            messages={hydrating ? [] : history(10)}
+            recentTurnCount={3}
+            isLoading={false}
+            isHistoryLoading={hydrating}
+            viewKey={viewKey}
+            activationId={activationId}
+            isActive={active}
+          />
+        </Activity>
+      );
+      mount(view(true, 0));
+      act(() => earlier()?.click());
+      scrollTo(410);
+      expect(messageIds()[0]).toBe('u4');
+      if (kind === 'warm') {
+        act(() => root?.render(view(false, 0)));
+      } else {
+        act(() => root?.unmount());
+        root = undefined;
+        container?.remove();
+        container = undefined;
+        top = 0;
+        mount(view(true, 1, kind === 'hydration'));
+      }
+      act(() => root?.render(view(true, 1)));
+      expect(messageIds()[0]).toBe('u4');
+      expect(top).toBe(410);
+      height = 1_200;
+      resize();
+      expect(top).toBe(410);
+      forgetMessageListScrollPosition(viewKey);
+    },
+  );
+
+  it.each(['appended', 'streamed', 'prepended', 'explicit'])(
+    'handles %s content when reactivating a saved viewport',
+    (change) => {
+      const viewKey = `changed-${change}`;
+      const original = history(10);
+      const view = (
+        messages: ChatMessage[],
+        active: boolean,
+        activationId: number,
+      ) => (
+        <MessageList
+          messages={messages}
+          recentTurnCount={3}
+          isLoading={false}
+          viewKey={viewKey}
+          isActive={active}
+          activationId={activationId}
+          openPositionRequestNonce={
+            change === 'explicit' && activationId === 1 ? 1 : undefined
+          }
+        />
+      );
+      mount(view(original, true, 0));
+      act(() => earlier()?.click());
+      scrollTo(410);
+      act(() => root?.render(view(original, false, 0)));
+      const changed =
+        change === 'appended'
+          ? history(11)
+          : change === 'streamed'
+            ? [
+                ...original.slice(0, -1),
+                {
+                  id: 'a9',
+                  role: 'assistant' as const,
+                  segments: [
+                    { kind: 'text' as const, text: 'More streamed text' },
+                  ],
+                },
+              ]
+            : change === 'prepended'
+              ? [
+                  { id: 'older', role: 'user' as const, content: 'Earlier' },
+                  ...original,
+                ]
+              : original;
+      act(() => root?.render(view(changed, false, 0)));
+      act(() => root?.render(view(changed, true, 1)));
+      expect(top).toBe(change === 'prepended' ? 410 : 800);
+      expect(messageIds()[0]).toBe(
+        change === 'appended' ? 'u8' : change === 'prepended' ? 'u4' : 'u7',
+      );
+      forgetMessageListScrollPosition(viewKey);
+    },
+  );
+
+  it('preserves bottom rather than restoring an older reading bookmark', () => {
+    const viewKey = 'unchanged-at-bottom';
+    const view = (activationId: number) => (
+      <MessageList
+        messages={history(10)}
+        recentTurnCount={3}
+        isLoading={false}
+        activationId={activationId}
+        viewKey={viewKey}
+      />
+    );
+    mount(view(0));
+    scrollTo(200);
+    act(() => bottomButton()?.click());
+    act(() => root?.render(view(1)));
+    expect(top).toBe(800);
+    expect(messageIds()[0]).toBe('u7');
+    forgetMessageListScrollPosition(viewKey);
+  });
+
+  it('selects the recent window before a retained Activity reconnects without scroll memory', () => {
     const messages = history(10);
     const view = (active: boolean, activationId: number) => (
       <Activity mode={active ? 'visible' : 'hidden'}>
@@ -841,9 +971,250 @@ describe('MessageList bottom navigation', () => {
     expect(container?.querySelector('[role="status"]')?.textContent).toBe(
       'chat.readingPositionUnavailable',
     );
+    expect(thread().querySelector('[role="status"]')).toBeNull();
     expect(messageIds()).toHaveLength(6);
     expect(fetchOlder).not.toHaveBeenCalled();
     forgetMessageListScrollPosition(viewKey);
+  });
+
+  describe('floating reading-position navigation', () => {
+    const viewKey = 'floating-reading-test';
+    const returnButton = () =>
+      Array.from(container?.querySelectorAll('button') ?? []).find(
+        (button) => button.textContent === 'chat.returnToReadingPosition',
+      );
+
+    function bookmark(messageId = 'u8', offsetTop = -10) {
+      const source = document.createElement('div');
+      const anchor = document.createElement('div');
+      anchor.dataset.chatMessageId = messageId;
+      anchor.getBoundingClientRect = () => new DOMRect(0, offsetTop, 300, 500);
+      source.appendChild(anchor);
+      rememberMessageListScrollAnchor(source, viewKey);
+    }
+
+    beforeEach(() => {
+      bookmark();
+      vi.spyOn(
+        HTMLElement.prototype,
+        'getBoundingClientRect',
+      ).mockImplementation(function (this: HTMLElement) {
+        return this.dataset.chatMessageId === 'u8'
+          ? new DOMRect(0, 400 - top, 300, 500)
+          : new DOMRect(0, 0, 300, 200);
+      });
+    });
+
+    afterEach(() => forgetMessageListScrollPosition(viewKey));
+
+    const view = (
+      props: Partial<React.ComponentProps<typeof MessageList>> = {},
+    ) => (
+      <MessageList
+        messages={history(10)}
+        recentTurnCount={3}
+        isLoading={false}
+        viewKey={viewKey}
+        {...props}
+      />
+    );
+
+    it('floats outside history and retires after a successful return', () => {
+      mount(view());
+      expect(returnButton()).toBeDefined();
+      expect(thread().contains(returnButton() ?? null)).toBe(false);
+      expect(returnButton()?.className).toContain('absolute top-2');
+      expect(thread().contains(earlier() ?? null)).toBe(true);
+
+      scrollTo(350);
+      expect(returnButton()).toBeDefined();
+      expect(bottomButton()).toBeDefined();
+      returnButton()?.focus();
+      act(() => returnButton()?.click());
+      expect(top).toBe(410);
+      expect(returnButton()).toBeUndefined();
+      expect(document.activeElement).toBe(thread());
+
+      scrollTo(500);
+      expect(returnButton()).toBeUndefined();
+    });
+
+    it('retires after manually reaching the saved position without reappearing', () => {
+      mount(view());
+      scrollTo(408);
+      expect(returnButton()).toBeUndefined();
+      scrollTo(500);
+      expect(returnButton()).toBeUndefined();
+    });
+
+    function wheel(deltaY: number, to: number) {
+      act(() =>
+        thread().dispatchEvent(
+          new WheelEvent('wheel', { bubbles: true, deltaY }),
+        ),
+      );
+      scrollTo(to);
+    }
+
+    it('requires a full viewport of intentional downward reading, not a small scroll', () => {
+      mount(view());
+      scrollTo(500);
+      wheel(100, 600);
+      expect(returnButton()).toBeDefined();
+      wheel(99, 699);
+      expect(returnButton()).toBeDefined();
+      wheel(1, 700);
+      expect(returnButton()).toBeUndefined();
+      wheel(-100, 600);
+      expect(returnButton()).toBeUndefined();
+    });
+
+    it('keeps the return action for upward browsing and resets downward progress', () => {
+      mount(view());
+      wheel(-300, 500);
+      wheel(150, 650);
+      wheel(-50, 600);
+      wheel(150, 750);
+      expect(returnButton()).toBeDefined();
+      wheel(50, 800);
+      expect(returnButton()).toBeUndefined();
+    });
+
+    it('does not count programmatic, expired, nested or zero-distance scrolling', () => {
+      mount(view());
+      scrollTo(500);
+      scrollTo(800);
+      expect(returnButton()).toBeDefined();
+      wheel(500, 800);
+      expect(returnButton()).toBeDefined();
+      scrollTo(500);
+      const now = vi.spyOn(performance, 'now').mockReturnValue(0);
+      act(() =>
+        thread().dispatchEvent(
+          new WheelEvent('wheel', { bubbles: true, deltaY: 200 }),
+        ),
+      );
+      now.mockReturnValue(251);
+      scrollTo(700);
+      expect(returnButton()).toBeDefined();
+      const nested = document.createElement('div');
+      nested.style.overflowY = 'auto';
+      thread().appendChild(nested);
+      act(() =>
+        nested.dispatchEvent(
+          new WheelEvent('wheel', { bubbles: true, deltaY: 500 }),
+        ),
+      );
+      scrollTo(800);
+      expect(returnButton()).toBeDefined();
+      nested.remove();
+      height = 1_500;
+      resize();
+      expect(returnButton()).toBeDefined();
+    });
+
+    it.each(['keyboard', 'touch', 'scrollbar'])(
+      'dismisses after one viewport using %s',
+      (input) => {
+        mount(view());
+        scrollTo(500);
+        act(() => {
+          if (input === 'keyboard') {
+            thread().dispatchEvent(
+              new KeyboardEvent('keydown', { bubbles: true, key: 'PageDown' }),
+            );
+          } else if (input === 'touch') {
+            thread().dispatchEvent(
+              new TouchEvent('touchstart', {
+                bubbles: true,
+                touches: [
+                  new Touch({ identifier: 1, target: thread(), clientY: 300 }),
+                ],
+              }),
+            );
+            thread().dispatchEvent(
+              new TouchEvent('touchmove', {
+                bubbles: true,
+                touches: [
+                  new Touch({ identifier: 1, target: thread(), clientY: 100 }),
+                ],
+              }),
+            );
+          } else {
+            thread().dispatchEvent(
+              new PointerEvent('pointerdown', { bubbles: true, pointerId: 1 }),
+            );
+          }
+        });
+        scrollTo(700);
+        expect(returnButton()).toBeUndefined();
+      },
+    );
+
+    it('dismisses when choosing latest or submitting, without affecting another activation', () => {
+      mount(view({ submissionNonce: 0 }));
+      scrollTo(500);
+      act(() => bottomButton()?.click());
+      expect(returnButton()).toBeUndefined();
+      scrollTo(500);
+      expect(returnButton()).toBeUndefined();
+      bookmark('u2');
+      act(() =>
+        root?.render(
+          view({ activationId: 1, submissionNonce: 0, messages: history(11) }),
+        ),
+      );
+      expect(returnButton()).toBeDefined();
+      act(() =>
+        root?.render(
+          view({ activationId: 1, submissionNonce: 1, messages: history(11) }),
+        ),
+      );
+      expect(returnButton()).toBeUndefined();
+    });
+
+    it.each([-400, -450])(
+      'retires at the initial clamped position and stays hidden after resizing (offset %s)',
+      (offset) => {
+        bookmark('u8', offset);
+        mount(view());
+        expect(top).toBe(800);
+        expect(returnButton()).toBeUndefined();
+        height = 1_200;
+        resize();
+        expect(top).toBe(1_000);
+        expect(returnButton()).toBeUndefined();
+      },
+    );
+
+    it('keeps an inactive or hydrating panel quiet and isolates conversation targets', () => {
+      mount(view({ isHistoryLoading: true }));
+      expect(returnButton()).toBeUndefined();
+      act(() => root?.render(view({ isActive: false })));
+      expect(returnButton()).toBeUndefined();
+      act(() => root?.render(view()));
+      expect(returnButton()).toBeDefined();
+      act(() => root?.render(view({ viewKey: 'no-reading-bookmark' })));
+      expect(returnButton()).toBeUndefined();
+      bookmark();
+      act(() => root?.render(view({ activationId: 1 })));
+      expect(returnButton()).toBeUndefined();
+    });
+
+    it('yields to explicit open positioning and search navigation', () => {
+      mount(view({ openPositionRequestNonce: 1 }));
+      expect(returnButton()).toBeUndefined();
+      act(() => root?.render(view({ activationId: 1, messages: history(11) })));
+      expect(returnButton()).toBeDefined();
+      act(() =>
+        thread().dispatchEvent(
+          new Event('chat-reveal-search', { cancelable: true }),
+        ),
+      );
+      expect(returnButton()).toBeUndefined();
+      scrollTo(500);
+      expect(returnButton()).toBeUndefined();
+    });
   });
 
   it('keeps the reading window across live-to-history ID reconciliation', () => {

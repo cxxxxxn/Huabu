@@ -129,7 +129,9 @@ vi.mock('@/hooks/useBuiltinThreadSettings', () => ({
   }),
 }));
 vi.mock('@/components/Messages/MessageList', () => ({
-  MessageList: () => null,
+  MessageList: ({ submissionNonce }: { submissionNonce?: number }) => (
+    <div data-message-list-submission={submissionNonce} />
+  ),
 }));
 vi.mock('./ChangeReviewCard', () => ({ ChangeReviewCard: () => null }));
 vi.mock('./AgentSelector', () => ({ AgentSelector: () => null }));
@@ -1025,6 +1027,11 @@ describe('rendered conversation titles', () => {
       },
     );
     await renderPanel();
+    expect(
+      container
+        .querySelector('[data-message-list-submission]')
+        ?.getAttribute('data-message-list-submission'),
+    ).toBe('0');
     await act(async () =>
       container
         .querySelector('form')!
@@ -1033,6 +1040,11 @@ describe('rendered conversation titles', () => {
         ),
     );
     expect(title()).toBe('New conversation');
+    expect(
+      container
+        .querySelector('[data-message-list-submission]')
+        ?.getAttribute('data-message-list-submission'),
+    ).toBe('1');
     expect(header().textContent).toBe('New conversation');
     expect(query).not.toHaveBeenCalled();
     await act(async () =>

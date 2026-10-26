@@ -1009,7 +1009,7 @@
     "showEarlierTurns": "Show {{count}} earlier turns",
     "loadingEarlierTurns": "Loading earlier turns…",
     "backToBottom": "Back to bottom",
-    "returnToReadingPosition": "Return to previous reading position",
+    "returnToReadingPosition": "Back to last reading position",
     "readingPositionUnavailable": "Your previous reading position is no longer available.",
     "newMessage": "New message",
     "conversationIntegrityError": "This Agent node's conversation is no longer available. Reopen the node to continue.",

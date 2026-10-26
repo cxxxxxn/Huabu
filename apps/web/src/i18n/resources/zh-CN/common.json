@@ -1009,7 +1009,7 @@
     "showEarlierTurns": "显示更早的 {{count}} 个轮次",
     "loadingEarlierTurns": "正在加载更早的轮次…",
     "backToBottom": "回到底部",
-    "returnToReadingPosition": "回到刚才阅读的位置",
+    "returnToReadingPosition": "回到上次浏览处",
     "readingPositionUnavailable": "之前的阅读位置已不可用。",
     "newMessage": "新消息",
     "conversationIntegrityError": "此 Agent 节点的对话已不可用。请重新打开节点以继续。",

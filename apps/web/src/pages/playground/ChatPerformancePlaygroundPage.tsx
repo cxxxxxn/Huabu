@@ -175,6 +175,7 @@ function ActivationPanel({
 }) {
   const [mountId] = useState(() => crypto.randomUUID());
   const [submittedDraft, setSubmittedDraft] = useState('');
+  const [submissionNonce, setSubmissionNonce] = useState(0);
   const session = useMemo(
     () => ({ ...SESSION, threadId: `activation-fixture-${tabId}` }),
     [tabId],
@@ -199,11 +200,13 @@ function ActivationPanel({
           olderTurnBatchSize={3}
           activationId={activationId}
           completedTurnId={thread.completedTurnId}
+          submissionNonce={submissionNonce}
         />
         <div className="pt-3">
           <ThreadChatInput
             onSubmit={(event, _mode, draft) => {
               event.preventDefault();
+              setSubmissionNonce((nonce) => nonce + 1);
               setSubmittedDraft(draft);
               useChatStore.getState().setDraft(session.threadId, '');
             }}
@@ -272,15 +275,15 @@ function ActivationFixture() {
     RETAINABLE_TABS,
   );
 
-  function updateTurn(complete: boolean) {
+  function updateTurn(complete: boolean, tabId = activeTabId) {
     setThreads((current) => {
-      const previous = requireThread(current, activeTabId);
+      const previous = requireThread(current, tabId);
       if (previous.isLoading !== complete) return current;
       const turnCount = previous.turnCount + (complete ? 0 : 1);
-      const turnId = `${activeTabId}-turn-${turnCount}`;
+      const turnId = `${tabId}-turn-${turnCount}`;
       return {
         ...current,
-        [activeTabId]: {
+        [tabId]: {
           turnCount,
           isLoading: !complete,
           completedTurnId: complete ? turnId : previous.completedTurnId,
@@ -292,7 +295,7 @@ function ActivationFixture() {
               )
             : [
                 ...previous.messages,
-                ...buildTurn(activeTabId, turnCount).map((message) => ({
+                ...buildTurn(tabId, turnCount).map((message) => ({
                   ...message,
                   historyTurnActive: true,
                 })),
@@ -342,6 +345,11 @@ function ActivationFixture() {
           Complete turn
         </Button>
       </nav>
+      {activeTabId !== 'a' && (
+        <Button variant="outline" onClick={() => updateTurn(false, 'a')}>
+          Add background turn to A
+        </Button>
+      )}
       {retainedTabs.map((tab) => (
         <Activity
           key={tab.id}

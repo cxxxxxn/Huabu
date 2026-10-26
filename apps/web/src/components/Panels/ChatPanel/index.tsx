@@ -744,10 +744,12 @@ export const ChatPanel = ({
     onRenameRequestHandled,
   ]);
 
+  const [submissionNonce, setSubmissionNonce] = useState(0);
   const handleSubmit = useCallback(
     async (e: React.FormEvent, agentMode: AgentMode, draft: string) => {
       e.preventDefault();
       if (!selectThreadHistoryLoaded(useChatStore.getState(), threadId)) return;
+      setSubmissionNonce((nonce) => nonce + 1);
       // Strip leading `/<id>` tokens that match a known slash command
       // and forward them as `invokedSkills`. Skill invocation is gated
       // to **internal + operate mode** only:
@@ -1079,6 +1081,7 @@ export const ChatPanel = ({
             recentTurnCount={recentTurnCount}
             activationId={activationId}
             completedTurnId={completedTurnId}
+            submissionNonce={submissionNonce}
             threadId={threadId}
             isLoading={isLoading}
             isHistoryLoading={!isHistoryLoaded && !historyError}
