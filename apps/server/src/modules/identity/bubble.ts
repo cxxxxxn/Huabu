@@ -20,22 +20,68 @@ import { identityPrincipalSchema } from '@huabu/shared';
 
 import { IdentityError } from './service.js';
 
-import type { IdentityService } from './service.js';
+import type { IdentityService, ResourceDirectory } from './service.js';
 import type {
+  BubbleAuthzOptions,
   BubbleStore,
   CreateBubbleRuntimeOptions,
 } from '@octostaff/bubble';
 import type { FastifyPluginAsync } from 'fastify';
 
 /**
- * Huabu's permissions, added to Bubble's roles and granted on Bubble's system
- * target: a system `member` may use Huabu, a system `owner` may also manage it.
+ * Huabu's permission model, kept in Bubble's grant table and answered by
+ * Bubble's policy. On Bubble's system target, a `member` may use Huabu and an
+ * `owner` may also manage it; a system owner also holds every Huabu capability
+ * on every Workspace and Space. A Workspace owner may read and write every
+ * Space in that Workspace; a Space owner, that Space and the Spaces inside it.
+ * Only a system owner grants the ownership roles, so there is no sharing
+ * between members.
  */
 const USE = 'huabu.use';
 const MANAGE = 'huabu.manage';
-const HUABU_ROLES = {
-  capabilitiesByRole: { member: [USE], owner: [USE, MANAGE] },
+const READ = 'huabu.space.read';
+const WRITE = 'huabu.space.write';
+const TARGET = { workspace: 'huabu.workspace', space: 'huabu.space' } as const;
+const OWNER_ROLE = {
+  workspace: 'huabu.workspace.owner',
+  space: 'huabu.space.owner',
 } as const;
+
+function huabuAuthz(resources: ResourceDirectory): BubbleAuthzOptions {
+  return {
+    coreRoleCapabilities: { member: [USE], owner: [USE, MANAGE] },
+    targets: {
+      [TARGET.workspace]: {
+        resolve: async (id) =>
+          (await resources.workspaceExists(id)) ? { parent: null } : null,
+      },
+      [TARGET.space]: {
+        resolve: async (id) => {
+          const parent = await resources.spaceParent(id);
+          return parent
+            ? { parent: { type: TARGET[parent.type], id: parent.id } }
+            : null;
+        },
+      },
+    },
+    roles: {
+      [OWNER_ROLE.workspace]: {
+        grantableOn: [TARGET.workspace],
+        capabilities: [READ, WRITE],
+        managementCapability: MANAGE,
+      },
+      [OWNER_ROLE.space]: {
+        grantableOn: [TARGET.space],
+        capabilities: [READ, WRITE],
+        managementCapability: MANAGE,
+      },
+    },
+    inheritance: [
+      { from: TARGET.workspace, to: TARGET.space, capabilities: [READ, WRITE] },
+      { from: TARGET.space, to: TARGET.space, capabilities: [READ, WRITE] },
+    ],
+  };
+}
 
 /** Bubble's records live beside Huabu's, in a schema of their own. */
 export async function openBubblePostgresStore(
@@ -63,6 +109,7 @@ export async function openBubbleIdentity(options: {
   /** Principal provisioned as Bubble system owner. */
   owner?: string;
   store: BubbleStore;
+  resources: ResourceDirectory;
 }): Promise<{ service: IdentityService; plugin: FastifyPluginAsync }> {
   const { store, owner } = options;
   const runtime = await createBubbleRuntime({
@@ -70,7 +117,7 @@ export async function openBubbleIdentity(options: {
     authenticator: options.authenticator,
     // Huabu owners are provisioned, never whoever logs in first.
     autoGrantFirstUserSystemOwner: false,
-    authzContributions: [HUABU_ROLES],
+    authz: huabuAuthz(options.resources),
   }).catch(async (error: unknown) => {
     await store.close?.();
     throw error;
@@ -80,13 +127,19 @@ export async function openBubbleIdentity(options: {
     // federated user is granted ownership through Bubble after first login.
     if (!(await store.principals.get(owner))) {
       await store.principals.upsert({ principalId: owner, kind: 'user' });
-      await store.grants.grant(
-        { type: 'principal', principalId: owner },
-        owner,
-        'owner',
-      );
+      await store.grants.add({
+        target: { type: 'principal', principalId: owner },
+        principalId: owner,
+        role: 'owner',
+        grantedByPrincipalId: null,
+      });
     }
-    await store.grants.grant({ type: 'system' }, owner, 'owner');
+    await store.grants.add({
+      target: { type: 'system' },
+      principalId: owner,
+      role: 'owner',
+      grantedByPrincipalId: null,
+    });
   }
   const { identity } = runtime.application;
 
@@ -112,11 +165,27 @@ export async function openBubbleIdentity(options: {
             { actorPrincipalId: registered.principalId },
             bubbleAuthContextToPrincipal(registered),
           );
-          const authz = runtime.policy.forCaller(registered.principalId);
+          const { principalId } = registered;
+          const { policy } = runtime;
           return {
             principal: identityPrincipalSchema.parse(whoami.principal),
-            member: await authz.can(USE, { type: 'system' }),
-            owner: await authz.can(MANAGE, { type: 'system' }),
+            member: await policy.can(USE, principalId, { type: 'system' }),
+            owner: await policy.can(MANAGE, principalId, { type: 'system' }),
+            access: {
+              can: (level, resource) =>
+                policy.can(level === 'read' ? READ : WRITE, principalId, {
+                  type: TARGET[resource.type],
+                  id: resource.id,
+                }),
+              claim: async (resource) => {
+                await store.grants.add({
+                  target: { type: TARGET[resource.type], id: resource.id },
+                  principalId,
+                  role: OWNER_ROLE[resource.type],
+                  grantedByPrincipalId: principalId,
+                });
+              },
+            },
           };
         } catch (error) {
           if (isBubbleProtocolError(error)) {

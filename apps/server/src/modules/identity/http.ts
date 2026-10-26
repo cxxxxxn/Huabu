@@ -4,7 +4,7 @@
 import { timingSafeEqual } from 'node:crypto';
 
 import { getRequestIdentity, setRequestIdentity } from './request.js';
-import { IdentityError } from './service.js';
+import { IdentityError, UNRESTRICTED_ACCESS } from './service.js';
 import { isPublicRfsSkillBootstrapRequest } from '../remote_fs/public-skill.js';
 import { isLoopbackRequest } from '../security/peer.js';
 
@@ -17,6 +17,30 @@ declare module 'fastify' {
     /** Set by a mounted service that authenticates its own callers. */
     identity?: 'route-owned';
   }
+}
+
+const SESSION_PATH = '/api/identity/session';
+const SESSION_COOKIE = 'huabu_session';
+
+/** The Bearer credential a browser session carries, if it has one. */
+function sessionAuthorization(cookieHeader: string | undefined) {
+  for (const part of cookieHeader?.split(';') ?? []) {
+    const [name, ...value] = part.trim().split('=');
+    if (name === SESSION_COOKIE && value.length)
+      return `Bearer ${decodeURIComponent(value.join('='))}`;
+  }
+  return undefined;
+}
+
+function sessionCookie(value: string, secure: boolean, maxAge?: number) {
+  return [
+    `${SESSION_COOKIE}=${value}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Strict',
+    ...(secure ? ['Secure'] : []),
+    ...(maxAge === undefined ? [] : [`Max-Age=${maxAge}`]),
+  ].join('; ');
 }
 
 /** Install on the host scope before routes; machine credentials stay host-owned. */
@@ -39,12 +63,19 @@ export function registerIdentity(
     for (const close of activeResponses) close();
   });
   app.addHook('onRequest', async (request, reply) => {
-    const identityRoute = request.url.split('?', 1)[0] === '/api/identity';
+    const path = request.url.split('?', 1)[0];
+    const identityRoute = path === '/api/identity' || path === SESSION_PATH;
     if (identityRoute) reply.header('Cache-Control', 'no-store');
     if (request.method === 'OPTIONS') return;
     // Matched by route, not URL, so no path spelling can borrow the exemption.
     if (request.routeOptions.config?.identity === 'route-owned') return;
-    const authorization = request.headers.authorization;
+    // A browser cannot attach a header to an image, frame or download, so in
+    // Bubble mode its session cookie carries the same Bearer credential.
+    const authorization =
+      request.headers.authorization ??
+      (service.provider === 'bubble'
+        ? sessionAuthorization(request.headers.cookie)
+        : undefined);
     if (
       isPublicRfsSkillBootstrapRequest({
         method: request.method,
@@ -70,6 +101,7 @@ export function registerIdentity(
         principal: { principalId: 'huabu-agentlet', kind: 'bot' },
         member: true,
         owner: false,
+        access: UNRESTRICTED_ACCESS,
       });
       return;
     }
@@ -102,11 +134,9 @@ export function registerIdentity(
       }
       setRequestIdentity(request, identity);
       // A login alone is not Huabu access. Without it a principal may inspect
-      // only their own identity; routes that need an owner check that themselves.
-      if (
-        !identity.member &&
-        !(['GET', 'HEAD'].includes(request.method) && identityRoute)
-      ) {
+      // only their own identity and session; routes that need an owner check
+      // that themselves.
+      if (!identity.member && !identityRoute) {
         return reply.code(403).send({
           message: 'Huabu access required',
           code: 'ACCESS_REQUIRED',
@@ -170,7 +200,47 @@ export function registerIdentity(
       const identity = getRequestIdentity(request);
       if (!identity)
         throw new Error('Identity admission did not resolve a principal');
-      return { provider: service.provider, ...identity };
+      const { principal, member, owner } = identity;
+      return { provider: service.provider, principal, member, owner };
     },
+  );
+
+  if (service.provider !== 'bubble') return;
+  // The SPA hands over the credential it obtained once; Bubble validates it on
+  // every request, so the cookie is a carrier and never a session of its own.
+  app.post(SESSION_PATH, async (request, reply) => {
+    const header = request.headers.authorization;
+    const token = header?.match(/^Bearer\s+(\S+)$/i)?.[1];
+    // Only a credential Bubble accepts becomes a session, never the cookie
+    // itself or the machine token.
+    if (
+      !token ||
+      !(await service.authenticate({ authorization: header, loopback: false }))
+    ) {
+      return reply.code(400).send({
+        message: 'A Bubble Bearer credential is required',
+        code: 'IDENTITY_REQUIRED',
+      });
+    }
+    return reply
+      .header(
+        'Set-Cookie',
+        sessionCookie(encodeURIComponent(token), request.protocol === 'https'),
+      )
+      .code(204)
+      .send();
+  });
+  // Ending a session needs no valid credential: an expired one must still go.
+  app.delete(
+    SESSION_PATH,
+    { config: { identity: 'route-owned' } },
+    async (request, reply) =>
+      reply
+        .header(
+          'Set-Cookie',
+          sessionCookie('', request.protocol === 'https', 0),
+        )
+        .code(204)
+        .send(),
   );
 }

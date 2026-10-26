@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import { isOwnerRequest } from './owner.js';
 import { setRequestIdentity } from '../identity/request.js';
+import { UNRESTRICTED_ACCESS } from '../identity/service.js';
 
 import type { FastifyRequest } from 'fastify';
 
@@ -27,6 +28,7 @@ describe('owner request authorization', () => {
       principal: { principalId: 'owner', kind: 'user' },
       member: true,
       owner: true,
+      access: UNRESTRICTED_ACCESS,
     });
     expect(isOwnerRequest(remote)).toBe(true);
   });
@@ -37,6 +39,7 @@ describe('owner request authorization', () => {
       principal: { principalId: 'agent', kind: 'bot' },
       member: true,
       owner: false,
+      access: UNRESTRICTED_ACCESS,
     });
     expect(isOwnerRequest(local)).toBe(false);
   });

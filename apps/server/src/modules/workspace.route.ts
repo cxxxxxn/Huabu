@@ -9,6 +9,7 @@ import path from 'node:path';
 import { validatePathSchema, workspacePathSchema } from '@huabu/shared';
 
 import { resetPreprocessDispatcher } from './preprocessing/index.js';
+import { isOwnerRequest } from './security/owner.js';
 import {
   getStructuredStore,
   materializesWorkspaces,
@@ -187,6 +188,15 @@ async function buildWorkspaceState(): Promise<WorkspaceInfo> {
 }
 
 const workspaceRoutes: FastifyPluginAsync = async (app) => {
+  // The active Workspace is the whole Server's, so only an owner changes it.
+  app.addHook('preHandler', async (request, reply) => {
+    if (request.method !== 'GET' && !isOwnerRequest(request)) {
+      return reply.status(403).send({
+        message: 'Forbidden: changing the Workspace requires an owner',
+      });
+    }
+  });
+
   // ────────────────────────────────────────────────────────────────
   // GET /api/workspace — read-only state + capabilities
   // Always available (clients need to know the mode).

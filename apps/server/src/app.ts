@@ -55,6 +55,7 @@ import {
   resolveAllowedHostnames,
 } from './modules/security/index.js';
 import { createApplicationRateLimitOptions } from './modules/security/rate-limit.js';
+import { registerSpaceAccess } from './modules/security/space-access.js';
 import serviceRoutes from './modules/services/services.route.js';
 import { closeStorage } from './modules/storage/index.js';
 import webRoutes from './modules/web/web.route.js';
@@ -115,7 +116,7 @@ app.register(cors, createCorsOptions(allowedHostnames));
 // ── Network security guards ──────────────────────────────────────────
 // Registered before identity admission so misaddressed requests fail fast with
 // a clear 403 instead of an auth challenge. Order matters:
-//   hostGuard → originGuard → identity → workspace guard → routes.
+//   hostGuard → originGuard → identity → workspace guard → Space access → routes.
 app.register(hostGuardPlugin);
 app.register(originGuardPlugin);
 
@@ -177,6 +178,9 @@ app.addHook('preHandler', async (request, reply) => {
     });
   }
 });
+
+// Every Space a request names is authorized before its route runs.
+registerSpaceAccess(app);
 
 app.register(agentRoutes, { prefix: '/api/agent' });
 app.register(agentChangeReviewConfigRoutes, {

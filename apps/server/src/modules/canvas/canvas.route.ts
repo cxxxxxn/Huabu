@@ -88,6 +88,7 @@ import { ARTIFACT_URL_REGEX } from '../artifact/utils.js';
 import { getPreprocessDispatcher, getProfile } from '../preprocessing/index.js';
 import { isLabelProtected } from '../preprocessing/label-policy.js';
 import { stripOfficeparserPreamble } from '../preprocessing/loaders/office-strip.js';
+import { claimSpace, readableSpaces } from '../security/space-access.js';
 import {
   space,
   createSpace,
@@ -635,10 +636,13 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get<{ Reply: ApiResult<ListCanvasesResponse> }>(
     '/',
-    async function (_request, reply) {
-      const summaries = [...(await getStructuredStore().spaces().list())].sort(
-        (a, b) => b.updatedAt - a.updatedAt,
-      );
+    async function (request, reply) {
+      const summaries = [
+        ...(await readableSpaces(
+          request,
+          await getStructuredStore().spaces().list(),
+        )),
+      ].sort((a, b) => b.updatedAt - a.updatedAt);
 
       return reply.send({ canvases: summaries });
     },
@@ -665,6 +669,7 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     const canvas = created.record;
+    await claimSpace(request, canvas.canvasId);
     return reply
       .code(201)
       .send({ canvasId: canvas.canvasId, title: canvas.title });
@@ -1632,9 +1637,13 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(
-        await moveCanvasSelection(params.data.canvasId, parsed.data),
+      const moved = await moveCanvasSelection(
+        params.data.canvasId,
+        parsed.data,
       );
+      if (moved.destination.created)
+        await claimSpace(request, moved.destination.canvasId);
+      return reply.send(moved);
     } catch (error) {
       if (error instanceof SpaceMoveError) {
         return reply.code(error.statusCode).send({
@@ -2193,6 +2202,7 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
         });
         stagingCleanedUp = true;
 
+        await claimSpace(request, targetCanvasId);
         const response: ImportCanvasResponse = {
           canvasId: targetCanvasId,
         };
@@ -2222,6 +2232,7 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
   // an `AbortController` so it short-circuits between nodes.
   fastify.post<{ Params: { canvasId: string } }>(
     '/:canvasId/search',
+    { config: { spaceAccess: 'read' } },
     async function (request, reply) {
       const { canvasId } = request.params;
       const parsed = canvasSearchRequestSchema.safeParse(request.body);

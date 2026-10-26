@@ -3,17 +3,25 @@
 
 import { resolveIdentityConfig } from './config.js';
 import { createLocalIdentityService } from './local.js';
+import { storageResourceDirectory } from './resources.js';
 
-import type { IdentityService } from './service.js';
+import type { IdentityService, ResourceDirectory } from './service.js';
 import type { BubbleAuthConfig } from '@octostaff/bubble';
 import type { FastifyPluginAsync } from 'fastify';
 
 export { registerIdentity } from './http.js';
 export { getRequestIdentity } from './request.js';
-export type { IdentityService, ResolvedIdentity } from './service.js';
+export type {
+  HuabuResource,
+  IdentityService,
+  ResolvedIdentity,
+} from './service.js';
 
 /** The selected provider, plus Bubble's own API when Bubble provides identity. */
-export function createIdentity(env: NodeJS.ProcessEnv = process.env): {
+export function createIdentity(
+  env: NodeJS.ProcessEnv = process.env,
+  resources: ResourceDirectory = storageResourceDirectory,
+): {
   service: IdentityService;
   bubble?: FastifyPluginAsync;
 } {
@@ -31,6 +39,7 @@ export function createIdentity(env: NodeJS.ProcessEnv = process.env): {
       authenticator: authenticators as BubbleAuthConfig,
       owner,
       store: await bubble.openBubblePostgresStore(postgresUrl),
+      resources,
     });
   }
   return {

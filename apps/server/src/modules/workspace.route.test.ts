@@ -49,6 +49,7 @@ vi.mock('./storage/index.js', async (importOriginal) => {
 import { getStructuredStore } from './storage/index.js';
 import { activateWorkspacePath } from './workspace-activation.js';
 import workspaceRoutes from './workspace.route.js';
+import { registerLocalTestIdentity } from '../test-support/local-identity.js';
 
 import type * as StorageModule from './storage/index.js';
 import type * as WorkspaceActivationModule from './workspace-activation.js';
@@ -59,6 +60,7 @@ const spaces = vi.fn(() => ({ list: vi.fn(), worldId }));
 
 async function buildApp() {
   const app = fastify();
+  registerLocalTestIdentity(app);
   await app.register(workspaceRoutes, { prefix: '/workspace' });
   await app.ready();
   return app;

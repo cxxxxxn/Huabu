@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAcpAgentCliRoutes } from './agent-cli.route.js';
 import { registerLocalTestIdentity } from '../../../test-support/local-identity.js';
 import { setRequestIdentity } from '../../identity/request.js';
+import { UNRESTRICTED_ACCESS } from '../../identity/service.js';
 
 import type { FastifyInstance } from 'fastify';
 
@@ -92,6 +93,7 @@ describe('ACP agent CLI route', () => {
         principal: { principalId: 'test-owner', kind: 'user' },
         member: true,
         owner: true,
+        access: UNRESTRICTED_ACCESS,
       });
     });
     await app.register(createAcpAgentCliRoutes(detect), {

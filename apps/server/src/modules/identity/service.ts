@@ -17,6 +17,39 @@ export interface ResolvedIdentity {
   member: boolean;
   /** May also change settings, credentials and agent configuration. */
   owner: boolean;
+  /** What this caller may do with individual Workspaces and Spaces. */
+  access: ResourceAccess;
+}
+
+/** A Huabu resource whose access the identity provider decides; `id` is Huabu's. */
+export interface HuabuResource {
+  type: 'workspace' | 'space';
+  id: string;
+}
+
+export interface ResourceAccess {
+  can(level: 'read' | 'write', resource: HuabuResource): Promise<boolean>;
+  /** Make the caller the owner of a resource it has just created. */
+  claim(resource: HuabuResource): Promise<void>;
+}
+
+/**
+ * For callers outside per-resource authorization: the local owner, and the
+ * machine credential that already holds the whole RFS surface.
+ */
+export const UNRESTRICTED_ACCESS: ResourceAccess = {
+  can: async () => true,
+  claim: async () => {},
+};
+
+/** Where Huabu's resources sit, as the provider needs to know to authorize them. */
+export interface ResourceDirectory {
+  workspaceExists(workspaceId: string): Promise<boolean>;
+  /**
+   * The Space's parent Space, or its Workspace when it is a root; `null` when
+   * there is no such Space.
+   */
+  spaceParent(canvasId: string): Promise<HuabuResource | null>;
 }
 
 /** Resolve afresh for each request so revocation is not hidden by a host cache. */

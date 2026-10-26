@@ -9,8 +9,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { openBubbleIdentity } from './bubble.js';
 import { registerIdentity } from './http.js';
+import { getRequestIdentity } from './request.js';
 import { isOwnerRequest } from '../security/owner.js';
 
+import type { HuabuResource, ResourceDirectory } from './service.js';
+import type { BubbleStore } from '@octostaff/bubble';
+import type { AuthzTarget, Role } from '@octostaff/sdk';
 import type { FastifyInstance } from 'fastify';
 import type { AddressInfo } from 'node:net';
 
@@ -31,6 +35,42 @@ const AUTHENTICATORS: Authenticator = [
   },
 ];
 
+const SYSTEM = { type: 'system' } as const;
+/** Bubble keeps one row per role; these grant or drop every role on a target. */
+async function grant(
+  store: BubbleStore,
+  principalId: string,
+  role: Role,
+  target: AuthzTarget = SYSTEM,
+) {
+  await store.grants.add({
+    target,
+    principalId,
+    role,
+    grantedByPrincipalId: null,
+  });
+}
+async function revokeAll(
+  store: BubbleStore,
+  principalId: string,
+  target: AuthzTarget = SYSTEM,
+) {
+  for (const row of await store.grants.list({ target, principalId }))
+    await store.grants.remove(row.grantId);
+}
+
+/** Workspace `w1` holds Spaces `a` and `b`, `a` holds `a1`; `w2` holds `c`. */
+const PARENTS: Record<string, HuabuResource> = {
+  a: { type: 'workspace', id: 'w1' },
+  a1: { type: 'space', id: 'a' },
+  b: { type: 'workspace', id: 'w1' },
+  c: { type: 'workspace', id: 'w2' },
+};
+const RESOURCES: ResourceDirectory = {
+  workspaceExists: async (id) => id === 'w1' || id === 'w2',
+  spaceParent: async (id) => PARENTS[id] ?? null,
+};
+
 const servers: FastifyInstance[] = [];
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((app) => app.close()));
@@ -49,6 +89,7 @@ async function host(
     authenticator: options.authenticator ?? AUTHENTICATORS,
     owner: 'owner' in options ? options.owner : 'admin',
     store,
+    resources: RESOURCES,
   });
   const app = Fastify();
   servers.push(app);
@@ -59,6 +100,33 @@ async function host(
   });
   void app.register(bubble.plugin, { prefix: '/bubble' });
   app.get('/api/data', async () => ({ private: true }));
+  // Answers what the caller may do with each Space, and claims one on POST.
+  app.get('/api/access', async (request) => {
+    const { access } = getRequestIdentity(request)!;
+    const levels = async (id: string) =>
+      (
+        await Promise.all(
+          (['read', 'write'] as const).map(async (level) =>
+            (await access.can(level, { type: 'space', id })) ? level : '',
+          ),
+        )
+      ).join('');
+    return Object.fromEntries(
+      await Promise.all(
+        ['a', 'a1', 'b', 'c', 'missing'].map(async (id) => [
+          id,
+          await levels(id),
+        ]),
+      ),
+    );
+  });
+  app.post<{ Params: { id: string } }>('/api/claim/:id', async (request) => {
+    await getRequestIdentity(request)!.access.claim({
+      type: 'space',
+      id: request.params.id,
+    });
+    return {};
+  });
   app.get('/api/settings', async (request, reply) =>
     isOwnerRequest(request) ? { private: true } : reply.code(403).send({}),
   );
@@ -129,14 +197,15 @@ describe('Bubble identity', () => {
       );
     expect(await statuses()).toEqual([403, 403]);
 
-    await store.grants.grant({ type: 'system' }, 'carol', 'member');
+    await grant(store, 'carol', 'member');
     expect(await identity()).toMatchObject({ member: true, owner: false });
     expect(await statuses()).toEqual([200, 403]);
 
     // Roles carry Huabu access only on the system target, and only these two.
-    await store.grants.grant({ type: 'system' }, 'carol', 'system_manager');
+    await revokeAll(store, 'carol');
+    await grant(store, 'carol', 'system_manager');
     expect(await identity()).toMatchObject({ member: false, owner: false });
-    await store.grants.grant({ type: 'system' }, 'carol', 'owner');
+    await grant(store, 'carol', 'owner');
     expect(await statuses()).toEqual([200, 200]);
   });
 
@@ -171,7 +240,7 @@ describe('Bubble identity', () => {
     expect(
       (await app.inject({ url: '/api/data', headers: local })).statusCode,
     ).toBe(403);
-    const granted = await admin('PUT', '/grants', {
+    const granted = await admin('POST', '/grants', {
       target: { type: 'system' },
       principalId: 'ci-bot',
       role: 'owner',
@@ -246,12 +315,12 @@ describe('Bubble identity', () => {
     const { app, store } = await host();
     const alice = { url: '/api/data', headers: as('alice') };
     expect((await app.inject(alice)).statusCode).toBe(403);
-    await store.grants.grant({ type: 'system' }, 'alice', 'owner');
+    await grant(store, 'alice', 'owner');
     expect((await app.inject(alice)).statusCode).toBe(200);
-    await store.grants.revoke({ type: 'system' }, 'alice');
+    await revokeAll(store, 'alice');
     expect((await app.inject(alice)).statusCode).toBe(403);
 
-    await store.grants.grant({ type: 'system' }, 'alice', 'owner');
+    await grant(store, 'alice', 'owner');
     await store.principals.update('alice', {
       disabledAt: '2026-09-29T00:00:00Z',
     });
@@ -277,14 +346,131 @@ describe('Bubble identity', () => {
       return reader;
     }
     const reader = await open();
-    await store.grants.revoke({ type: 'system' }, 'admin');
+    await revokeAll(store, 'admin');
     expect((await reader.read()).done).toBe(true);
 
-    await store.grants.grant({ type: 'system' }, 'admin', 'owner');
+    await grant(store, 'admin', 'owner');
     const second = await open();
     const closed = second.read().catch(() => ({ done: true }));
     await app.close();
     expect((await closed).done).toBe(true);
+  });
+
+  it('lets a member reach only the Spaces they own, and a Workspace owner every Space in it', async () => {
+    const { app, store } = await host();
+    const access = async (principalId: string) =>
+      (
+        await app.inject({ url: '/api/access', headers: as(principalId) })
+      ).json();
+    for (const principalId of ['carol', 'dave'])
+      await grant(store, principalId, 'member');
+    const none = { a: '', a1: '', b: '', c: '', missing: '' };
+    expect(await access('carol')).toEqual(none);
+
+    // Creating a Space makes its creator the owner of it and the Spaces inside
+    // it, and nobody else.
+    const claimed = await app.inject({
+      method: 'POST',
+      url: '/api/claim/a',
+      headers: as('carol'),
+    });
+    expect(claimed.statusCode).toBe(200);
+    expect(await access('carol')).toEqual({
+      ...none,
+      a: 'readwrite',
+      a1: 'readwrite',
+    });
+    expect(await access('dave')).toEqual(none);
+
+    // A Workspace owner reaches its Spaces, not another Workspace's.
+    await grant(store, 'dave', 'huabu.workspace.owner', {
+      type: 'huabu.workspace',
+      id: 'w1',
+    });
+    expect(await access('dave')).toEqual({
+      ...none,
+      a: 'readwrite',
+      a1: 'readwrite',
+      b: 'readwrite',
+    });
+
+    // The system owner reaches every Space that exists.
+    expect(await access('admin')).toEqual({
+      a: 'readwrite',
+      a1: 'readwrite',
+      b: 'readwrite',
+      c: 'readwrite',
+      missing: '',
+    });
+  });
+
+  it('leaves granting Space ownership to system owners', async () => {
+    const { app, store } = await host();
+    await grant(store, 'carol', 'member');
+    await app.inject({
+      method: 'POST',
+      url: '/api/claim/a',
+      headers: as('carol'),
+    });
+    const share = (principalId: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/bubble/v1/grants',
+        headers: as(principalId),
+        payload: {
+          target: { type: 'huabu.space', id: 'a' },
+          principalId: 'dave',
+          role: 'huabu.space.owner',
+        },
+      });
+    expect((await share('carol')).statusCode).toBe(403);
+    expect((await share('admin')).statusCode).toBeLessThan(300);
+  });
+
+  it('carries a validated Bearer credential in an HttpOnly session cookie', async () => {
+    const { app } = await host();
+    // Only a credential Bubble accepts becomes a session.
+    const refused = await app.inject({
+      method: 'POST',
+      url: '/api/identity/session',
+      headers: { authorization: 'Bearer machine-secret' },
+    });
+    expect(refused.statusCode).toBe(400);
+
+    const started = await app.inject({
+      method: 'POST',
+      url: '/api/identity/session',
+      headers: MASTER,
+    });
+    expect(started.statusCode).toBe(204);
+    const cookie = String(started.headers['set-cookie']);
+    expect(cookie).toMatch(/^huabu_session=master-secret; /);
+    expect(cookie).toContain('HttpOnly');
+    expect(cookie).toContain('SameSite=Strict');
+
+    const session = { cookie: cookie.split(';', 1)[0] };
+    expect(
+      (await app.inject({ url: '/api/data', headers: session })).statusCode,
+    ).toBe(200);
+    // An explicit header still wins over the cookie.
+    expect(
+      (
+        await app.inject({
+          url: '/api/data',
+          headers: { ...session, authorization: 'Bearer wrong' },
+        })
+      ).statusCode,
+    ).toBe(401);
+
+    // Ending a session needs no credential and expires the cookie.
+    const ended = await app.inject({
+      method: 'DELETE',
+      url: '/api/identity/session',
+    });
+    expect(ended.statusCode).toBe(204);
+    expect(String(ended.headers['set-cookie'])).toMatch(
+      /^huabu_session=; .*Max-Age=0/,
+    );
   });
 
   it('fails closed with a redacted error when the verifier fails', async () => {
@@ -311,6 +497,7 @@ describe('Bubble identity', () => {
       openBubbleIdentity({
         authenticator: [{ driver: 'no-such-driver' }] as never,
         store: new InMemoryBubbleStore(),
+        resources: RESOURCES,
       }),
     ).rejects.toThrow();
   });

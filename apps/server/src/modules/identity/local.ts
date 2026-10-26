@@ -3,6 +3,8 @@
 
 import { timingSafeEqual } from 'node:crypto';
 
+import { UNRESTRICTED_ACCESS } from './service.js';
+
 import type { IdentityService } from './service.js';
 
 /** No directory or login server is needed for the existing single-owner mode. */
@@ -45,6 +47,7 @@ export function createLocalIdentityService(
         },
         member: true,
         owner: true,
+        access: UNRESTRICTED_ACCESS,
       };
     },
   };

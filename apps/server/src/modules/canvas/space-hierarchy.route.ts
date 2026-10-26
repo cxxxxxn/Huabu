@@ -16,6 +16,7 @@ import {
   SpaceHierarchyError,
 } from './space-hierarchy.js';
 import { withSpaceHierarchyLock } from './write-coordinator.js';
+import { claimSpace } from '../security/space-access.js';
 import { getStructuredStore } from '../storage/index.js';
 
 import type { FastifyInstance, FastifyReply } from 'fastify';
@@ -53,22 +54,41 @@ export function registerSpaceHierarchyRoutes(fastify: FastifyInstance): void {
     const body = createChildSpaceBodySchema.safeParse(request.body);
     if (!params.success || !body.success)
       return reply.code(400).send({ message: 'Invalid child Space request' });
-    return respond(reply, () =>
-      createChildSpace(
-        params.data.canvasId,
-        body.data.title,
-        body.data.position,
-      ),
-    );
+    // The creator owns the child, so detaching it later keeps it theirs.
+    return respond(reply, async () => {
+      try {
+        const created = await createChildSpace(
+          params.data.canvasId,
+          body.data.title,
+          body.data.position,
+        );
+        await claimSpace(request, created.canvasId);
+        return created;
+      } catch (error) {
+        const details = (error as SpaceHierarchyError).details as
+          | { canvasId?: unknown }
+          | undefined;
+        if (
+          error instanceof SpaceHierarchyError &&
+          typeof details?.canvasId === 'string'
+        )
+          await claimSpace(request, details.canvasId);
+        throw error;
+      }
+    });
   });
   fastify.patch('/:canvasId/parent', async (request, reply) => {
     const params = spaceHierarchyParamsSchema.safeParse(request.params);
     const body = spaceParentBodySchema.safeParse(request.body);
     if (!params.success || !body.success)
       return reply.code(400).send({ message: 'Invalid Space parent request' });
-    return respond(reply, () =>
-      setSpaceParent(params.data.canvasId, body.data),
-    );
+    return respond(reply, async () => {
+      const moved = await setSpaceParent(params.data.canvasId, body.data);
+      // A root Space inherits from no parent; whoever detached it keeps it.
+      if (moved.parentSpaceId === null)
+        await claimSpace(request, moved.canvasId);
+      return moved;
+    });
   });
   fastify.get('/:canvasId/deletion-preview', async (request, reply) => {
     const params = spaceHierarchyParamsSchema.safeParse(request.params);
