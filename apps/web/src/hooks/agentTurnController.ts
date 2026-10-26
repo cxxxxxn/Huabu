@@ -853,7 +853,7 @@ export function captureAgentTurnSources(
 ): CapturedAgentTurnSources {
   const scope = conversationRequestScope(
     session.conversationView,
-    session.ownerCanvasId,
+    session.canvasId,
   );
   const canvas = useCanvasStore.getState();
   if (!scope.includeCanvasSelection) {
@@ -904,6 +904,14 @@ export function prepareAgentTurnRetry(
   message: Extract<ChatMessage, { role: 'user' }>,
   mode: AgentMode,
 ): PreparedAgentTurn {
+  if (
+    session.canvasId !== session.ownerCanvasId &&
+    (message.selectedNodeIds?.length || message.selectedStrokeIds?.length)
+  ) {
+    throw new ConversationIntegrityError(
+      'Open the source Space to retry a turn with Canvas references',
+    );
+  }
   const sources = captureAgentTurnSources(session, {
     nodeIds: message.selectedNodeIds ?? [],
     strokeSelection: Object.fromEntries(
@@ -1065,7 +1073,7 @@ export async function dispatchAgentTurn(
     // a "source".
     const requestScope = conversationRequestScope(
       conversationView,
-      session.ownerCanvasId,
+      session.canvasId,
     );
     // Selected node ids are still recorded on the persisted user
     // message so the UI can re-render the selection chip after a

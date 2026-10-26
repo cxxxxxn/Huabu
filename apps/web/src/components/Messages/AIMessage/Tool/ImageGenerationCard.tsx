@@ -19,9 +19,10 @@
 import { ImagePlus, X as XIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { useChatSession } from '@/hooks/useChatSession';
+
 import { partIsExecuting, truncate } from './helpers';
 import { resolveArtifactUrl } from '../../../../api/artifact';
-import useCanvasStore from '../../../../store/canvasStore';
 import { Loading } from '../../../Common/Loading';
 import { AssistantDisclosure } from '../../AssistantDisclosure';
 
@@ -51,7 +52,7 @@ function pickDataFields(part: ImageGenerationToolPart) {
 
 export function ImageGenerationCard({ part }: ImageGenerationCardProps) {
   const { t } = useTranslation();
-  const canvasId = useCanvasStore((s) => s.canvasId);
+  const { ownerCanvasId: canvasId } = useChatSession();
   const { args, error: rawError } = pickDataFields(part);
   const executing = partIsExecuting(part);
   const failed = part.status === 'failed' || rawError !== undefined;

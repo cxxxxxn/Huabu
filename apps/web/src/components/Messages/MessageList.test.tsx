@@ -322,6 +322,22 @@ describe('MessageList bottom navigation', () => {
     expect(bottomButton()).toBeUndefined();
   });
 
+  it('reports whether the latest end is visible for result acknowledgements', () => {
+    const onLatestVisibleChange = vi.fn();
+    mount(
+      <MessageList
+        messages={[]}
+        isLoading={false}
+        onLatestVisibleChange={onLatestVisibleChange}
+      />,
+    );
+    expect(onLatestVisibleChange).toHaveBeenLastCalledWith(true);
+    scrollTo(200);
+    expect(onLatestVisibleChange).toHaveBeenLastCalledWith(false);
+    scrollTo(800);
+    expect(onLatestVisibleChange).toHaveBeenLastCalledWith(true);
+  });
+
   it('jumps instantly and follows late content and viewport growth', () => {
     mount(<MessageList messages={[]} isLoading={false} />);
     scrollTo(100);

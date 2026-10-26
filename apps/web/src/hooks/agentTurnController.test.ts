@@ -14,6 +14,10 @@ import {
   useChatStore,
 } from '@/store/chatStore';
 import { useGesturePreviewStore } from '@/store/gesturePreviewStore';
+import {
+  conversationOwnerKey,
+  useRemoteConversationOwnerStore,
+} from '@/store/remoteConversationOwner';
 
 import {
   claimAgentStream,
@@ -180,6 +184,68 @@ afterEach(() => {
   root = undefined;
   container = undefined;
   vi.restoreAllMocks();
+});
+
+describe('remote conversation execution', () => {
+  it('requires the source Space to retry historical Canvas references', () => {
+    expect(() =>
+      prepareAgentTurnRetry(
+        { ...questionSession, canvasId: 'parent' },
+        {
+          id: 'message',
+          role: 'user',
+          content: 'Review this',
+          selectedNodeIds: ['source-note'],
+        },
+        'operate',
+      ),
+    ).toThrow('Open the source Space');
+  });
+
+  it('sends and stops the original thread without saving or attaching the parent canvas', async () => {
+    const remote: ChatSession = { ...questionSession, canvasId: 'parent' };
+    useCanvasStore.getState()._setStateNoAutosave({ canvasId: 'parent' });
+    const parentNodes = useCanvasStore.getState().nodes;
+    useRemoteConversationOwnerStore.setState({
+      entries: {
+        [conversationOwnerKey('canvas-1', 'question-1', 'thread-1')]: {
+          owner: {
+            canvasId: 'canvas-1',
+            nodeId: 'question-1',
+            threadId: 'thread-1',
+            spaceTitle: 'Child',
+            source: {
+              hasAuthoredContent: true,
+              agentBinding: { kind: 'internal' },
+              agentMode: 'operate',
+              status: 'done',
+            },
+          },
+        },
+      },
+    });
+    const prepared = request('text', remote);
+    expect(prepared.sources).toEqual({
+      canvasId: 'canvas-1',
+      canvasContext: { selectedNodes: [] },
+    });
+    await dispatchAgentTurn(prepared);
+    expect(mocks.validate).toHaveBeenCalledWith(
+      questionSession.conversationView,
+    );
+    expect(mocks.stream.mock.calls[0][1]).toBe('thread-1');
+    expect(mocks.stream.mock.calls[0][4]).toMatchObject({
+      canvasId: 'canvas-1',
+      anchorNodeId: 'question-1',
+      canvasContext: { selectedNodes: [] },
+    });
+    expect(mocks.save).not.toHaveBeenCalled();
+    expect(useCanvasStore.getState().flushCanvasEvents).not.toHaveBeenCalled();
+    expect(useCanvasStore.getState().nodes).toBe(parentNodes);
+    stopAgentTurn(remote);
+    await Promise.resolve();
+    expect(mocks.stop).toHaveBeenCalledWith('thread-1', 'canvas-1');
+  });
 });
 
 describe('Ink interpretation lifecycle', () => {

@@ -16,10 +16,10 @@ import { Camera, X as XIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { NodeRef } from '@/components/Nodes/NodeRef/NodeRef';
+import { useChatSession } from '@/hooks/useChatSession';
 
 import { partIsExecuting } from './helpers';
 import { resolveArtifactUrl } from '../../../../api/artifact';
-import useCanvasStore from '../../../../store/canvasStore';
 import { Loading } from '../../../Common/Loading';
 import { AssistantDisclosure } from '../../AssistantDisclosure';
 
@@ -55,7 +55,7 @@ function pickDataFields(part: SnapshotNodesToolPart): {
 
 export function SnapshotNodesCard({ part }: SnapshotNodesCardProps) {
   const { t } = useTranslation();
-  const canvasId = useCanvasStore((s) => s.canvasId);
+  const { ownerCanvasId: canvasId } = useChatSession();
   const { nodeIds, snapshots, error: rawError } = pickDataFields(part);
   const executing = partIsExecuting(part);
   const failed = part.status === 'failed' || rawError !== undefined;

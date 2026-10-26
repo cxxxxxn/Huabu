@@ -25,10 +25,7 @@ import {
   useChatStore,
 } from '@/store/chatStore.ts';
 import { findPendingPermissionRequestId } from '@/store/chatTypes.ts';
-import {
-  acknowledgeConversationResult,
-  resolveConversationAgentBinding,
-} from '@/store/conversationOwner';
+import { resolveConversationAgentBinding } from '@/store/conversationOwner';
 import { usePreviewWorkspaceStore } from '@/store/previewWorkspace/store';
 import {
   getQuestionFontOpts,
@@ -212,37 +209,8 @@ export const QuestionNode = memo(
           'bottom',
           { transient },
         );
-        // Mark as viewed only once the run has finished.
-        if (hasRun && !data.viewed) {
-          void acknowledgeConversationResult(
-            {
-              presentationAnchor: { canvasId, nodeId: id },
-              conversationOwner: {
-                canvasId,
-                nodeId: id,
-                threadId: data.threadId,
-              },
-            },
-            {
-              status: data.status,
-              viewed: data.viewed,
-              invocationToken: data.invocationToken,
-            },
-          ).catch((error) =>
-            console.error('Failed to acknowledge Agent result', error),
-          );
-        }
       },
-      [
-        id,
-        data.threadId,
-        data.agentBinding,
-        data.viewed,
-        hasRun,
-        canvasId,
-        data.invocationToken,
-        data.status,
-      ],
+      [id, data.threadId, data.agentBinding, canvasId],
     );
 
     // ------------------------------------------------------------------

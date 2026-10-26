@@ -37,7 +37,9 @@ function activeTabs(workspace: CanvasPreviewWorkspace): PreviewTab[] {
 export function useActivelyViewingQuestionNode(nodeId: string): boolean {
   const anchored = usePreviewWorkspaceStore((state) =>
     activeTabs(state.workspace).some(
-      (tab) => tab.target.kind === 'node' && tab.target.nodeId === nodeId,
+      (tab) =>
+        (tab.target.kind === 'node' || tab.target.kind === 'conversation') &&
+        tab.target.nodeId === nodeId,
     ),
   );
   const panelExpanded = usePanelStore((s) => !s.isRightCollapsed);
@@ -56,6 +58,12 @@ export function isActivelyViewingQuestion(match: {
   const workspace = usePreviewWorkspaceStore.getState().workspace;
   const canvas = useCanvasStore.getState();
   const matches = activeTabs(workspace).some((tab) => {
+    if (tab.target.kind === 'conversation') {
+      return (
+        tab.target.nodeId === match.nodeId ||
+        tab.target.threadId === match.threadId
+      );
+    }
     if (tab.target.kind !== 'node') return false;
     const targetNodeId = tab.target.nodeId;
     if (match.nodeId === targetNodeId) return true;

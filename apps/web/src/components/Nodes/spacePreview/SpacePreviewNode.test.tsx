@@ -16,6 +16,7 @@ import type { Node } from '@xyflow/react';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
+  openConversation: vi.fn(),
   rename: vi.fn(),
   setSpaceTitle: vi.fn(),
   refreshTitles: vi.fn(),
@@ -46,6 +47,9 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
 }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
+vi.mock('@/store/previewWorkspace/actions', () => ({
+  openSpaceConversation: mocks.openConversation,
+}));
 vi.mock('./useSpaceShortcutTarget', () => ({
   useSpaceShortcutTarget: () => mocks.target,
 }));
@@ -309,7 +313,7 @@ describe('Space Shortcut production node', () => {
     },
   );
 
-  it('opens the chosen conversation through the existing node deep link, retaining return navigation', () => {
+  it('opens the chosen original conversation without navigating away from the parent', () => {
     mocks.activity.activity = [
       {
         nodeId: 'node-agent-1',
@@ -332,12 +336,12 @@ describe('Space Shortcut production node', () => {
     );
     expect(button).not.toBeNull();
     act(() => button?.click());
-    expect(mocks.navigate).toHaveBeenCalledExactlyOnceWith(
-      '/canvas/target?node=node-agent-2',
-      {
-        state: { returnToSpace: 'source', workspaceId: 'workspace' },
-      },
+    expect(mocks.openConversation).toHaveBeenCalledExactlyOnceWith(
+      'target',
+      'node-agent-2',
+      'thread-2',
     );
+    expect(mocks.navigate).not.toHaveBeenCalled();
     expect(host.querySelector('input')).toBeNull();
   });
   it.each(['shortcut', 'child', 'world'])(

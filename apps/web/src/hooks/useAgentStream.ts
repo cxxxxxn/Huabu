@@ -64,6 +64,13 @@ export function useAgentStream(
     const target =
       usePreviewWorkspaceStore.getState().workspace.tabs[previewTabId]?.target;
     const view = session.conversationView;
+    if (target?.kind === 'conversation' && view) {
+      return (
+        target.canvasId === session.ownerCanvasId &&
+        target.nodeId === view.conversationOwner.nodeId &&
+        target.threadId === session.threadId
+      );
+    }
     return view
       ? target?.kind === 'node' &&
           target.canvasId === view.presentationAnchor.canvasId &&
@@ -87,7 +94,10 @@ export function useAgentStream(
         session.threadId,
       );
       const pending = selectThreadPendingAttachments(chat, session.threadId);
-      const excerpt = chat.selectionAttachment;
+      const excerpt =
+        session.canvasId === session.ownerCanvasId
+          ? chat.selectionAttachment
+          : null;
       const previousMessageId = selectThreadMessages(chat, session.threadId).at(
         -1,
       )?.id;

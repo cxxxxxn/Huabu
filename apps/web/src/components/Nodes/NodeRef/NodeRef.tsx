@@ -2,12 +2,17 @@
 // Licensed under the MIT license.
 
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 
+import { Button } from '@/components/Common/Button';
 import { Tooltip } from '@/components/Common/Tooltip';
 import { useSpaceShortcutTarget } from '@/components/Nodes/spacePreview/useSpaceShortcutTarget';
 import { NODE_ICON } from '@/config/nodeIcons';
+import { useOptionalChatSession } from '@/hooks/useChatSession';
 import useCanvasStore from '@/store/canvasStore';
+import { useWorkspaceStore } from '@/store/workspaceStore';
 import { revealNodesOnCanvas } from '@/utils/canvasViewport';
+import { buildNodeDeepLink } from '@/utils/nodeDeepLink';
 
 import type { CanvasNodeType, ChatAttachment } from '@huabu/shared';
 
@@ -59,6 +64,7 @@ export function NodeRef({
   const nodes = useCanvasStore((s) => s.nodes);
   const selectNodes = useCanvasStore((s) => s.selectNodes);
   const rfInstance = useCanvasStore((s) => s.rfInstance);
+  const session = useOptionalChatSession();
 
   // Resolve the effective node ID: explicit prop or attachment's originNodeId
   const resolvedNodeId = nodeId ?? attachment?.originNodeId;
@@ -101,6 +107,22 @@ export function NodeRef({
     ? (ATTACHMENT_TYPE_TO_NODE[attachment.type] ?? 'note')
     : ((nodeData?.type ?? node?.type) as string) || 'note';
   const Icon = NODE_ICON[nodeType as CanvasNodeType] ?? NODE_ICON.note;
+
+  if (session && session.ownerCanvasId !== session.canvasId && resolvedNodeId) {
+    return (
+      <RemoteNodeRef
+        canvasId={session.ownerCanvasId}
+        nodeId={resolvedNodeId}
+        label={
+          snapshotLabel ??
+          attachment?.label ??
+          attachment?.filename ??
+          fallbackLabel ??
+          resolvedNodeId.slice(0, 8)
+        }
+      />
+    );
+  }
 
   const focusNode = (id: string) => {
     selectNodes([id]);
@@ -155,4 +177,38 @@ export function NodeRef({
   );
 
   return <Tooltip content={tooltipContent}>{badge}</Tooltip>;
+}
+
+function RemoteNodeRef({
+  canvasId,
+  nodeId,
+  label,
+}: {
+  canvasId: string;
+  nodeId: string;
+  label: string;
+}) {
+  const navigate = useNavigate();
+  const { t } = useTranslation();
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      title={t('remoteConversation.openSpace')}
+      onClick={(event) => {
+        event.stopPropagation();
+        const url = new URL(
+          buildNodeDeepLink(window.location.origin, canvasId, nodeId),
+        );
+        navigate(`${url.pathname}${url.search}`, {
+          state: {
+            returnToSpace: useCanvasStore.getState().canvasId,
+            workspaceId: useWorkspaceStore.getState().workspaceId,
+          },
+        });
+      }}
+    >
+      <span className="max-w-28 truncate">{label}</span>
+    </Button>
+  );
 }

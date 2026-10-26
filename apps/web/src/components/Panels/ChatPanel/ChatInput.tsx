@@ -132,7 +132,11 @@ export const ChatInput = ({
   useAutoSizeTextArea(textareaRef, value);
 
   // Pending attachments belong to the thread this composer is sending to.
-  const { threadId, canvasId } = useChatSession();
+  const {
+    threadId,
+    ownerCanvasId: canvasId,
+    canvasId: presentationCanvasId,
+  } = useChatSession();
   const quotedComments = useChatStore((state) =>
     selectThreadQuotedComments(state, threadId),
   );
@@ -288,9 +292,11 @@ export const ChatInput = ({
 
   // Dynamic placeholder based on mode
   const currentPlaceholder =
-    mode === 'operate'
-      ? t('chat.operatePlaceholder')
-      : (placeholder ?? t('chat.inputPlaceholder'));
+    canvasId !== presentationCanvasId
+      ? t('remoteConversation.placeholder')
+      : mode === 'operate'
+        ? t('chat.operatePlaceholder')
+        : (placeholder ?? t('chat.inputPlaceholder'));
 
   // Handle Enter key for submission and ArrowUp/ArrowDown for prompt history
   const handleKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> = (

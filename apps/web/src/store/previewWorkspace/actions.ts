@@ -14,6 +14,23 @@ import {
   usePreviewWorkspaceStore,
 } from './store';
 
+export function openSpaceConversation(
+  canvasId: string,
+  nodeId: string,
+  threadId: string,
+): string {
+  const preview = usePreviewWorkspaceStore.getState();
+  usePanelStore.getState().requestOpenRightPanel();
+  const tabId = preview.openPreviewTarget({
+    kind: 'conversation',
+    canvasId,
+    nodeId,
+    threadId,
+  });
+  preview.requestChatOpen(tabId, 'bottom');
+  return tabId;
+}
+
 export function openPreviewNode(
   nodeId: string,
   options?: { transient?: boolean; focusEditor?: boolean },
@@ -126,11 +143,16 @@ export function openPreviewUrl(
         nodeId: sourceNodeId,
       })
     : sourceThreadId
-      ? findTabByTarget(preview.workspace, {
+      ? (findTabByTarget(preview.workspace, {
           kind: 'chat',
           canvasId,
           threadId: sourceThreadId,
-        })
+        }) ??
+        Object.values(preview.workspace.tabs).find(
+          (tab) =>
+            tab.target.kind === 'conversation' &&
+            tab.target.threadId === sourceThreadId,
+        ))
       : null;
   const groupId = source
     ? groupOfTab(preview.workspace, source.id)?.id

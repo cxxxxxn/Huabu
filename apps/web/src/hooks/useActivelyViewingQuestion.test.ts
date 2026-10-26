@@ -66,4 +66,19 @@ describe('isActivelyViewingQuestion', () => {
 
     expect(isActivelyViewingQuestion({ nodeId: 'question-2' })).toBe(false);
   });
+
+  it('recognizes the original thread in a remote preview without an active Canvas node', () => {
+    usePreviewWorkspaceStore.getState().openPreviewTarget({
+      kind: 'conversation',
+      canvasId: 'child',
+      nodeId: 'remote-agent',
+      threadId: 'remote-thread',
+    });
+    expect(isActivelyViewingQuestion({ threadId: 'remote-thread' })).toBe(true);
+    expect(isActivelyViewingQuestion({ nodeId: 'remote-agent' })).toBe(true);
+    usePanelStore.setState({ isRightCollapsed: true });
+    expect(isActivelyViewingQuestion({ threadId: 'remote-thread' })).toBe(
+      false,
+    );
+  });
 });

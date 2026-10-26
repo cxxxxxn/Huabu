@@ -23,6 +23,7 @@ import {
   resolveConversationOwnerSource,
   saveConversationWorkingDirectoryOverride,
   saveConversationDraft,
+  validateConversationView,
 } from './conversationOwner';
 
 import type { ChatSession } from '@/hooks/useChatSession';
@@ -244,7 +245,7 @@ export async function saveConversationAgent(
     chat.setAgentBinding(
       session.threadId,
       choice.binding,
-      session.canvasId || undefined,
+      session.ownerCanvasId || undefined,
     );
     chat.setThreadLastAction(session.threadId, choice.mode);
   } finally {
@@ -296,6 +297,9 @@ export async function runConversationControl(
     try {
       if (session.conversationView) {
         await awaitConversationDraft(session.conversationView);
+        if (session.canvasId !== session.ownerCanvasId) {
+          await validateConversationView(session.conversationView);
+        }
       }
       const target = conversationControlTarget(session);
       attempted = true;

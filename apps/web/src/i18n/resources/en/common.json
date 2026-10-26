@@ -1,4 +1,11 @@
 {
+  "remoteConversation": {
+    "openSpace": "Open Space",
+    "loading": "Loading conversation…",
+    "placeholder": "Message…",
+    "retry": "Retry",
+    "canvasAction": "Open the source Space to use canvas actions"
+  },
   "sigil": {
     "chooseResource": "Choose a resource",
     "bindingHint": "Click a canvas object or choose a resource from the list",

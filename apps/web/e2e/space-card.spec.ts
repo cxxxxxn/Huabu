@@ -587,11 +587,13 @@ test('Space cards show activity and rename inline without entering the target', 
   expect(
     await menu.evaluate((element) => element.clientHeight),
   ).toBeLessThanOrEqual(256);
-  expect(
-    await menu.evaluate(
-      (element) => element.scrollHeight > element.clientHeight,
-    ),
-  ).toBe(true);
+  await expect
+    .poll(() =>
+      menu
+        .locator(':scope > .overflow-y-auto')
+        .evaluate((element) => element.scrollHeight > element.clientHeight),
+    )
+    .toBe(true);
   await page.screenshot({
     path: testInfo.outputPath('space-card-overflow.png'),
   });
@@ -607,9 +609,14 @@ test('Space cards show activity and rename inline without entering the target', 
       exact: true,
     })
     .click();
-  await expect(page).toHaveURL(`/canvas/${target}?node=node-card-agent-1`);
+  await expect(page).toHaveURL(`/canvas/${source}`);
   await expect(page.getByRole('tab', { name: /Review/ })).toBeVisible();
   await expect(page.locator('[data-chat-thread-root]')).toBeVisible();
+  await page
+    .getByRole('tabpanel')
+    .getByRole('button', { name: /: Open Space$/ })
+    .click();
+  await expect(page).toHaveURL(`/canvas/${target}?node=node-card-agent-1`);
   await page
     .getByRole('button', { name: 'Back to Card board', exact: true })
     .click();
@@ -626,8 +633,13 @@ test('Space cards show activity and rename inline without entering the target', 
     })
     .focus();
   await page.keyboard.press('Enter');
-  await expect(page).toHaveURL(`/canvas/${target}?node=node-card-agent-0`);
+  await expect(page).toHaveURL(`/canvas/${source}`);
   await expect(page.getByRole('tab', { name: /Research/ })).toBeVisible();
+  await page
+    .getByRole('tabpanel')
+    .getByRole('button', { name: /: Open Space$/ })
+    .click();
+  await expect(page).toHaveURL(`/canvas/${target}?node=node-card-agent-0`);
   await page
     .getByRole('button', { name: 'Back to Card board', exact: true })
     .click();
@@ -642,8 +654,13 @@ test('Space cards show activity and rename inline without entering the target', 
     page.getByRole('menuitem', { name: /Verification/ }),
   ).toBeFocused();
   await page.keyboard.press('Enter');
-  await expect(page).toHaveURL(`/canvas/${target}?node=node-card-agent-3`);
+  await expect(page).toHaveURL(`/canvas/${source}`);
   await expect(page.getByRole('tab', { name: /Verification/ })).toBeVisible();
+  await page
+    .getByRole('tabpanel')
+    .getByRole('button', { name: /: Open Space$/ })
+    .click();
+  await expect(page).toHaveURL(`/canvas/${target}?node=node-card-agent-3`);
   await page
     .getByRole('button', { name: 'Back to Card board', exact: true })
     .click();

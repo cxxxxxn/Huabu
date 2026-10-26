@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { createId } from '@huabu/shared';
 import { settleInkInterpretation } from '@huabu/shared/ink-interpretation';
@@ -9,18 +9,19 @@ import { settleInkInterpretation } from '@huabu/shared/ink-interpretation';
 import { ApiError } from '@/api/_client';
 import { agentApi } from '@/api/agent';
 import { useAcpThreadChangesStore } from '@/store/acpThreadChangesStore';
-import useCanvasStore from '@/store/canvasStore';
 import { useChatPreferencesStore } from '@/store/chatPreferencesStore';
 import {
   selectThreadHistoryLoaded,
   selectThreadHistoryPageState,
   selectThreadLastAction,
   selectThreadMessages,
+  selectThreadIsLoading,
   useChatStore,
 } from '@/store/chatStore';
 import {
   ConversationIntegrityError,
   validateConversationView,
+  useConversationOwnerSource,
 } from '@/store/conversationOwner';
 import { refreshConversationTitleAfterStream } from '@/store/conversationTitleStore';
 import { usePreviewWorkspaceStore } from '@/store/previewWorkspace/store';
@@ -237,6 +238,7 @@ function applyLatestHistoryWindow(window: LatestHistoryWindow): void {
 export interface ChatHistoryWindow {
   loadOlderHistory: () => void;
   retryHistory: () => void;
+  isCurrentOwnerHistory: boolean;
 }
 
 /**
@@ -271,13 +273,25 @@ export function useChatHistory(
     effectiveConversationView?.conversationOwner.canvasId || canvasId;
   const ownerNodeId =
     effectiveConversationView?.conversationOwner.nodeId ?? null;
-  const ownerStatus = useCanvasStore((state) => {
-    if (!ownerNodeId || state.canvasId !== ownerCanvasId) return undefined;
-    const owner = state.nodes.find((node) => node.id === ownerNodeId);
-    return (owner?.data as { status?: unknown } | undefined)?.status;
-  });
+  const ownerSource = useConversationOwnerSource(effectiveConversationView);
+  const ownerStatus = ownerSource?.status;
+  const ownerHistoryKey = effectiveConversationView
+    ? JSON.stringify([
+        ownerCanvasId,
+        threadId,
+        ownerSource?.invocationToken ?? null,
+        ownerStatus,
+      ])
+    : null;
+  const [hydratedOwnerKey, setHydratedOwnerKey] = useState<string | null>(null);
+  const isStreaming = useChatStore((state) =>
+    selectThreadIsLoading(state, threadId),
+  );
+  const needsOwnerRefresh =
+    (ownerStatus === 'done' || ownerStatus === 'error') &&
+    ownerHistoryKey !== hydratedOwnerKey;
 
-  // Load history from server on first mount (once per thread).
+  // A terminal token can change without a visible running transition.
   // Wait for canvasId to be available — on initial mount the canvas may
   // not have loaded yet, causing a request without canvasId that 404s.
   useEffect(() => {
@@ -286,7 +300,8 @@ export function useChatHistory(
     // mid-fetch, we still want to land the response on the originating
     // thread (cache survives navigation) rather than the current one.
     const tid = threadId;
-    if (selectThreadHistoryLoaded(useChatStore.getState(), tid)) return;
+    const loaded = selectThreadHistoryLoaded(useChatStore.getState(), tid);
+    if (loaded && (!needsOwnerRefresh || isStreaming)) return;
     if (historyError) return;
 
     let cancelled = false;
@@ -300,21 +315,22 @@ export function useChatHistory(
           await validateConversationView(effectiveConversationView);
         } catch (error) {
           if (error instanceof ConversationIntegrityError) {
-            if (previewTabId) {
+            if (previewTabId && canvasId === ownerCanvasId) {
               usePreviewWorkspaceStore.getState().closeTab(previewTabId);
+              return;
             }
-            return;
           }
           throw error;
         }
       }
       if (cancelled) return;
-      return agentApi.fetchHistoryPage(tid, ownerCanvasId, recentTurnCount);
+      return fetchLatestHistoryWindow(tid, ownerCanvasId, recentTurnCount);
     };
 
     fetchValidatedHistory()
-      .then((res) => {
-        if (cancelled || !res) return;
+      .then((window) => {
+        if (cancelled || !window) return;
+        const res = window.response;
 
         // If the server returned a different threadId (fallback to latest),
         // update the client's threadMap so future requests use the correct id.
@@ -335,7 +351,11 @@ export function useChatHistory(
           }));
         }
 
-        applyInitialHistoryPage({ ...res, threadId: finalTid });
+        applyLatestHistoryWindow({
+          ...window,
+          response: { ...res, threadId: finalTid },
+        });
+        setHydratedOwnerKey(ownerHistoryKey);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -359,6 +379,10 @@ export function useChatHistory(
     canvasId,
     recentTurnCount,
     historyError,
+    isHistoryLoaded,
+    isStreaming,
+    needsOwnerRefresh,
+    ownerHistoryKey,
   ]);
 
   const loadOlderHistory = useCallback(() => {
@@ -606,15 +630,7 @@ export function useChatHistory(
       .catch(async (error) => {
         if (cancelled || claim.signal.aborted) return;
         console.error('[useChatHistory] reconnect failed', error);
-        const current = useCanvasStore.getState();
-        const ownerStillRunning =
-          !!ownerNodeId &&
-          current.canvasId === ownerCanvasId &&
-          (
-            current.nodes.find((node) => node.id === ownerNodeId)?.data as
-              | { status?: unknown }
-              | undefined
-          )?.status === 'running';
+        const ownerStillRunning = ownerStatus === 'running';
         if (ownerStillRunning || historyLooksIncomplete) {
           const delay =
             attachRetryDelayByThread.get(ownerThreadId) ??
@@ -652,5 +668,10 @@ export function useChatHistory(
     useChatStore.getState().setHistoryError(threadId, null);
   }, [threadId]);
 
-  return { loadOlderHistory, retryHistory };
+  return {
+    loadOlderHistory,
+    retryHistory,
+    isCurrentOwnerHistory:
+      isHistoryLoaded && !historyError && hydratedOwnerKey === ownerHistoryKey,
+  };
 }

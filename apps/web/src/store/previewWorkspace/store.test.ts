@@ -56,6 +56,7 @@ beforeEach(() => {
   usePreviewWorkspaceStore.setState({
     canvasId: '',
     workspace: createEmptyWorkspace(),
+    readIntentByTab: {},
     nodeFocusRequest: null,
     nodeFocusRequestSeq: 0,
     chatOpenRequest: null,
@@ -64,6 +65,28 @@ beforeEach(() => {
 });
 
 describe('loading a Canvas', () => {
+  it('restores tabs without carrying read intent across Canvas visits', () => {
+    store().loadForCanvas(CANVAS);
+    const tabId = store().openPreviewTarget(node('question'));
+    expect(store().readIntentByTab[tabId]).toBeTruthy();
+    store().loadForCanvas(OTHER);
+    store().loadForCanvas(CANVAS);
+    expect(store().workspace.tabs[tabId]).toBeDefined();
+    expect(store().readIntentByTab).toEqual({});
+    store().activateTab(tabId);
+    expect(store().readIntentByTab[tabId]).toBeTruthy();
+  });
+
+  it('does not transfer read intent when a tab changes targets', () => {
+    store().loadForCanvas(CANVAS);
+    const tabId = store().openPreviewTarget(node('question'));
+    const original = store().readIntentByTab[tabId];
+    store().replaceTabTarget(tabId, node('other-question'));
+    store().markTabInteracted(tabId);
+    expect(store().readIntentByTab[tabId]).not.toBe(original);
+    store().closeTab(tabId);
+    expect(store().readIntentByTab[tabId]).toBeUndefined();
+  });
   it('restores a persisted layout', () => {
     const persisted = openTarget(
       createEmptyWorkspace('g1'),

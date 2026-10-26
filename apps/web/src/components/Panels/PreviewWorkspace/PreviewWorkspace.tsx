@@ -256,7 +256,7 @@ export function PreviewWorkspace({
   const scrollViewKeys = useCanvasStore(
     useShallow((state) =>
       scrollTargets.map((target) => {
-        if (target.kind === 'chat') {
+        if (target.kind === 'chat' || target.kind === 'conversation') {
           return messageListViewKey(target.canvasId, target.threadId);
         }
         // Cross-origin frame scroll state is neither accessible nor retained.

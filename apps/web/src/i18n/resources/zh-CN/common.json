@@ -1,4 +1,11 @@
 {
+  "remoteConversation": {
+    "openSpace": "进入 Space",
+    "loading": "正在加载对话…",
+    "placeholder": "输入消息…",
+    "retry": "重试",
+    "canvasAction": "请进入原 Space 使用画布操作"
+  },
   "sigil": {
     "chooseResource": "选择资源",
     "bindingHint": "点击画布对象，或从列表选择资源",

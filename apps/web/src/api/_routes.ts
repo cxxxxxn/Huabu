@@ -21,6 +21,8 @@ export const routes = {
   canaryRedeployCheck: '/deployment/canary/check',
   canaryRedeploy: '/deployment/canary/redeploy',
   agentDefaults: '/agent/defaults',
+  agentConversationOwner: (canvasId: string, threadId: string) =>
+    `/agent/owner/${enc(threadId)}?canvasId=${enc(canvasId)}`,
 
   // ── Workspace ─────────────────────────────────────────────────────
   workspace: '/workspace',

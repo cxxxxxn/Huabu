@@ -20,6 +20,7 @@ interface FragmentCommentPopoverProps {
   onCopy: () => Promise<void>;
   onSaveAsNote: () => void;
   onDismiss: () => void;
+  canvasActionsDisabled?: boolean;
 }
 
 export function FragmentCommentPopover({
@@ -29,6 +30,7 @@ export function FragmentCommentPopover({
   onCopy,
   onSaveAsNote,
   onDismiss,
+  canvasActionsDisabled = false,
 }: FragmentCommentPopoverProps) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
@@ -130,8 +132,12 @@ export function FragmentCommentPopover({
               variant="ghost"
               iconOnly
               size="sm"
-              title={t('messages.addAsNote')}
-              disabled={copying}
+              title={t(
+                canvasActionsDisabled
+                  ? 'remoteConversation.canvasAction'
+                  : 'messages.addAsNote',
+              )}
+              disabled={copying || canvasActionsDisabled}
               onMouseDown={(event) => event.preventDefault()}
               onClick={onSaveAsNote}
             >

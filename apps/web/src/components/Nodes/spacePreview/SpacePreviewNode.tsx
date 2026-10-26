@@ -22,12 +22,12 @@ import { NodeWrapper } from '@/components/Nodes/NodeWrapper';
 import { getNodeIcon } from '@/config/nodeIcons';
 import { useTextAutoSize } from '@/hooks/useTextAutoSize';
 import useCanvasStore from '@/store/canvasStore';
+import { openSpaceConversation } from '@/store/previewWorkspace/actions';
 import { useWorkspaceStore } from '@/store/workspaceStore';
 import {
   FONT_FAMILY_CSS,
   getQuestionFontOpts,
 } from '@/utils/node/nodeFontConfig';
-import { buildNodeDeepLink } from '@/utils/nodeDeepLink';
 
 import { SpaceAgentActivity } from './SpaceAgentActivity';
 import {
@@ -178,18 +178,7 @@ export const SpacePreviewNode = memo(
     ]);
     const openConversation = (agent: SpaceCardAgent) => {
       if (!canOpen || editing) return;
-      const url = new URL(
-        buildNodeDeepLink(
-          window.location.origin,
-          data.targetCanvasId,
-          agent.nodeId,
-        ),
-      );
-      navigate(`${url.pathname}${url.search}`, {
-        state: isChildEntry
-          ? undefined
-          : { returnToSpace: canvasId, workspaceId },
-      });
+      openSpaceConversation(data.targetCanvasId, agent.nodeId, agent.threadId);
     };
     useEffect(() => {
       if (!selected) return;

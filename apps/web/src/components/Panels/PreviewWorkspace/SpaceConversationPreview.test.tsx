@@ -1,0 +1,198 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT license.
+
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { afterEach, assert, beforeEach, expect, it, vi } from 'vitest';
+
+import { ApiError } from '@/api/_client';
+import { useRemoteConversationOwnerStore } from '@/store/remoteConversationOwner';
+import { useWorkspaceStore } from '@/store/workspaceStore';
+
+import { SpaceConversationPreview } from './SpaceConversationPreview';
+
+import type { ChatSession } from '@/hooks/useChatSession';
+
+const mocks = vi.hoisted(() => ({
+  getOwner: vi.fn(),
+  navigate: vi.fn(),
+  chat: vi.fn(),
+  invalidateTitle: vi.fn(),
+}));
+vi.mock('@/store/conversationTitleStore', () => ({
+  invalidateConversationTitle: mocks.invalidateTitle,
+}));
+vi.mock('@/api/agent', () => ({ getAgentConversationOwner: mocks.getOwner }));
+vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
+vi.mock('react-i18next', () => ({
+  initReactI18next: { type: '3rdParty', init: vi.fn() },
+  useTranslation: () => ({
+    t: (key: string, options?: { name?: string }) => options?.name ?? key,
+  }),
+}));
+vi.mock('@/store/canvasStore', () => ({
+  default: (select: (state: { canvasId: string }) => unknown) =>
+    select({ canvasId: 'parent' }),
+}));
+vi.mock('../ChatPanel', () => ({
+  ChatPanel: ({
+    session,
+    ownerUnavailable,
+  }: {
+    session: ChatSession;
+    ownerUnavailable?: boolean;
+  }) => {
+    mocks.chat(session);
+    return (
+      <div
+        data-chat-thread={session.threadId}
+        data-unavailable={ownerUnavailable}
+      >
+        Original conversation
+        <input aria-label="Draft" />
+      </div>
+    );
+  },
+}));
+
+const target = {
+  kind: 'conversation',
+  canvasId: 'child',
+  nodeId: 'agent',
+  threadId: 'thread',
+} as const;
+const owner = {
+  ...target,
+  spaceTitle: 'Child Space',
+  source: { agentBinding: { kind: 'internal' }, status: 'done' },
+};
+let root: Root;
+let host: HTMLDivElement;
+beforeEach(() => {
+  vi.clearAllMocks();
+  useRemoteConversationOwnerStore.setState({ entries: {} });
+  useWorkspaceStore.setState({ workspaceId: 'workspace' });
+  mocks.getOwner.mockResolvedValue(owner);
+  host = document.createElement('div');
+  document.body.append(host);
+  root = createRoot(host);
+});
+afterEach(() => {
+  act(() => root.unmount());
+  host.remove();
+});
+async function render() {
+  await act(async () => {
+    root.render(
+      <SpaceConversationPreview target={target} previewTabId="tab" />,
+    );
+  });
+}
+
+it('opens only after validating the owner and preserves the original session address', async () => {
+  await render();
+  expect(mocks.getOwner).toHaveBeenCalledWith('child', 'thread');
+  expect(mocks.chat).toHaveBeenLastCalledWith({
+    canvasId: 'parent',
+    ownerCanvasId: 'child',
+    threadId: 'thread',
+    conversationView: {
+      presentationAnchor: { canvasId: 'child', nodeId: 'agent' },
+      conversationOwner: {
+        canvasId: 'child',
+        nodeId: 'agent',
+        threadId: 'thread',
+      },
+    },
+  });
+  expect(host.textContent).toContain('Child Space');
+  expect(mocks.navigate).not.toHaveBeenCalled();
+  const open = host.querySelector<HTMLButtonElement>('button');
+  expect(open?.textContent).toBe('Child Space');
+  expect(open?.getAttribute('aria-label')).toBe(
+    'Child Space: remoteConversation.openSpace',
+  );
+  act(() => open?.click());
+  expect(mocks.navigate).toHaveBeenCalledWith('/canvas/child?node=agent', {
+    state: { returnToSpace: 'parent', workspaceId: 'workspace' },
+  });
+});
+
+it('shows unavailable ownership explicitly and retries without creating a replacement conversation', async () => {
+  mocks.getOwner.mockRejectedValueOnce(new Error('Source Space was deleted'));
+  await render();
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain(
+    'Source Space was deleted',
+  );
+  expect(mocks.chat).not.toHaveBeenCalled();
+  const retry = [...host.querySelectorAll('button')].find(
+    (button) => button.textContent === 'remoteConversation.retry',
+  );
+  await act(async () => retry?.click());
+  expect(host.querySelector('[data-chat-thread="thread"]')).not.toBeNull();
+});
+
+it('refuses a replacement owner rather than silently retargeting the tab', async () => {
+  mocks.getOwner.mockResolvedValue({ ...owner, nodeId: 'different-agent' });
+  await render();
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain(
+    'owner changed',
+  );
+  expect(mocks.chat).not.toHaveBeenCalled();
+});
+
+it('revalidates a displayed conversation on focus and removes stale Chat after deletion', async () => {
+  await render();
+  expect(host.querySelector('[data-chat-thread="thread"]')).not.toBeNull();
+  mocks.getOwner.mockRejectedValueOnce(new Error('Source Agent was deleted'));
+  await act(async () => {
+    window.dispatchEvent(new Event('focus'));
+  });
+  expect(host.querySelector('[data-chat-thread]')).toBeNull();
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain(
+    'Source Agent was deleted',
+  );
+});
+
+it.each([
+  new TypeError('Failed to fetch'),
+  new ApiError(503, {}, 'Temporarily unavailable'),
+])(
+  'retains the mounted conversation and focused draft on transient failure: %s',
+  async (error) => {
+    await render();
+    const input = host.querySelector('input');
+    assert(input);
+    input.value = 'Unsent draft';
+    input.focus();
+    mocks.getOwner.mockRejectedValueOnce(error);
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    expect(host.querySelector('input')).toBe(input);
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe('Unsent draft');
+    expect(
+      host
+        .querySelector('[data-chat-thread]')
+        ?.getAttribute('data-unavailable'),
+    ).toBe('true');
+    expect(host.querySelector('[role="alert"]')).not.toBeNull();
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    expect(host.querySelector('input')).toBe(input);
+    expect(
+      host
+        .querySelector('[data-chat-thread]')
+        ?.getAttribute('data-unavailable'),
+    ).toBe('false');
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  },
+);
+
+it('invalidates the shared title when source metadata changes', async () => {
+  await render();
+  mocks.getOwner.mockResolvedValue({
+    ...owner,
+    source: { ...owner.source, label: 'Renamed' },
+  });
+  await act(async () => window.dispatchEvent(new Event('focus')));
+  expect(mocks.invalidateTitle).toHaveBeenCalledWith('child', 'thread');
+});

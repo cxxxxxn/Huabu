@@ -2,7 +2,7 @@
 // Licensed under the MIT license.
 
 import { DndContext } from '@dnd-kit/core';
-import { act, useState, type ComponentProps } from 'react';
+import { act, useEffect, useState, type ComponentProps } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import {
   afterEach,
@@ -30,7 +30,10 @@ import { i18n } from '@/i18n';
 import { useAcpThreadChangesStore } from '@/store/acpThreadChangesStore';
 import useCanvasStore from '@/store/canvasStore';
 import { useChatStore } from '@/store/chatStore';
-import { conversationViewForNode } from '@/store/conversationOwner';
+import {
+  acknowledgeConversationResult,
+  conversationViewForNode,
+} from '@/store/conversationOwner';
 import {
   observeConversationExecution,
   saveConversationWorkingDirectory,
@@ -43,11 +46,16 @@ import {
   useConversationTitleStore,
 } from '@/store/conversationTitleStore';
 import { useLLMStore } from '@/store/llmStore';
+import { usePanelStore } from '@/store/panelStore';
 import {
   createEmptyWorkspace,
   openTarget,
 } from '@/store/previewWorkspace/model';
 import { usePreviewWorkspaceStore } from '@/store/previewWorkspace/store';
+import {
+  conversationOwnerKey,
+  useRemoteConversationOwnerStore,
+} from '@/store/remoteConversationOwner';
 
 import {
   PreviewTab,
@@ -61,6 +69,7 @@ import type { AcpSessionSelectors } from './AcpSessionSelectors';
 import type * as AcpApi from '@/api/acp';
 import type { ChatSession } from '@/hooks/useChatSession';
 import type * as CanvasStore from '@/store/canvasStore';
+import type * as ConversationOwner from '@/store/conversationOwner';
 import type {
   CanvasPreviewWorkspace,
   PreviewTab as TabModel,
@@ -81,13 +90,23 @@ const sessionMetaState = vi.hoisted(() => ({
   refresh: vi.fn(),
   applyOptimistic: vi.fn(),
 }));
+const historyState = vi.hoisted(() => ({
+  current: false,
+  latestVisible: true,
+}));
+vi.mock('@/store/conversationOwner', async (original) => ({
+  ...(await original<typeof ConversationOwner>()),
+  acknowledgeConversationResult: vi.fn(),
+}));
 
 // Keep real panel, editor, tab, stores, and stream hook; replace unrelated UI
 // and network boundaries with complete, stable fixtures.
 vi.mock('react-router-dom', () => ({ useNavigate: () => () => {} }));
 vi.mock('@/components/Common/Loading', () => ({ Loading: () => null }));
 vi.mock('@/components/Common/Toast', () => ({ toast: vi.fn() }));
-vi.mock('@/hooks/useChatHistory', () => ({ useChatHistory: () => {} }));
+vi.mock('@/hooks/useChatHistory', () => ({
+  useChatHistory: () => ({ isCurrentOwnerHistory: historyState.current }),
+}));
 vi.mock('@/hooks/useAcpProfiles', () => ({
   useAcpProfiles: () => ({ profiles: [], loaded: true, refresh: vi.fn() }),
 }));
@@ -128,7 +147,14 @@ vi.mock('@/hooks/useBuiltinThreadSettings', () => ({
   }),
 }));
 vi.mock('@/components/Messages/MessageList', () => ({
-  MessageList: () => null,
+  MessageList: ({
+    onLatestVisibleChange,
+  }: {
+    onLatestVisibleChange?: (visible: boolean) => void;
+  }) => {
+    useEffect(() => onLatestVisibleChange?.(historyState.latestVisible));
+    return null;
+  },
 }));
 vi.mock('./ChangeReviewCard', () => ({ ChangeReviewCard: () => null }));
 vi.mock('./AgentSelector', () => ({ AgentSelector: () => null }));
@@ -301,8 +327,11 @@ async function renderPanel(
 ) {
   usePreviewWorkspaceStore.setState({
     canvasId: session.canvasId,
+    readIntentByTab: {},
     workspace: {
       ...createEmptyWorkspace(),
+      groups: [{ id: 'group', tabIds: [tab.id], activeTabId: tab.id }],
+      activeGroupId: 'group',
       tabs: { [tab.id]: tab },
     },
   });
@@ -357,6 +386,11 @@ async function enter(input: HTMLInputElement) {
 
 beforeEach(async () => {
   vi.resetAllMocks();
+  historyState.current = false;
+  historyState.latestVisible = true;
+  usePanelStore.setState({ isRightCollapsed: false });
+  vi.mocked(acknowledgeConversationResult).mockResolvedValue(undefined);
+  useRemoteConversationOwnerStore.setState({ entries: {} });
   sessionMetaState.loading = false;
   sessionMetaState.error = null;
   sessionMetaState.updatedAt = 0;
@@ -427,6 +461,149 @@ afterEach(async () => {
 });
 
 describe('rendered conversation titles', () => {
+  const remoteSession: ChatSession = {
+    ...baseSession,
+    ownerCanvasId: 'child',
+    conversationView: {
+      presentationAnchor: { canvasId: 'child', nodeId: 'agent' },
+      conversationOwner: {
+        canvasId: 'child',
+        nodeId: 'agent',
+        threadId: 'thread',
+      },
+    },
+  };
+  const remoteTab: TabModel = {
+    ...baseTab,
+    target: {
+      kind: 'conversation',
+      canvasId: 'child',
+      nodeId: 'agent',
+      threadId: 'thread',
+    },
+  };
+  function seedRemoteOwner() {
+    useRemoteConversationOwnerStore.setState({
+      entries: {
+        [conversationOwnerKey('child', 'agent', 'thread')]: {
+          owner: {
+            canvasId: 'child',
+            nodeId: 'agent',
+            threadId: 'thread',
+            spaceTitle: 'Child',
+            source: {
+              label: 'Original name',
+              status: 'done',
+              viewed: false,
+              invocationToken: 'new-run',
+              hasAuthoredContent: true,
+              agentBinding: { kind: 'internal' },
+            },
+          },
+        },
+      },
+    });
+    useChatStore
+      .getState()
+      .setMessages('thread', [{ id: 'u', role: 'user', content: 'Task' }]);
+  }
+
+  it('uses the shared remote title for immediate repeated edits before owner polling', async () => {
+    seedRemoteOwner();
+    serverTitles.set(conversationTitleKey('child', 'thread'), {
+      title: 'Original name',
+      source: 'user',
+    });
+    await refreshConversationTitles('child', ['thread']);
+    await renderPanel(remoteSession, remoteTab);
+    await enter(await edit('New name'));
+    expect(title()).toBe('New name');
+    expect(
+      useRemoteConversationOwnerStore.getState().entries[
+        conversationOwnerKey('child', 'agent', 'thread')
+      ]?.owner?.source.label,
+    ).toBe('Original name');
+    await act(async () => header().click());
+    expect(
+      container.querySelector<HTMLInputElement>(
+        'input[aria-label="Rename node"]',
+      )?.value,
+    ).toBe('New name');
+  });
+
+  it('requires explicit read intent and current rendered history before acknowledging a restored preview', async () => {
+    seedRemoteOwner();
+    vi.useFakeTimers();
+    const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    const visibility = vi
+      .spyOn(document, 'visibilityState', 'get')
+      .mockReturnValue('visible');
+    try {
+      historyState.current = true;
+      await renderPanel(remoteSession, remoteTab);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20);
+        window.dispatchEvent(new Event('focus'));
+      });
+      expect(acknowledgeConversationResult).not.toHaveBeenCalled();
+      historyState.current = false;
+      await act(async () =>
+        usePreviewWorkspaceStore.getState().markTabInteracted('tab'),
+      );
+      await act(async () => vi.advanceTimersByTimeAsync(20));
+      expect(acknowledgeConversationResult).not.toHaveBeenCalled();
+      historyState.current = true;
+      historyState.latestVisible = false;
+      await act(async () =>
+        root.render(
+          <PanelFixture
+            session={remoteSession}
+            tab={remoteTab}
+            onCommit={vi.fn()}
+            props={{}}
+          />,
+        ),
+      );
+      await act(async () => vi.advanceTimersByTimeAsync(20));
+      expect(acknowledgeConversationResult).not.toHaveBeenCalled();
+      historyState.latestVisible = true;
+      await act(async () =>
+        root.render(
+          <PanelFixture
+            session={remoteSession}
+            tab={remoteTab}
+            onCommit={vi.fn()}
+            props={{}}
+          />,
+        ),
+      );
+      await act(async () => vi.advanceTimersByTimeAsync(20));
+      expect(acknowledgeConversationResult).toHaveBeenCalledWith(
+        remoteSession.conversationView,
+        { invocationToken: 'new-run', status: 'done', viewed: false },
+      );
+    } finally {
+      focus.mockRestore();
+      visibility.mockRestore();
+    }
+  });
+
+  it('blocks remote submission while ownership is unavailable', async () => {
+    seedRemoteOwner();
+    await renderPanel(remoteSession, remoteTab, vi.fn(), {
+      ownerUnavailable: true,
+    });
+    const form = container.querySelector('form');
+    assert(form);
+    expect(form.dataset.submitDisabled).toBe('true');
+    await act(async () =>
+      form.dispatchEvent(
+        new Event('submit', { bubbles: true, cancelable: true }),
+      ),
+    );
+    expect(agentApi.streamMessage).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])(
     'preserves consecutive selector choices and releases submission gating with firstFailure=%s',
     async (firstFailure) => {
