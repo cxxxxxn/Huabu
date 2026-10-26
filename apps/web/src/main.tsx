@@ -8,6 +8,7 @@ import './index.css';
 import './i18n';
 
 import App from './App';
+import { SignInGate } from './components/Shell/SignInGate';
 import { APP_NAME } from './config/app';
 
 document.title = APP_NAME;
@@ -36,6 +37,8 @@ const root = ReactDOM.createRoot(rootElement);
 
 root.render(
   <React.StrictMode>
-    <App />
+    <SignInGate>
+      <App />
+    </SignInGate>
   </React.StrictMode>,
 );

@@ -7,8 +7,10 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AppMenu } from './AppMenu';
+import { useIdentityStore } from '../../../store/identityStore';
 
 import type * as DropdownMenuExports from '../../Common/DropdownMenu';
+import type { IdentityResponse } from '@huabu/shared';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -159,5 +161,35 @@ describe('AppMenu', () => {
       candidate.textContent?.includes('canvasPage.backToList'),
     );
     expect(link?.getAttribute('href')).toBe('/spaces');
+  });
+
+  it('offers sign-out only to a Bubble-signed-in caller', () => {
+    const items = (identity: IdentityResponse | null) => {
+      useIdentityStore.setState({ identity });
+      container = document.createElement('div');
+      document.body.appendChild(container);
+      root = createRoot(container);
+      act(() =>
+        root?.render(
+          <MemoryRouter initialEntries={['/spaces']}>
+            <AppMenu />
+          </MemoryRouter>,
+        ),
+      );
+      const labels = Array.from(
+        container.querySelectorAll('[role="menuitem"]'),
+      ).map((item) => item.textContent);
+      act(() => root?.unmount());
+      container.remove();
+      return labels;
+    };
+    const principal = { principalId: 'carol', kind: 'user' as const };
+    expect(items(null)).not.toContain('auth.signOutAs');
+    expect(
+      items({ provider: 'local', principal, member: true, owner: true }),
+    ).not.toContain('auth.signOutAs');
+    expect(
+      items({ provider: 'bubble', principal, member: true, owner: false }),
+    ).toContain('auth.signOutAs');
   });
 });

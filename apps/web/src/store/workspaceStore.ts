@@ -319,7 +319,10 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
 
       // ── Free mode ──
       // Server already activated (e.g. another tab beat us to it).
-      const activated = info.configured && Boolean(info.path);
+      // A Workspace kept as a row has no path, and no other one to switch to.
+      const activated =
+        info.configured &&
+        (Boolean(info.path) || !info.capabilities.canChangeWorkspace);
 
       let registered: WorkspaceDescriptor[] = [];
       try {

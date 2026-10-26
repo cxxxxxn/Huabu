@@ -5,6 +5,7 @@ import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate } from 'react-router-dom';
 
+import { signOut } from '../../../api/identity';
 import { openUserHandbook } from '../../../config/handbook';
 import { getShortcutKeys } from '../../../config/shortcuts';
 import { canCheckForUpdates, useAppUpdate } from '../../../hooks/useAppUpdate';
@@ -18,6 +19,7 @@ import {
   openServerLog,
 } from '../../../hooks/useElectron';
 import { useRunDiagnostic } from '../../../hooks/useRunDiagnostic';
+import { useIdentityStore } from '../../../store/identityStore';
 import { useSettingsUiStore } from '../../../store/settingsUiStore';
 import { useShortcutsUiStore } from '../../../store/shortcutsUiStore';
 import { useWorkspaceStore } from '../../../store/workspaceStore';
@@ -71,6 +73,7 @@ export const AppMenu: React.FC<AppMenuProps> = ({
   const canChangeWorkspace = useWorkspaceStore(
     (s) => s.capabilities?.canChangeWorkspace ?? true,
   );
+  const identity = useIdentityStore((s) => s.identity);
   const worldCanvasId = useWorkspaceStore((s) => s.worldCanvasId);
   const worldEnabled = useWorkspaceStore((s) => s.worldEnabled);
   const onWorld =
@@ -222,6 +225,20 @@ export const AppMenu: React.FC<AppMenuProps> = ({
               {t('troubleshooting.copySystemInfo')}
             </DropdownMenuItem>
           </DropdownMenuSubmenu>
+        )}
+
+        {identity?.provider === 'bubble' && (
+          <>
+            <div role="separator" className={MENU_SEPARATOR_CLASS} />
+            <DropdownMenuItem onClick={runAndClose(() => void signOut())}>
+              {t('auth.signOutAs', {
+                name:
+                  identity.principal.displayName ??
+                  identity.principal.email ??
+                  identity.principal.principalId,
+              })}
+            </DropdownMenuItem>
+          </>
         )}
       </DropdownMenu>
     </>

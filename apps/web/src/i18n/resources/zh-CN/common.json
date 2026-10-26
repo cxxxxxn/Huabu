@@ -614,6 +614,17 @@
       "inlineCode": "行内代码"
     }
   },
+  "auth": {
+    "signInTitle": "登录 {{appName}}",
+    "signInIntro": "使用你的组织账户打开你的 Space。",
+    "continueWith": "使用 {{provider}} 继续",
+    "signingIn": "正在登录…",
+    "signInFailed": "登录失败：{{message}}",
+    "noAccessTitle": "暂无访问权限",
+    "noAccessIntro": "你已以 {{name}} 的身份登录，但该账户尚不能使用 {{appName}}。请联系管理员授予访问权限。",
+    "signOut": "退出登录",
+    "signOutAs": "退出登录（{{name}}）"
+  },
   "workspace": {
     "welcome": "欢迎使用 {{appName}}",
     "intro": "选择一个 Home 文件夹来保存你的 Space、笔记和产物。",

@@ -614,6 +614,17 @@
       "inlineCode": "Inline code"
     }
   },
+  "auth": {
+    "signInTitle": "Sign in to {{appName}}",
+    "signInIntro": "Use your organization account to open your Spaces.",
+    "continueWith": "Continue with {{provider}}",
+    "signingIn": "Signing in…",
+    "signInFailed": "Sign-in failed: {{message}}",
+    "noAccessTitle": "No access yet",
+    "noAccessIntro": "You are signed in as {{name}}, but this account cannot use {{appName}} yet. Ask an administrator to grant access.",
+    "signOut": "Sign out",
+    "signOutAs": "Sign out ({{name}})"
+  },
   "workspace": {
     "welcome": "Welcome to {{appName}}",
     "intro": "Choose a Home folder to store your Spaces, notes, and artifacts.",
