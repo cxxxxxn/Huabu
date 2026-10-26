@@ -60,6 +60,8 @@ addNode({type: 'sketch', ...})
 
 ### 3.1 Draw does not auto-select
 
+The draw cursor uses concrete light/dark colors from the shared Accent palette, selected by the existing CSS dark variant. Standalone SVG cursor images do not inherit the document's `color-scheme`, so they must not rely on `light-dark()` inside their image payload. Theme switching updates the cursor without changing stored strokes, and literal colors retain their original value.
+
 A freshly drawn sketch is created **unselected**: `SketchOverlay` passes `selectOnCreate: false` on `addNode`, which threads through `ADD_NODES` → `CREATE_NODES` so the engine's [createNodes.ts](../../packages/shared/src/canvas-engine/commands/createNodes.ts) skips it in the auto-selection set. Two independent guards suppress create-time selection — the type-invariant `question` exclusion and the per-creation `selectOnCreate === false` hint — do not collapse them. Rationale: a selection box mid-draw interrupts continuous freehand writing, and an unselected sketch keeps stroke-only hit-testing so it never shadows nodes beneath its transparent bbox.
 
 ### 3.2 Stroke merging is purely spatial ("regions")
@@ -80,6 +82,8 @@ Desktop and touch input share `toolStore.sketchDraft` and the same mode/paramete
 `SketchModeSwitcher` owns the shared `draw` / `erase` store updates. Draw exposes three fixed-position color slots through `SketchColorPresetPicker`, and draw/erase each expose three fixed-position size slots through `SketchPresetPicker`. Each trio is transparent by default; color and size use the same subtle grey slot-level selected surface without an accent ring. Selecting a different slot applies it immediately; selecting the active slot opens the full palette or size slider to edit that slot. Size slots render only a short rounded stroke preview whose height represents the stored value. The preset values, active indices, and current `sketchDraft` preferences persist under the `huabu-sketch-tools` localStorage key through Zustand `persist`; transient `pendingNodeType` does not persist.
 
 During an eraser drag, each hit stroke is hidden immediately through `gesturePreviewStore` so the interaction has live visual feedback. The underlying node data is unchanged until pointer up, when all hits commit as one command batch and one undo gesture; cancelling or switching tools clears the preview and restores every uncommitted stroke.
+
+The pressed eraser indicator uses `fg-default` at 8% fill opacity so it follows the current theme while keeping underlying content visible. Its `fg-muted` outline, radius, hit testing, and unpressed empty fill are unchanged.
 
 A selected Sketch node deliberately does not use or mutate these drawing presets. Its toolbar keeps one color menu and one `SketchSizePicker` secondary menu that edit only that node's stored strokes, so post-draw edits cannot silently change future drawing preferences. `SketchControls` owns their shared open state: opening either menu closes the other, and both use the common floating-toolbar popover surface. The thickness slider fires per drag tick, so its drag is bracketed by `canvasStore.beginNodeDataGesture` / `endNodeDataGesture` (arm one pre-edit snapshot on pointer-down, release on pointer-up) — the burst of `MERGE_NODE_DATA` writes folds into a **single undo entry** instead of one per tick. A color pick is a single discrete write and needs no bracket.
 

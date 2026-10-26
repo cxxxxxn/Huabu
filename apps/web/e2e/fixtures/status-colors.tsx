@@ -7,8 +7,10 @@ import { Button } from '@/components/Common/Button';
 import { TextInput } from '@/components/Common/TextInput';
 import { StatusMessage } from '@/components/Messages/StatusMessage';
 import { InstructionFrameBadge } from '@/components/Nodes/frame/InstructionFrameBadge';
+import { NodeRef } from '@/components/Nodes/NodeRef/NodeRef';
 import { QuestionConversationCard } from '@/components/Nodes/question/QuestionConversationCard';
 import { SpaceAgentActivity } from '@/components/Nodes/spacePreview/SpaceAgentActivity';
+import { AgentletHealthBanner } from '@/components/Settings/agent-profiles/AgentletHealthBanner';
 
 import '@/components/Nodes/question/QuestionNode.css';
 
@@ -83,6 +85,33 @@ export function mountStatusColorsFixture() {
         detail="Could not save changes."
         onRetry={() => {}}
       />
+      <div className="my-4" data-secondary-copy>
+        <h2 className="mb-3 text-base">
+          P2: Retry countdown and active reference
+        </h2>
+        <AgentletHealthBanner
+          agentlet={{ online: false, nextRestartAt: Date.now() + 60000 }}
+          restarting={false}
+          onRestart={async () => {}}
+        />
+        <NodeRef fallbackLabel="Readable reference" />
+        <h2 className="mt-6 mb-3 text-base">P3: Neutral Question status</h2>
+        <div className="question-compact w-80 max-w-full">
+          <QuestionConversationCard
+            agent={{ kind: 'internal', alias: 'Huabu', mode: 'operate' }}
+            status="idle"
+            unread={false}
+            conflictCount={0}
+            text="Plan the next step"
+            placeholder=""
+            effectiveWidth={320}
+            effectiveHeight={130}
+            effectiveFontSize={24}
+            paddingX={16}
+            paddingY={16}
+          />
+        </div>
+      </div>
       <div className="my-4 flex items-center gap-4">
         <TextInput
           aria-label="Invalid field"

@@ -71,7 +71,7 @@ export const AgentletHealthBanner: React.FC<AgentletHealthBannerProps> = ({
           </Tooltip>
         )}
         {nextRestartInSec !== null && nextRestartInSec > 0 && (
-          <p className="text-fg-subtle mt-0.5 text-[11px] leading-snug">
+          <p className="text-fg-muted mt-0.5 text-[11px] leading-snug">
             {t('settings.nextAutoRetry', { seconds: nextRestartInSec })}
           </p>
         )}

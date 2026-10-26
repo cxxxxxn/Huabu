@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { createId } from '@huabu/shared';
+import { createId, resolveAccent } from '@huabu/shared';
 
 import { SKETCH_STROKE_MERGE_MAX_DISTANCE_SCREEN_PX } from '@/config/canvas';
 import { resolveFrameAtPoint } from '@/handler/canvasCommand/utils';
@@ -901,16 +901,23 @@ export function SketchOverlay({
     const center = svgSize / 2;
     const dotRadius = diameter / 2;
     const haloRadius = dotRadius + 1;
-    // Only `#` from hex colors needs URL-encoding inside an SVG data URI;
-    // palette tokens like `rgb(...)` / named colors pass through fine.
-    const safeColor = resolvedColor.replace(/#/g, '%23');
-    const svg =
-      `<svg xmlns='http://www.w3.org/2000/svg' width='${svgSize}' height='${svgSize}' viewBox='0 0 ${svgSize} ${svgSize}'>` +
-      `<circle cx='${center}' cy='${center}' r='${haloRadius}' fill='white'/>` +
-      `<circle cx='${center}' cy='${center}' r='${dotRadius}' fill='${safeColor}'/>` +
-      `</svg>`;
-    return `url("data:image/svg+xml;utf8,${svg}") ${center} ${center}, crosshair`;
-  }, [resolvedColor, strokeSize, zoom]);
+    // Standalone SVG cursors cannot inherit the document's color scheme.
+    const cursorForTheme = (theme: 'light' | 'dark') => {
+      const safeColor = (
+        resolveAccent(strokeColor, theme) ?? strokeColor
+      ).replace(/#/g, '%23');
+      const svg =
+        `<svg xmlns='http://www.w3.org/2000/svg' width='${svgSize}' height='${svgSize}' viewBox='0 0 ${svgSize} ${svgSize}'>` +
+        `<circle cx='${center}' cy='${center}' r='${haloRadius}' fill='white'/>` +
+        `<circle cx='${center}' cy='${center}' r='${dotRadius}' fill='${safeColor}'/>` +
+        `</svg>`;
+      return `url("data:image/svg+xml;utf8,${svg}") ${center} ${center}, crosshair`;
+    };
+    return {
+      '--sketch-cursor-light': cursorForTheme('light'),
+      '--sketch-cursor-dark': cursorForTheme('dark'),
+    };
+  }, [strokeColor, strokeSize, zoom]);
 
   // Tessellate only when the stroke buffer is actually republished (once per
   // frame at most). Computing this inline in the JSX re-ran perfect-freehand
@@ -965,7 +972,8 @@ export function SketchOverlay({
               cx={eraserPos.x}
               cy={eraserPos.y}
               r={eraserScreenRadius}
-              fill={erasing ? 'rgba(0,0,0,0.08)' : 'none'}
+              fill={erasing ? 'var(--fg-default)' : 'none'}
+              fillOpacity={0.08}
               stroke="currentColor"
               strokeWidth={1.5}
               className="text-fg-muted"
@@ -980,8 +988,8 @@ export function SketchOverlay({
     <div
       ref={setOverlayEl}
       data-sketch-overlay
-      className="absolute inset-0 z-4"
-      style={{ cursor: dotCursor, ...getStylusRawTouchOverlayStyle() }}
+      className="absolute inset-0 z-4 cursor-[var(--sketch-cursor-light)] dark:cursor-[var(--sketch-cursor-dark)]"
+      style={{ ...dotCursor, ...getStylusRawTouchOverlayStyle() }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}

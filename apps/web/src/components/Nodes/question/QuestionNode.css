@@ -5,11 +5,7 @@
 
 .question-compact {
   --question-tone: var(--fg-muted);
-  --question-fg: color-mix(
-    in srgb,
-    var(--question-tone) 65%,
-    var(--fg-default)
-  );
+  --question-fg: var(--fg-muted);
   --question-light: var(--fg-subtle);
   --question-bg: var(--bg-hover);
   --question-fill: var(--bg-surface);

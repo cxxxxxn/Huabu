@@ -290,7 +290,7 @@ export const TextNode = memo(
             fontStyle={isItalic ? 'italic' : 'normal'}
             textDecoration={textDecoration}
             color={textColor}
-            textareaClassName="placeholder:text-fg-subtle/30"
+            textareaClassName="placeholder:text-fg-muted"
             containerClassName="overflow-hidden"
           />
         )}

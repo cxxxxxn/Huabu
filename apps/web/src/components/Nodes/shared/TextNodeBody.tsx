@@ -120,7 +120,7 @@ export interface TextNodeBodyProps {
   lineHeight?: number;
   /**
    * Extra classes for the textarea — typically the per-node placeholder
-   * color modifier (e.g. `placeholder:text-fg-subtle/30`).
+   * color modifier (e.g. `placeholder:text-fg-muted`).
    */
   textareaClassName?: string;
   /**

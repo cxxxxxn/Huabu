@@ -87,6 +87,10 @@ Ink reference paints retain the semantic `--ink-reference-bg` and `--ink-broken-
 
 ### Shared interface behavior
 
+Readable secondary copy uses opaque `fg-muted`: active NodeRef labels, Agentlet auto-retry countdowns, and Text node placeholders must not use attenuated `fg-subtle`. Disabled references retain their separate disabled treatment. These role changes do not alter authored Text colors or node geometry.
+
+Neutral Question status copy also uses `fg-muted` directly instead of a local foreground mixture; colored statuses retain their `*-fg` roles. Neutral far-zoom Frame count badges use opaque `bg-hover`, while colored Frame badges retain their Accent `highlightBg`.
+
 Common DropdownMenu action lists expose a labelled `menu` linked to their trigger. Opening focuses the first enabled item; ArrowDown/ArrowUp on the trigger open at the first/last enabled item, and ArrowDown/ArrowUp/Home/End inside the menu move focus while skipping disabled items. Tab dismisses without blocking native traversal, Escape returns focus to the trigger, and ArrowRight/ArrowLeft enter/leave submenus. Hover-opened submenus do not steal focus. Menu items retain native button/link activation. Form and layout panels declare `contentRole="dialog"` so text editing and ordinary tab order remain native; consumers that already own their menu/dialog semantics and keyboard navigation declare `contentRole="presentation"` to avoid nested menus or duplicate handlers. Popover forwards the root DOM semantics and keyboard handler without adding layout wrappers.
 
 Focusing the first or last enabled menu item also scrolls it into view, including ArrowUp opening a long, scrollable menu at its last option. Connected-node direction shortcuts likewise scroll their direction-specific initial option into view when preceding groups overflow.

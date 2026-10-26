@@ -10,6 +10,159 @@ import { openNewCanvas } from './helpers';
 const rgb = (hex: string) =>
   `rgb(${[1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16)).join(', ')})`;
 
+test('Text placeholders stay opaque and Ink cursor pixels follow the current theme', async ({
+  page,
+}) => {
+  await openNewCanvas(page);
+  const canvasId = page.url().split('/canvas/')[1]?.split(/[?#]/)[0];
+  const response = await page.request.post(`/api/canvas/${canvasId}/execute`, {
+    data: {
+      commands: [
+        {
+          type: 'CREATE_NODES',
+          nodes: [
+            {
+              id: 'node-empty-text',
+              nodeType: 'text',
+              data: { content: '' },
+              position: { x: 350, y: 250 },
+              size: { width: 300 },
+            },
+          ],
+        },
+      ],
+      originator: { source: 'agent', threadId: 'e2e-placeholder' },
+    },
+  });
+  expect(response.ok(), await response.text()).toBe(true);
+  const editor = page.locator('[data-id="node-empty-text"] textarea');
+  await expect(editor).toBeVisible();
+  for (const dark of [false, true]) {
+    await page.evaluate(
+      (dark) => document.documentElement.classList.toggle('dark', dark),
+      dark,
+    );
+    const placeholder = await editor.evaluate((el) => {
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--fg-muted)';
+      el.after(probe);
+      const expected = getComputedStyle(probe).color;
+      probe.remove();
+      const style = getComputedStyle(el, '::placeholder');
+      return { actual: style.color, opacity: style.opacity, expected };
+    });
+    expect(placeholder.actual).toBe(placeholder.expected);
+    expect(placeholder.opacity).toBe('1');
+    const box = await editor.boundingBox();
+    if (!box) throw new Error('Missing Text placeholder bounds');
+    await page.screenshot({
+      path: test
+        .info()
+        .outputPath(`placeholder-${dark ? 'dark' : 'light'}.png`),
+      clip: {
+        x: box.x - 20,
+        y: box.y - 20,
+        width: box.width + 40,
+        height: box.height + 40,
+      },
+    });
+  }
+  await page.evaluate(async () => {
+    const load = (path: string) => import(/* @vite-ignore */ path);
+    const { useToolStore } = await load('/src/store/toolStore.ts');
+    useToolStore
+      .getState()
+      .setSketchDraft({ strokeColor: 'blue', strokeSize: 8, mode: 'draw' });
+    useToolStore.getState().setPendingNodeType('sketch');
+  });
+  const overlay = page.locator('[data-sketch-overlay]');
+  await expect(overlay).toBeVisible();
+  for (const [index, dark] of [false, true, false].entries()) {
+    await page.evaluate(
+      (dark) => document.documentElement.classList.toggle('dark', dark),
+      dark,
+    );
+    const pixel = await overlay.evaluate(async (el) => {
+      const cursor = getComputedStyle(el).cursor;
+      const url = cursor.match(/url\("([^"]+)"\)/)?.[1];
+      if (!url) throw new Error(`Missing SVG cursor: ${cursor}`);
+      const image = new Image();
+      image.src = url;
+      await image.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Missing canvas context');
+      ctx.drawImage(image, 0, 0);
+      return [
+        ...ctx.getImageData(
+          Math.floor(image.width / 2),
+          Math.floor(image.height / 2),
+          1,
+          1,
+        ).data,
+      ];
+    });
+    const blue = ACCENT_PALETTE.find((entry) => entry.token === 'blue');
+    if (!blue) throw new Error('Missing blue preset');
+    const hex = dark ? blue.darkValue : blue.value;
+    expect(pixel).toEqual(
+      [1, 3, 5]
+        .map((offset) => parseInt(hex.slice(offset, offset + 2), 16))
+        .concat(255),
+    );
+    if (index < 2) {
+      await page.mouse.move(420, 350);
+      await page.mouse.down();
+      await page.mouse.move(620, 350, { steps: 15 });
+      await expect(overlay.locator('path')).toBeVisible();
+      // Browser screenshots omit OS cursors; show the exact computed SVG as an image.
+      await overlay.evaluate(async (el) => {
+        const url = getComputedStyle(el).cursor.match(/url\("([^"]+)"\)/)?.[1];
+        if (!url) throw new Error('Missing computed cursor');
+        const image = document.createElement('img');
+        image.dataset.cursorSample = '';
+        image.src = url;
+        image.style.cssText =
+          'position:fixed;left:660px;top:340px;z-index:9000;pointer-events:none';
+        document.body.append(image);
+        await image.decode();
+      });
+      await page.screenshot({
+        path: test.info().outputPath(`ink-${dark ? 'dark' : 'light'}.png`),
+        clip: { x: 380, y: 300, width: 360, height: 100 },
+      });
+      await page.locator('[data-cursor-sample]').evaluate((el) => el.remove());
+      await page.mouse.up();
+    }
+  }
+  await page.evaluate(async () => {
+    const load = (path: string) => import(/* @vite-ignore */ path);
+    const { useToolStore } = await load('/src/store/toolStore.ts');
+    useToolStore.getState().setSketchDraft({ mode: 'erase', eraserSize: 30 });
+  });
+  for (const dark of [false, true]) {
+    await page.evaluate(
+      (dark) => document.documentElement.classList.toggle('dark', dark),
+      dark,
+    );
+    await page.mouse.move(600, 500);
+    const circle = overlay.locator('circle');
+    await expect(circle).toHaveAttribute('fill', 'none');
+    await page.mouse.down();
+    await expect(circle).toHaveAttribute('fill', 'var(--fg-default)');
+    await expect(circle).toHaveCSS('fill-opacity', '0.08');
+    await expect(circle).toHaveAttribute('r', '30');
+    await page.screenshot({
+      path: test.info().outputPath(`eraser-${dark ? 'dark' : 'light'}.png`),
+      clip: { x: 480, y: 440, width: 240, height: 120 },
+    });
+    await page.mouse.up();
+    await expect(circle).toHaveAttribute('fill', 'none');
+  }
+});
+
 test('Text uses brighter preset colors in both its reading mirror and editor', async ({
   page,
 }) => {

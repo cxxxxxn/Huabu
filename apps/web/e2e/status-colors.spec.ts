@@ -131,7 +131,31 @@ test('status buttons and real Agent/Space badges use readable opaque roles in bo
     await expectReadable(
       fixture.getByText('Could not save changes.', { exact: true }),
     );
+    const secondary = fixture.locator('[data-secondary-copy]');
+    const countdown = secondary.locator('p').last();
+    const referenceLabel = secondary.getByRole('button', {
+      name: 'Readable reference',
+    });
+    for (const element of [countdown, referenceLabel]) {
+      await expect(element).toHaveCSS(
+        'color',
+        await reference(page, 'fg-muted'),
+      );
+      await expectReadable(element);
+    }
+    await referenceLabel.hover();
+    await expectReadable(referenceLabel);
+    const neutralQuestion = secondary.locator('.question-conversation-status');
+    await expect(neutralQuestion).toHaveCSS(
+      'color',
+      await reference(page, 'fg-muted'),
+    );
+    await expectReadable(neutralQuestion);
     await page.mouse.move(0, 0);
+    await page.setViewportSize({ width: 820, height: 1000 });
+    await secondary.screenshot({
+      path: test.info().outputPath(`secondary-${dark ? 'dark' : 'light'}.png`),
+    });
     for (const width of [1280, 390]) {
       await page.setViewportSize({ width, height: 900 });
       await fixture.evaluate((el) => {
@@ -288,6 +312,30 @@ test('status tokens align perceptual levels and preserve Diff and overlay contra
           ratio: contrast(
             rgba(`var(--diff-${kind}-text)`),
             rgba(`var(--diff-${kind}-bg)`),
+          ),
+        });
+      }
+      for (const background of [
+        'bg-surface',
+        'bg-default',
+        'bg-hover',
+        ...[
+          'white',
+          'grey',
+          'teal',
+          'blue',
+          'green',
+          'amber',
+          'orange',
+          'red',
+          'purple',
+        ].map((accent) => `accent-${accent}-soft-bg`),
+      ]) {
+        pairs.push({
+          name: `readable secondary copy on ${background}`,
+          ratio: contrast(
+            rgba('var(--fg-muted)'),
+            rgba(`var(--${background})`),
           ),
         });
       }
