@@ -103,6 +103,7 @@ import {
   updateNode,
 } from '../storage/index.js';
 import { acquireWorkspaceOperationLease } from '../workspace.js';
+import { remapImportedSpace } from './import-space-identity.js';
 
 import type { CanvasNodeType } from '@huabu/shared';
 import type {
@@ -2165,31 +2166,31 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
             message: 'Invalid bundle: missing Space record',
           });
         }
-        const sourceCanvasId = parsed.canvasId;
+        const remapped = await remapImportedSpace(
+          stagingDir,
+          parsed,
+          targetCanvasId,
+        );
         const importedManifest = manifest as ImportManifest | null;
         const targetTitle =
           importedManifest?.title ?? parsed.title ?? 'Imported canvas';
         const topology = stripLegacyPortalTopology(
-          (parsed.state.nodes ?? []) as Parameters<
+          (remapped.state.nodes ?? []) as Parameters<
             typeof stripLegacyPortalTopology
           >[0],
-          (parsed.state.edges ?? []) as Parameters<
+          (remapped.state.edges ?? []) as Parameters<
             typeof stripLegacyPortalTopology
           >[1],
         );
 
-        // Artifact URLs are the bundle's own vocabulary, so they are rewritten
-        // here; where the result is filed is not, so `publish` decides that —
+        // Identities and artifact URLs belong to the public bundle format.
+        // Where the result is filed does not, so `publish` decides that —
         // including the de-duplication suffix it may have to add to the title.
         await staged.publish({
-          ...parsed,
+          ...remapped,
           canvasId: targetCanvasId,
           title: targetTitle,
-          state: rewriteCanvasArtifactUrls(
-            { ...parsed.state, ...topology },
-            sourceCanvasId,
-            targetCanvasId,
-          ),
+          state: { ...remapped.state, ...topology },
         });
         stagingCleanedUp = true;
 
@@ -2290,21 +2291,6 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 };
-
-/**
- * Rewrite `/api/canvas/<old>/artifact/<file>` URLs inside canvas state to
- * point at the freshly-allocated canvas id. Mutates and returns the input.
- */
-function rewriteCanvasArtifactUrls<T>(
-  state: T,
-  fromCanvasId: string,
-  toCanvasId: string,
-): T {
-  const fromPrefix = `/api/canvas/${fromCanvasId}/artifact/`;
-  const toPrefix = `/api/canvas/${toCanvasId}/artifact/`;
-  const json = JSON.stringify(state).split(fromPrefix).join(toPrefix);
-  return JSON.parse(json) as T;
-}
 
 /**
  * Iterate over zip entries via `yauzl`, calling `onEntry(path, read)` for

@@ -511,7 +511,9 @@ export const ChatPanel = ({
     canvasId: ownerCanvasId,
     provider: llmConfig?.provider,
     defaultModelId: llmConfig?.model,
-    enabled: ownerScopeReady && agentBinding.kind !== 'external',
+    enabled:
+      agentBinding.kind !== 'external' &&
+      (!activeConversationView || conversationOwnerSource !== undefined),
     threadHasMessages: activeConversationView
       ? conversationOwnerSource?.bindingState === 'bound'
       : messages.length > 0,

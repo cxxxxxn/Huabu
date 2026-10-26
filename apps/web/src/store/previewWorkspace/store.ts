@@ -114,7 +114,10 @@ export type PreviewWorkspaceState = {
 
   openPreviewTarget: (
     target: PreviewTarget,
-    options?: OpenPreviewTargetOptions,
+    options?: OpenPreviewTargetOptions & {
+      /** Passive navigation must not count as explicit reading. */
+      markReadIntent?: boolean;
+    },
     beforeTabRemoved?: BeforePreviewTabRemoved,
   ) => string;
   closeTab: (tabId: string, beforeTabRemoved?: BeforePreviewTabRemoved) => void;
@@ -191,7 +194,9 @@ export const usePreviewWorkspaceStore = create<PreviewWorkspaceState>(
       const opened = openTarget(state.workspace, target, options);
       if (!opened.tabId) return '';
       set(commitWorkspace(state, opened.workspace, beforeTabRemoved));
-      get().markTabInteracted(opened.tabId);
+      if (options?.markReadIntent !== false) {
+        get().markTabInteracted(opened.tabId);
+      }
       return opened.tabId;
     },
 

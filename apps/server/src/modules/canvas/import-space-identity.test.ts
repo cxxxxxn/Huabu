@@ -1,0 +1,189 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT license.
+
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
+import { FileTurnStore } from '@agenetes/agenetes';
+import { afterEach, beforeEach, expect, it } from 'vitest';
+
+import { remapImportedSpace } from './import-space-identity.js';
+import { parseFrontmatter } from '../../utils/markdown-frontmatter.js';
+
+import type { CanvasFile } from './persistence-types.js';
+import type { CanvasNode } from '@huabu/shared/canvas-engine';
+
+let directory: string;
+beforeEach(async () => {
+  directory = await mkdtemp(path.join(tmpdir(), 'huabu-import-identity-'));
+});
+afterEach(async () => {
+  await rm(directory, { recursive: true, force: true });
+});
+
+function record(): CanvasFile {
+  return {
+    canvasId: 'source',
+    title: 'Imported',
+    version: 1,
+    createdAt: 1,
+    updatedAt: 1,
+    state: {
+      nodes: [
+        {
+          id: 'frame',
+          type: 'frame',
+          position: { x: 0, y: 0 },
+          data: { label: 'Frame' },
+        },
+        {
+          id: 'note',
+          type: 'note',
+          parentId: 'frame',
+          position: { x: 10, y: 20 },
+          data: { label: 'note' },
+        },
+        {
+          id: 'agent',
+          type: 'question',
+          position: { x: 100, y: 0 },
+          data: { threadId: 'thread', selectedNodeIds: ['note'] },
+        },
+      ],
+      edges: [{ id: 'edge', source: 'note', target: 'agent' }],
+    },
+  };
+}
+
+it('remaps topology, node frontmatter, structured history and scoped links together', async () => {
+  await mkdir(path.join(directory, 'nodes'));
+  await mkdir(path.join(directory, '.history'));
+  await writeFile(
+    path.join(directory, 'nodes', 'Note.md'),
+    '---\nid: note\ntype: note\nlabel: note\n---\nnote\n[Agent](/canvas/source?node=agent)\n![Image](/api/canvas/source/artifact/picture.png)\n',
+  );
+  await writeFile(
+    path.join(directory, '.history', 'events.jsonl'),
+    `${JSON.stringify({ nodeId: 'note', selectedNodeIds: ['note'], content: 'note', canvasId: 'source' })}\n`,
+  );
+  await writeFile(
+    path.join(directory, '.history', 'threads.json'),
+    JSON.stringify({
+      records: {
+        agent: {
+          spec: { threadId: 'agent', namespace: { name: 'source' } },
+          hostMetadata: { owner: { canvasId: 'source', nodeId: 'agent' } },
+        },
+      },
+    }),
+  );
+  const original = record();
+  const imported = await remapImportedSpace(directory, original, 'target');
+  const [frame, note, agent] = imported.state.nodes as CanvasNode[];
+  expect(new Set([frame.id, note.id, agent.id]).size).toBe(3);
+  expect(frame.id).not.toBe('frame');
+  expect(note).toMatchObject({
+    type: 'note',
+    parentId: frame.id,
+    data: { label: 'note' },
+    position: { x: 10, y: 20 },
+  });
+  expect(agent.data).toMatchObject({
+    threadId: 'thread',
+    selectedNodeIds: [note.id],
+  });
+  expect(imported.state.edges[0]).toMatchObject({
+    source: note.id,
+    target: agent.id,
+  });
+  expect(imported.state.edges[0]).not.toMatchObject({ id: 'edge' });
+  const sidecar = parseFrontmatter(
+    await readFile(path.join(directory, 'nodes', 'Note.md'), 'utf8'),
+  );
+  expect(sidecar.meta).toMatchObject({ id: note.id, label: 'note' });
+  expect(sidecar.content).toBe(
+    `note\n[Agent](/canvas/target?node=${agent.id})\n![Image](/api/canvas/target/artifact/picture.png)\n`,
+  );
+  expect(
+    JSON.parse(
+      await readFile(path.join(directory, '.history', 'events.jsonl'), 'utf8'),
+    ),
+  ).toEqual({
+    nodeId: note.id,
+    selectedNodeIds: [note.id],
+    content: 'note',
+    canvasId: 'target',
+  });
+  expect(
+    JSON.parse(
+      await readFile(path.join(directory, '.history', 'threads.json'), 'utf8'),
+    ),
+  ).toEqual({
+    records: {
+      agent: {
+        spec: { threadId: 'agent', namespace: { name: 'target' } },
+        hostMetadata: { owner: { canvasId: 'target', nodeId: agent.id } },
+      },
+    },
+  });
+  expect(original).toEqual(record());
+});
+
+it('updates SQLite conversation references without changing thread identity, turn order or sequence fences', async () => {
+  const namespace = {
+    name: 'source',
+    storage: { root: path.join(directory, '.history') },
+  };
+  const turns = new FileTurnStore();
+  turns.append(namespace, 'thread', {
+    seqStart: 3,
+    seqEnd: 8,
+    turn: {
+      request: { type: 'user_text', content: 'Original prompt' },
+      transcript: [
+        {
+          type: 'tool_call',
+          data: {
+            toolCallId: 'call',
+            title: 'Read nodes',
+            status: 'completed',
+            rawOutput: { nodeId: 'note', selectedNodeIds: ['note'] },
+          },
+        },
+      ],
+    },
+  });
+  turns.close(namespace);
+  try {
+    const imported = await remapImportedSpace(directory, record(), 'target');
+    const note = imported.state.nodes[1] as CanvasNode;
+    const history = turns.list(namespace, 'thread');
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({
+      seqStart: 3,
+      seqEnd: 8,
+      turn: {
+        request: { type: 'user_text', content: 'Original prompt' },
+        transcript: [
+          {
+            type: 'tool_call',
+            data: {
+              rawOutput: { nodeId: note.id, selectedNodeIds: [note.id] },
+            },
+          },
+        ],
+      },
+    });
+  } finally {
+    turns.close(namespace);
+  }
+});
+
+it('rejects ambiguous duplicate identities instead of publishing broken references', async () => {
+  const source = record();
+  source.state.nodes.push(source.state.nodes[0]);
+  await expect(remapImportedSpace(directory, source, 'target')).rejects.toThrow(
+    'duplicate identity',
+  );
+});

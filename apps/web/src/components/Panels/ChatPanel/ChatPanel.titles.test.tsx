@@ -26,6 +26,7 @@ import {
 import { Button } from '@/components/Common/Button';
 import { toast } from '@/components/Common/Toast';
 import { resetAgentTurnAcceptanceObserversForTests } from '@/hooks/agentTurnController';
+import { useBuiltinThreadSettings } from '@/hooks/useBuiltinThreadSettings';
 import { useConversationTitles } from '@/hooks/useConversationTitles';
 import { i18n } from '@/i18n';
 import { useAcpThreadChangesStore } from '@/store/acpThreadChangesStore';
@@ -140,12 +141,12 @@ vi.mock('@/hooks/useInternalSlashCommands', () => ({
   }),
 }));
 vi.mock('@/hooks/useBuiltinThreadSettings', () => ({
-  useBuiltinThreadSettings: () => ({
+  useBuiltinThreadSettings: vi.fn(() => ({
     models: [],
     settings: { reasoningEffort: null },
     effectiveModelId: null,
     loading: false,
-  }),
+  })),
 }));
 vi.mock('@/components/Messages/MessageList', () => ({
   MessageList: ({
@@ -591,8 +592,21 @@ describe('rendered conversation titles', () => {
     }
   });
 
-  it('blocks remote submission while ownership is unavailable', async () => {
+  it('blocks unavailable-owner submission without clearing pre-first-send settings', async () => {
+    const actual = await vi.importActual<{
+      useBuiltinThreadSettings: typeof useBuiltinThreadSettings;
+    }>('@/hooks/useBuiltinThreadSettings');
+    vi.mocked(useBuiltinThreadSettings).mockImplementation(
+      actual.useBuiltinThreadSettings,
+    );
+    const llmApi = await import('@/api/llm');
+    vi.spyOn(llmApi, 'getLLMModels').mockResolvedValue([]);
     seedRemoteOwner();
+    const selection = { modelId: 'chosen-model', reasoningEffort: 'high' };
+    useChatStore.getState().setMessages('thread', []);
+    useChatStore.getState().setThreadSettings('thread', selection);
+    await renderPanel(remoteSession, remoteTab);
+    expect(useChatStore.getState().settingsByThread.thread).toEqual(selection);
     await renderPanel(remoteSession, remoteTab, vi.fn(), {
       ownerUnavailable: true,
     });
@@ -605,6 +619,19 @@ describe('rendered conversation titles', () => {
       ),
     );
     expect(agentApi.streamMessage).not.toHaveBeenCalled();
+    expect(useChatStore.getState().settingsByThread.thread).toEqual(selection);
+    expect(useBuiltinThreadSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        enabled: true,
+        threadId: 'thread',
+        canvasId: 'child',
+      }),
+    );
+    await renderPanel(remoteSession, remoteTab);
+    expect(container.querySelector('form')?.dataset.submitDisabled).toBe(
+      'false',
+    );
+    expect(useChatStore.getState().settingsByThread.thread).toEqual(selection);
   });
 
   it.each([false, true])(

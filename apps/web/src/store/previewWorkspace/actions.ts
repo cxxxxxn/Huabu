@@ -33,7 +33,11 @@ export function openSpaceConversation(
 
 export function openPreviewNode(
   nodeId: string,
-  options?: { transient?: boolean; focusEditor?: boolean },
+  options?: {
+    transient?: boolean;
+    focusEditor?: boolean;
+    markReadIntent?: boolean;
+  },
 ): string {
   const canvas = useCanvasStore.getState();
   const previousNodeId = selectActiveNodeId(
@@ -47,12 +51,13 @@ export function openPreviewNode(
   }
 
   usePanelStore.getState().requestOpenRightPanel();
-  const tabId = usePreviewWorkspaceStore
-    .getState()
-    .openPreviewTarget(
-      { kind: 'node', canvasId: canvas.canvasId, nodeId },
-      { transient: options?.transient ?? true },
-    );
+  const tabId = usePreviewWorkspaceStore.getState().openPreviewTarget(
+    { kind: 'node', canvasId: canvas.canvasId, nodeId },
+    {
+      transient: options?.transient ?? true,
+      markReadIntent: options?.markReadIntent,
+    },
+  );
   const openedNode = canvas.nodes.find((node) => node.id === nodeId);
   if (tabId && openedNode?.type === 'note' && options?.focusEditor !== false) {
     usePreviewWorkspaceStore.getState().requestNodeFocus(tabId);

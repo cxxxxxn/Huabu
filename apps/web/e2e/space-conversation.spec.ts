@@ -103,6 +103,12 @@ test('opens and continues a child Agent in the parent without leaking canvas sel
     }
     await route.fulfill({ response, json: body });
   });
+  await page.route('https://example.test/review-result.svg', (route) =>
+    route.fulfill({
+      contentType: 'image/svg+xml',
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="60"><rect width="80" height="60" fill="currentColor"/></svg>',
+    }),
+  );
   await page.route(`**/api/agent/history/${threadId}/page?**`, (route) =>
     route.fulfill({
       json: {
@@ -117,7 +123,7 @@ test('opens and continues a child Agent in the parent without leaking canvas sel
                 parts: [
                   {
                     kind: 'text',
-                    text: 'The child conversation is available here.',
+                    text: 'The child conversation is available here.\n\n![Review result](https://example.test/review-result.svg)',
                   },
                 ],
               },
@@ -171,6 +177,43 @@ test('opens and continues a child Agent in the parent without leaking canvas sel
   const sourceGap = messageViewport.y - sourceLink.y - sourceLink.height;
   expect(sourceGap).toBeGreaterThanOrEqual(0);
   expect(sourceGap).toBeLessThanOrEqual(4);
+  const resultImage = page.getByRole('img', {
+    name: 'Review result',
+    exact: true,
+  });
+  await expect(resultImage).toBeVisible();
+  await expect
+    .poll(() =>
+      resultImage.evaluate((image: HTMLImageElement) => image.naturalWidth),
+    )
+    .toBe(80);
+  await page.evaluate(() => {
+    document.addEventListener(
+      'dragstart',
+      (event) => {
+        const target = event.target;
+        if (
+          target instanceof HTMLImageElement &&
+          target.alt === 'Review result'
+        ) {
+          setTimeout(() => {
+            target.dataset.dragCancelled = String(event.defaultPrevented);
+          }, 0);
+        }
+      },
+      { once: true, capture: true },
+    );
+  });
+  await resultImage.dragTo(page.locator('.react-flow__pane'), {
+    targetPosition: { x: 50, y: 600 },
+  });
+  await expect(resultImage).toHaveAttribute('data-drag-cancelled', 'true');
+  const parentAfterDrag = await (
+    await page.request.get(`/api/canvas/${parent}`)
+  ).json();
+  expect(
+    parentAfterDrag.state.nodes.map((node: { id: string }) => node.id).sort(),
+  ).toEqual([entry.id, 'parent-note'].sort());
   await input.fill('Continue the original task');
   await input.press('Enter');
   await expect(page.getByText('Continued in the child Space.')).toBeVisible();

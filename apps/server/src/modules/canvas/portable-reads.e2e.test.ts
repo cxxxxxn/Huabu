@@ -694,7 +694,28 @@ describe('Space bundle round trip', () => {
     const record = await space(newCanvasId).read();
     expect(record?.canvasId).toBe(newCanvasId);
     const nodes = await space(newCanvasId).nodes.list();
-    expect(nodes.get('node-a')?.record.content).toContain('exported body');
+    expect(nodes.has('node-a')).toBe(false);
+    expect([...nodes.values()][0]?.record.content).toContain('exported body');
+    expect(record?.state.nodes[0]).toMatchObject({
+      id: [...nodes.keys()][0],
+    });
+    const repeated = await app.inject({
+      method: 'POST',
+      url: '/canvas/import',
+      payload: body.payload,
+      headers: body.headers,
+    });
+    expect(repeated.statusCode).toBe(200);
+    const repeatedNodes = await space(repeated.json().canvasId).nodes.list();
+    expect([...repeatedNodes.keys()].some((id) => nodes.has(id))).toBe(false);
+    expect([...repeatedNodes.values()][0]?.record.content).toContain(
+      'exported body',
+    );
+    const originalNodes = await space('canvas-export').nodes.list();
+    expect([...originalNodes.keys()]).toEqual(['node-a']);
+    expect(originalNodes.get('node-a')?.record.content).toContain(
+      'exported body',
+    );
   });
 
   it('accepts a bundle that still carries the frozen canvas.json record name', async () => {
@@ -735,7 +756,11 @@ describe('Space bundle round trip', () => {
     const record = await space(canvasId).read();
     expect(record?.title).toBe('Legacy bundle');
     const nodes = await space(canvasId).nodes.list();
-    expect(nodes.get('node-legacy')?.record.content).toContain('legacy body');
+    expect(nodes.has('node-legacy')).toBe(false);
+    expect([...nodes.values()][0]?.record.content).toContain('legacy body');
+    expect(record?.state.nodes[0]).toMatchObject({
+      id: [...nodes.keys()][0],
+    });
   });
 
   it('de-duplicates the title when the imported name is already taken', async () => {

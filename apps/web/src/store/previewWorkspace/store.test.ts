@@ -65,6 +65,24 @@ beforeEach(() => {
 });
 
 describe('loading a Canvas', () => {
+  it('opens passive targets without read intent and preserves later explicit reading', () => {
+    store().loadForCanvas(CANVAS);
+    const tabId = store().openPreviewTarget(node('question'), {
+      markReadIntent: false,
+    });
+    expect(store().readIntentByTab).toEqual({});
+    expect(selectActiveTab(store())?.id).toBe(tabId);
+    store().markTabInteracted(tabId);
+    const intent = store().readIntentByTab[tabId];
+    expect(intent).toBeTruthy();
+    expect(
+      store().openPreviewTarget(node('question'), {
+        markReadIntent: false,
+      }),
+    ).toBe(tabId);
+    expect(store().readIntentByTab[tabId]).toBe(intent);
+  });
+
   it('restores tabs without carrying read intent across Canvas visits', () => {
     store().loadForCanvas(CANVAS);
     const tabId = store().openPreviewTarget(node('question'));

@@ -136,7 +136,14 @@ export function SpaceConversationPreview({
         </div>
       ) : null}
       {owner?.nodeId === target.nodeId && validatedKey === key ? (
-        <div className="min-h-0 flex-1">
+        <div
+          className="min-h-0 flex-1"
+          onDragStartCapture={(event) => {
+            // Native image/link drags bypass individual Canvas action controls.
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+        >
           <ChatPanel
             {...props}
             session={session}

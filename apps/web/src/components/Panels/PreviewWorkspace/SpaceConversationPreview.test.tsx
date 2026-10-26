@@ -132,6 +132,31 @@ it('shows unavailable ownership explicitly and retries without creating a replac
   expect(host.querySelector('[data-chat-thread="thread"]')).not.toBeNull();
 });
 
+it('cancels outgoing native drags before cards build payloads without blocking incoming drops', async () => {
+  await render();
+  const chat = host.querySelector('[data-chat-thread]');
+  assert(chat);
+  const payloadHandler = vi.fn();
+  chat.addEventListener('dragstart', payloadHandler);
+  for (const tag of ['img', 'a', 'span']) {
+    const source = document.createElement(tag);
+    chat.append(source);
+    const drag = new Event('dragstart', { bubbles: true, cancelable: true });
+    source.dispatchEvent(drag);
+    expect(drag.defaultPrevented).toBe(true);
+  }
+  expect(payloadHandler).not.toHaveBeenCalled();
+
+  const input = host.querySelector('input');
+  assert(input);
+  const dropHandler = vi.fn();
+  input.addEventListener('drop', dropHandler);
+  const drop = new Event('drop', { bubbles: true, cancelable: true });
+  input.dispatchEvent(drop);
+  expect(dropHandler).toHaveBeenCalledOnce();
+  expect(drop.defaultPrevented).toBe(false);
+});
+
 it('refuses a replacement owner rather than silently retargeting the tab', async () => {
   mocks.getOwner.mockResolvedValue({ ...owner, nodeId: 'different-agent' });
   await render();
