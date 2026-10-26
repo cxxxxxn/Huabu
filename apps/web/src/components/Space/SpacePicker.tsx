@@ -208,7 +208,7 @@ export function SpacePicker({
             {loadingLabel}
           </div>
         ) : loadError ? (
-          <p role="alert" className="text-danger px-2 py-3 text-sm">
+          <p role="alert" className="text-danger-fg px-2 py-3 text-sm">
             {errorLabel}
           </p>
         ) : rows.length === 0 ? (

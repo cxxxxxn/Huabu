@@ -380,7 +380,7 @@ export const NodeToolbar = ({ activeTool, onToolChange }: NodeToolbarProps) => {
 
   return (
     <>
-      <div className="text-fg-muted shadow-bottom bg-surface border-edge-default pointer-events-auto relative flex w-max items-center gap-1.5 rounded-xl border px-2 py-1.5">
+      <div className="text-fg-muted shadow-bottom bg-surface border-edge-default [&_button[aria-pressed=true]_svg]:text-info pointer-events-auto relative flex w-max items-center gap-1.5 rounded-xl border px-2 py-1.5">
         {/* Group 1: Tools */}
         <div className="flex items-center gap-1.5">
           {isNotMouse ? (
@@ -395,7 +395,7 @@ export const NodeToolbar = ({ activeTool, onToolChange }: NodeToolbarProps) => {
                 MAIN_TOOL_BUTTON_CLASS,
                 !pendingNodeType &&
                   activeTool === 'lasso' &&
-                  'text-info bg-info-bg enabled:hover:bg-info-bg',
+                  'text-info-fg bg-info-bg enabled:hover:bg-info-bg',
               )}
               onClick={() => {
                 if (pendingNodeType) setPendingNodeType(null);
@@ -437,7 +437,7 @@ export const NodeToolbar = ({ activeTool, onToolChange }: NodeToolbarProps) => {
               primaryButtonClassName={clsx(
                 MAIN_TOOL_BUTTON_CLASS,
                 !pendingNodeType &&
-                  'text-info bg-info-bg enabled:hover:bg-info-bg',
+                  'text-info-fg bg-info-bg enabled:hover:bg-info-bg',
               )}
               menuButtonClassName="enabled:hover:bg-bg-default"
             />
@@ -458,7 +458,7 @@ export const NodeToolbar = ({ activeTool, onToolChange }: NodeToolbarProps) => {
             className={clsx(
               MAIN_TOOL_BUTTON_CLASS,
               pendingNodeType === 'note' &&
-                'text-info bg-info-bg enabled:hover:bg-info-bg',
+                'text-info-fg bg-info-bg enabled:hover:bg-info-bg',
             )}
             onClick={() => {
               onToolChange('select');
@@ -477,7 +477,7 @@ export const NodeToolbar = ({ activeTool, onToolChange }: NodeToolbarProps) => {
             className={clsx(
               MAIN_TOOL_BUTTON_CLASS,
               pendingNodeType === 'text' &&
-                'text-info bg-info-bg enabled:hover:bg-info-bg',
+                'text-info-fg bg-info-bg enabled:hover:bg-info-bg',
             )}
             onClick={() => {
               onToolChange('select');
@@ -496,7 +496,7 @@ export const NodeToolbar = ({ activeTool, onToolChange }: NodeToolbarProps) => {
             className={clsx(
               MAIN_TOOL_BUTTON_CLASS,
               pendingNodeType === 'frame' &&
-                'text-info bg-info-bg enabled:hover:bg-info-bg',
+                'text-info-fg bg-info-bg enabled:hover:bg-info-bg',
             )}
             onClick={() => {
               onToolChange('select');
@@ -532,7 +532,7 @@ export const NodeToolbar = ({ activeTool, onToolChange }: NodeToolbarProps) => {
                 className={clsx(
                   MAIN_TOOL_BUTTON_CLASS,
                   pendingNodeType === 'sketch' &&
-                    'text-info bg-info-bg enabled:hover:bg-info-bg',
+                    'text-info-fg bg-info-bg enabled:hover:bg-info-bg',
                 )}
                 onClick={() => {
                   // Clicking the Sketch button always resets the tool to draw
@@ -559,7 +559,7 @@ export const NodeToolbar = ({ activeTool, onToolChange }: NodeToolbarProps) => {
               className={clsx(
                 MAIN_TOOL_BUTTON_CLASS,
                 pendingNodeType === 'childSpace' &&
-                  'text-info bg-info-bg enabled:hover:bg-info-bg',
+                  'text-info-fg bg-info-bg enabled:hover:bg-info-bg',
               )}
               onClick={() => {
                 onToolChange('select');
@@ -649,7 +649,7 @@ export const NodeToolbar = ({ activeTool, onToolChange }: NodeToolbarProps) => {
               'h-9 shrink-0 gap-1.5 px-2 py-0 font-normal whitespace-nowrap [&>span]:right-1 [&>span]:bottom-1',
               !isNotMouse && 'pr-4',
               pendingNodeType === 'question' &&
-                'text-info bg-info-bg enabled:hover:bg-info-bg',
+                'text-info-fg bg-info-bg enabled:hover:bg-info-bg',
             )}
             onClick={() =>
               setPendingNodeType(

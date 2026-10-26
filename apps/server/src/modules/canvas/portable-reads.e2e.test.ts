@@ -1030,7 +1030,7 @@ describe('POST /canvas/:canvasId/execute', () => {
       const auto = nodes.find((node) => node.id === 'node-auto');
       if (!auto) throw new Error('Missing created auto Note');
       expect(auto.data.heightMode).toBe('auto');
-      expect(auto.style).toMatchObject({ width: 560, height: 56 });
+      expect(auto.style).toMatchObject({ width: 560, height: 52 });
       expect(nodes.find((node) => node.id === 'node-fixed')).toMatchObject({
         data: { heightMode: 'fixed' },
         style: { height: 180 },

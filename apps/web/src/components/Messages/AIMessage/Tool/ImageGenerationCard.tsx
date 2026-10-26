@@ -94,9 +94,9 @@ export function ImageGenerationCard({ part }: ImageGenerationCardProps) {
 
   // ── Icon (leading) ─────────────────────────────────────────────────
   const icon = executing ? (
-    <Loading layout="inline" size="xs" className="text-info" />
+    <Loading layout="inline" size="xs" className="text-info-fg" />
   ) : failed ? (
-    <XIcon size={12} className="text-danger" />
+    <XIcon size={12} className="text-danger-fg" />
   ) : (
     <ImagePlus size={12} className="text-fg-muted/60" />
   );
@@ -143,7 +143,7 @@ export function ImageGenerationCard({ part }: ImageGenerationCardProps) {
 
       {/* Error message */}
       {error ? (
-        <div className="text-danger bg-bg-default rounded-sm px-2 py-1 text-xs whitespace-pre-wrap">
+        <div className="text-danger-fg bg-bg-default rounded-sm px-2 py-1 text-xs whitespace-pre-wrap">
           {error}
         </div>
       ) : null}

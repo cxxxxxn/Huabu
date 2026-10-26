@@ -381,7 +381,7 @@ export const ChatInput = ({
       <form onSubmit={handleSubmit} className="w-full">
         <div
           data-chat-input-surface
-          className={`group/composer focus-within:border-info focus-within:ring-info/15 relative border px-3 pt-3 pb-2 transition-colors focus-within:ring-2 ${connectedTop ? 'rounded-t-none rounded-b-2xl' : 'rounded-2xl'} ${isDragOver ? 'border-edge-default bg-info-bg' : 'border-edge-default bg-surface'}`}
+          className={`group/composer focus-within:border-info focus-within:ring-info-bg relative border px-3 pt-3 pb-2 transition-colors focus-within:ring-2 ${connectedTop ? 'rounded-t-none rounded-b-2xl' : 'rounded-2xl'} ${isDragOver ? 'border-edge-default bg-info-bg' : 'border-edge-default bg-surface'}`}
         >
           {mention.open ? <NodeMentionMenu mention={mention} /> : null}
           <ChatContextSources

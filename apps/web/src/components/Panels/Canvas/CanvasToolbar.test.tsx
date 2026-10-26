@@ -247,7 +247,7 @@ describe('NodeToolbar', () => {
       const selected = container.querySelector<HTMLButtonElement>(
         `button[aria-label^="toolbar.tools.${activeTool}"]`,
       );
-      expect(selected?.classList.contains('text-info')).toBe(true);
+      expect(selected?.classList.contains('text-info-fg')).toBe(true);
       expect(selected?.classList.contains('bg-info-bg')).toBe(true);
       expect(selected?.classList.contains('enabled:hover:bg-info-bg')).toBe(
         true,
@@ -310,7 +310,7 @@ describe('NodeToolbar', () => {
       'button[aria-label="toolbar.tools.lasso"]',
     );
     expect(lasso?.getAttribute('aria-pressed')).toBe('true');
-    expect(lasso?.classList.contains('text-info')).toBe(true);
+    expect(lasso?.classList.contains('text-info-fg')).toBe(true);
     expect(lasso?.classList.contains('bg-info-bg')).toBe(true);
 
     act(() => lasso?.click());
@@ -333,7 +333,7 @@ describe('NodeToolbar', () => {
       const selected = container.querySelector<HTMLButtonElement>(
         `button[aria-label^="toolbar.nodes.${nodeType === 'question' ? 'addAgent' : nodeType}"]`,
       );
-      expect(selected?.classList.contains('text-info')).toBe(true);
+      expect(selected?.classList.contains('text-info-fg')).toBe(true);
       expect(selected?.classList.contains('bg-info-bg')).toBe(true);
       expect(selected?.classList.contains('enabled:hover:bg-info-bg')).toBe(
         true,

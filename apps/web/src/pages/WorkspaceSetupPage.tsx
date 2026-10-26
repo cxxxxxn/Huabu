@@ -200,7 +200,7 @@ function FreeSetup({
 
       {(error ?? storeError) && (
         <p
-          className="text-danger mt-3 text-center text-xs"
+          className="text-danger-fg mt-3 text-center text-xs"
           role="alert"
           aria-live="assertive"
         >

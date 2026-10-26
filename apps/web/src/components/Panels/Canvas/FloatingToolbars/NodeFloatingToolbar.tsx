@@ -175,7 +175,7 @@ function ToolbarTypeButton({
       }
       className={`nodrag nopan flex shrink-0 items-center justify-center rounded select-none ${
         active
-          ? 'text-info bg-info-bg enabled:hover:bg-info-bg'
+          ? 'text-info-fg bg-info-bg enabled:hover:bg-info-bg'
           : 'text-fg-muted hover:bg-hover hover:text-fg-default'
       } ${dragEnabled && !disabled ? 'cursor-grab active:cursor-grabbing' : ''}`}
       style={{
@@ -644,7 +644,7 @@ export const NodeFloatingToolbar = memo(
 
             <DropdownMenuItem
               icon={<Trash2 />}
-              className="text-danger"
+              className="text-danger-fg"
               onClick={() => deleteNodes([id])}
             >
               {t('actions.delete')}

@@ -319,7 +319,7 @@ export function CommandProfileForm({
             </p>
           ) : null}
           {allowAll && !initialApproval ? (
-            <p className="text-warning px-3 py-2 text-xs" role="alert">
+            <p className="text-warning-fg px-3 py-2 text-xs" role="alert">
               {t('settings.profilePermissionIncrease')}
             </p>
           ) : null}
@@ -327,7 +327,7 @@ export function CommandProfileForm({
       ) : null}
       {(custom && !commandSupported) ||
       (!custom && cliId && !structuredSupported) ? (
-        <p className="text-warning px-3 py-2 text-xs">
+        <p className="text-warning-fg px-3 py-2 text-xs">
           {t('settings.profileExecutionEditingUnavailable')}
         </p>
       ) : null}
@@ -339,7 +339,7 @@ export function CommandProfileForm({
           cli.status !== 'not-found' &&
           !supportsStructuredEditing(cli),
       ) ? (
-        <p className="text-warning px-3 py-2 text-xs">
+        <p className="text-warning-fg px-3 py-2 text-xs">
           {t('settings.structuredLaunchUnavailable')}
         </p>
       ) : null}

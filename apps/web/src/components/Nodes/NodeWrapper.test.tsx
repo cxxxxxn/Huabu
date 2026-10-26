@@ -5,7 +5,7 @@ import { act, type ComponentProps } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { resolveNodeAccent } from './design/nodeAccentPolicy';
+import { nodeAccentToken } from './design/nodeAccentPolicy';
 import { nodeBoundaryForAccent } from './design/nodeBoundary';
 import { frameRegionSurfaceStyle } from './frame/frameRegionStyle';
 import { NodeWrapper } from './NodeWrapper';
@@ -177,7 +177,7 @@ describe('NodeWrapper radius contract', () => {
       const { shell, content } = render({ type });
       const inner =
         radius -
-        (type === 'image' || type === 'video' || type === 'sketch' ? 0 : 2);
+        (type === 'image' || type === 'video' || type === 'sketch' ? 0 : 1);
       expect(shell.style.borderRadius).toBe(`${radius}px`);
       expect(shell.style.getPropertyValue('--node-shell-radius')).toBe(
         `${radius}px`,
@@ -301,7 +301,7 @@ describe('NodeWrapper radius contract', () => {
         const { shell, content } = render({ type, borderRadius: radius });
         expect(shell.style.borderRadius).toBe(`${radius}px`);
         expect(content.style.borderRadius).toBe(
-          `${Math.max(0, radius - (type === 'image' || type === 'video' ? 0 : 2))}px`,
+          `${Math.max(0, radius - (type === 'image' || type === 'video' ? 0 : 1))}px`,
         );
       }
     },
@@ -335,7 +335,7 @@ describe('NodeWrapper radius contract', () => {
           'z-1',
         ])
           expect(border?.classList.contains(name)).toBe(true);
-        expect(border?.style.borderWidth).toBe('2px');
+        expect(border?.style.borderWidth).toBe('1px');
         expect(border?.hasAttribute('data-node-image-border')).toBe(
           type === 'image',
         );
@@ -355,7 +355,7 @@ describe('NodeWrapper radius contract', () => {
   ] as const)(
     'shares the Note boundary color for %s in every presentation',
     (type) => {
-      // Happy DOM drops color-mix border values; assert the assigned CSS here
+      // Happy DOM drops modern CSS color values; assert the assigned CSS here
       // and verify computed colors and overlay inheritance in Chromium.
       const borderColor = vi.spyOn(
         CSSStyleDeclaration.prototype,
@@ -363,7 +363,7 @@ describe('NodeWrapper radius contract', () => {
         'set',
       );
       for (const accent of ['teal', 'white', '#008080', undefined]) {
-        const resolved = resolveNodeAccent(type, accent);
+        const resolved = nodeAccentToken(type, accent);
         const boundary = {
           ...nodeBoundaryForAccent(resolved),
           ...((type === 'image' || type === 'video') &&
@@ -380,19 +380,13 @@ describe('NodeWrapper radius contract', () => {
               >['data'],
             });
             expect(borderColor).toHaveBeenLastCalledWith(
-              (type === 'pdf' || type === 'web') && mode === 'reading'
-                ? 'transparent'
-                : suppressed
-                  ? frameRegionSurfaceStyle(resolved, boundary.borderColor)
-                      .borderColor
-                  : boundary.borderColor,
+              suppressed
+                ? frameRegionSurfaceStyle(resolved, boundary.borderColor)
+                    .borderColor
+                : boundary.borderColor,
             );
             expect(shell.style.borderWidth).toBe(
-              (type === 'pdf' || type === 'web') && mode === 'reading'
-                ? '0px'
-                : type === 'image' || type === 'video'
-                  ? '0px'
-                  : '2px',
+              type === 'image' || type === 'video' ? '0px' : '1px',
             );
           }
         }
@@ -413,21 +407,22 @@ describe('NodeWrapper radius contract', () => {
   );
 
   it.each(['pdf', 'web'] as const)(
-    'removes %s card chrome while reading and restores it in overview',
+    'keeps the %s boundary while removing its reading fill and elevation',
     (type) => {
       mocks.mode = 'reading';
       const { shell: reading } = render({ type });
       expect(reading.style.backgroundColor).toBe('transparent');
-      expect(reading.style.borderColor).toBe('transparent');
-      expect(reading.style.borderWidth).toBe('0px');
+      expect(reading.style.borderColor).toBe('var(--edge-default)');
+      expect(reading.style.borderWidth).toBe('1px');
+      expect(reading.classList.contains('border-solid')).toBe(true);
       expect(reading.classList.contains('hover:shadow-sm')).toBe(false);
 
       mocks.mode = 'overview';
       const { shell: overview } = render({ type });
-      expect(
-        overview.style.getPropertyValue('--note-surface-background'),
-      ).toContain('color-mix(');
-      expect(overview.style.borderWidth).toBe('2px');
+      expect(overview.style.getPropertyValue('--note-surface-background')).toBe(
+        'var(--accent-white-soft-bg)',
+      );
+      expect(overview.style.borderWidth).toBe('1px');
       expect(overview.classList.contains('hover:shadow-sm')).toBe(false);
     },
   );
@@ -461,7 +456,7 @@ describe('NodeWrapper radius contract', () => {
       data: { type: 'note', content: '', style: { accent: 'teal' } },
     });
     const tint = note.style.getPropertyValue('--note-surface-background');
-    expect(tint).toContain('color-mix(');
+    expect(tint).toBe('var(--accent-teal-soft-bg)');
     const { shell } = render({
       type: 'text',
       data: { type: 'text', content: 'Label', style: { accent: 'teal' } },
@@ -471,7 +466,7 @@ describe('NodeWrapper radius contract', () => {
     );
     expect(shell.style.borderColor).toBe('');
     expect(shell.classList.contains('border-transparent')).toBe(true);
-    expect(shell.style.borderWidth).toBe('2px');
+    expect(shell.style.borderWidth).toBe('1px');
     expect(shell.classList.contains('hover:ring')).toBe(false);
     expect(shell.classList.contains('hover:shadow-sm')).toBe(false);
   });

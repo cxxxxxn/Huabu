@@ -1022,7 +1022,7 @@ export const ChatPanel = ({
           {historyError && (
             <div
               role="alert"
-              className="text-danger flex items-center gap-2 px-3 text-xs"
+              className="text-danger-fg flex items-center gap-2 px-3 text-xs"
             >
               <span>
                 {t('chat.historyLoadFailed')}: {historyError}
@@ -1039,7 +1039,7 @@ export const ChatPanel = ({
           {acpConnectionStatus === 'failed' && (
             <div
               role="alert"
-              className="text-danger flex items-start gap-2 px-3 text-xs"
+              className="text-danger-fg flex items-start gap-2 px-3 text-xs"
             >
               <span className="min-w-0 flex-1 wrap-anywhere whitespace-pre-line">
                 {[agentAlias, connectionDescription, connectionError]
@@ -1058,7 +1058,7 @@ export const ChatPanel = ({
           {!activeConversationView && titleError && (
             <div
               role="alert"
-              className="text-danger flex items-center gap-2 px-3 text-xs"
+              className="text-danger-fg flex items-center gap-2 px-3 text-xs"
             >
               <span>
                 {t('chat.titleSaveFailed')}: {titleError}
