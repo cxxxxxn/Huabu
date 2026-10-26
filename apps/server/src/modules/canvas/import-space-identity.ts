@@ -61,7 +61,10 @@ export async function remapImportedSpace(
   }
   function rewrite(value: unknown, field = '', parent = ''): unknown {
     if (typeof value === 'string') {
-      if (NODE_REFERENCE.test(field))
+      if (
+        NODE_REFERENCE.test(field) ||
+        (parent === 'selection' && field === 'selectedIds')
+      )
         return identities.get(value) ?? rewriteLinks(value);
       if (
         (SPACE_REFERENCE.test(field) ||
@@ -129,6 +132,10 @@ export async function remapImportedSpace(
   await rewriteFiles(safeJoin(directory, 'nodes'), true);
   await rewriteFiles(safeJoin(directory, '.history'), false);
   await rewriteFiles(safeJoin(directory, '.memory'), true);
+  await rewriteFiles(
+    safeJoin(directory, '.ext', 'huabu.recentconversation'),
+    false,
+  );
 
   // Bundle v2 carries Agenetes Tier-2 turns in SQLite as well as legacy JSONL.
   const turnsPath = safeJoin(directory, '.history', 'chat_v2', 'turns.sqlite');

@@ -10,8 +10,12 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 
 import { remapImportedSpace } from './import-space-identity.js';
 import { parseFrontmatter } from '../../utils/markdown-frontmatter.js';
+import { createChatSubmission } from '../agent/agenetes/handle.js';
+import { buildHistoryFromTurns } from '../agent/conversation/transcript/history.js';
 
 import type { CanvasFile } from './persistence-types.js';
+import type { PersistedTurn } from '@agenetes/agenetes';
+import type { ChatHistoryItem } from '@huabu/shared';
 import type { CanvasNode } from '@huabu/shared/canvas-engine';
 
 let directory: string;
@@ -186,4 +190,125 @@ it('rejects ambiguous duplicate identities instead of publishing broken referenc
   await expect(remapImportedSpace(directory, source, 'target')).rejects.toThrow(
     'duplicate identity',
   );
+});
+
+it.each(['jsonl', 'sqlite'])(
+  'remaps selected ChatEnvelope nodes in %s history and its client projection',
+  async (format) => {
+    const namespace = {
+      name: 'target',
+      storage: { root: path.join(directory, '.history') },
+    };
+    const persisted: PersistedTurn = {
+      seqStart: 1,
+      seqEnd: 3,
+      turn: {
+        request: createChatSubmission({
+          user: { text: 'note', attachments: [] },
+          skills: { invokedIds: [], resolved: [] },
+          focus: {
+            anchor: { nodeId: 'agent' },
+            selection: {
+              refs: [{ id: 'note', type: 'note', filename: 'nodes/Note.md' }],
+              selectedIds: ['note', 'frame'],
+              imageAttachments: [],
+              snapshotAttachments: [],
+            },
+          },
+        }),
+        transcript: [],
+      },
+    };
+    const turns = new FileTurnStore();
+    if (format === 'sqlite') {
+      turns.append(namespace, 'thread', persisted);
+      turns.close(namespace);
+    } else {
+      const historyDirectory = path.join(namespace.storage.root, 'chat_v2');
+      await mkdir(historyDirectory, { recursive: true });
+      await writeFile(
+        path.join(historyDirectory, 'thread.turns.jsonl'),
+        `${JSON.stringify(persisted)}\n`,
+      );
+    }
+    try {
+      const imported = await remapImportedSpace(directory, record(), 'target');
+      const [frame, note, agent] = imported.state.nodes as CanvasNode[];
+      const history = turns.list(namespace, 'thread');
+      expect(history).toHaveLength(1);
+      expect(history[0]).toMatchObject({
+        seqStart: 1,
+        seqEnd: 3,
+        turn: {
+          request: {
+            content: {
+              user: { text: 'note' },
+              focus: {
+                anchor: { nodeId: agent.id },
+                selection: {
+                  refs: [{ id: note.id, filename: 'nodes/Note.md' }],
+                  selectedIds: [note.id, frame.id],
+                },
+              },
+            },
+          },
+        },
+      });
+      const messages: ChatHistoryItem[] = [];
+      buildHistoryFromTurns(
+        history.map((entry) => entry.turn),
+        messages,
+      );
+      expect(messages[0]).toMatchObject({
+        role: 'user',
+        selectedNodeIds: [note.id, frame.id],
+      });
+    } finally {
+      turns.close(namespace);
+    }
+  },
+);
+
+it('remaps both recent-conversation pointers without changing acceptance identity or other extensions', async () => {
+  const source = record();
+  source.state.nodes.push({
+    id: 'pending-agent',
+    type: 'question',
+    position: { x: 200, y: 0 },
+    data: { threadId: 'pending-thread' },
+  });
+  const extensionDirectory = path.join(
+    directory,
+    '.ext',
+    'huabu.recentconversation',
+  );
+  await mkdir(extensionDirectory, { recursive: true });
+  const pointerFile = path.join(extensionDirectory, 'target.json');
+  const acceptanceId = 'f7f67652-dacc-4965-a42d-71a7ac02699e';
+  await writeFile(
+    pointerFile,
+    JSON.stringify({
+      conversation: { nodeId: 'agent', threadId: 'thread' },
+      pending: {
+        conversation: { nodeId: 'pending-agent', threadId: 'pending-thread' },
+        acceptanceId,
+      },
+    }),
+  );
+  const otherDirectory = path.join(directory, '.ext', 'other-extension');
+  await mkdir(otherDirectory);
+  const otherFile = path.join(otherDirectory, 'target.json');
+  const opaque = '{"nodeId":"agent"}';
+  await writeFile(otherFile, opaque);
+
+  const imported = await remapImportedSpace(directory, source, 'target');
+  const [, , agent, pendingAgent] = imported.state.nodes as CanvasNode[];
+  expect(JSON.parse(await readFile(pointerFile, 'utf8'))).toEqual({
+    conversation: { nodeId: agent.id, threadId: 'thread' },
+    pending: {
+      conversation: { nodeId: pendingAgent.id, threadId: 'pending-thread' },
+      acceptanceId,
+    },
+  });
+  expect(await readFile(otherFile, 'utf8')).toBe(opaque);
 });

@@ -20,6 +20,8 @@ Space ownership is logical metadata, not directory nesting. Ordinary Space recor
 
 Single-Space bundle import allocates fresh node and edge IDs before publication. One mapping updates topology, Frame parents, edge endpoints, node frontmatter, structured history/memory references, and SQLite Tier-2 conversation payloads. Source-scoped node deep links and artifact URLs follow the imported Space; prose and labels are not treated as identifiers. Conversation thread IDs, turn ordering, and sequence fences remain unchanged within the new Space namespace. Invalid/duplicate identities or unreadable structured records fail the staged import instead of publishing a partially remapped Space. Existing Spaces are not rewritten.
 
+History remapping includes ChatEnvelope `focus.selection.selectedIds` in both legacy JSONL and SQLite turns so reference chips and retries use imported node identities. Import also remaps current and pending pointers in `.ext/huabu.recentconversation/target.json`, preserving thread IDs and acceptance markers; unrelated extension documents remain opaque and unchanged.
+
 ```
 <HUABU_DATA_DIR>/
   storage/disk/
