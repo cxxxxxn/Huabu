@@ -208,7 +208,7 @@ The owner node persists the initial inherited selection and subsequent Editing d
 
 ### 5.5 Conversation ownership
 
-Ordinary Question previews retain `AgentConversationView`, whose presentation anchor and conversation owner identify the same active Canvas/node; the owner also identifies the Question's thread. Validation checks the live Question type and thread before use. History, reconnect, turns, lifecycle, tools, binding/mode, and change records use that owner scope. The legacy World `nodeRef` shortcut is retired: a view-only Space Preview does not mount or invoke the source Question, so opening its conversation requires entering the source Space.
+Ordinary Question previews retain `AgentConversationView`, whose presentation anchor and conversation owner identify the same Canvas/node; the owner also identifies the Question's thread. Browser validation checks the live Question type and thread when that Space is active and loaded, and always checks that the presentation anchor agrees with the owner. Queued turns continue in their captured owner scope after navigation; server admission validates the current persisted Question/thread association and rejects deleted or reassigned anchors rather than falling back to an unbound chat. History, reconnect, turns, lifecycle, tools, binding/mode, and change records use that owner scope. The legacy World `nodeRef` shortcut is retired: a view-only Space Preview does not mount or invoke the source Question, so opening its conversation requires entering the source Space.
 
 ---
 

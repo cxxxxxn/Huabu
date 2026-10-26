@@ -93,12 +93,44 @@ describe('nodeContentQueue — save-failure surfacing', () => {
     expect(putMock).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects a different target Canvas before flushing', async () => {
-    const { queue } = makeQueue(noteNode('v1'));
-    await expect(queue.flushAllForSubmission('other')).rejects.toThrow(
-      'Canvas changed',
-    );
+  it('does not flush active edits for an offscreen submission', async () => {
+    const node = noteNode('v1');
+    const { queue } = makeQueue(node);
+    queue.scheduleChanges('c1', [], [node]);
+    await expect(queue.flushAllForSubmission('other')).resolves.toBeUndefined();
     expect(putMock).not.toHaveBeenCalled();
+    queue.forgetNode(node.id);
+  });
+
+  it('retains failed content saves for the original Space after navigation', async () => {
+    const node = noteNode('v1');
+    const { queue, state } = makeQueue(node);
+    putMock.mockRejectedValue(new Error('disk fail'));
+    queue.scheduleChanges('c1', [], [node]);
+    await queue.flushAll();
+    state.canvasId = 'parent';
+    state.nodes = [];
+    await expect(queue.flushAllForSubmission('c1')).rejects.toThrow(
+      'Content saves failed',
+    );
+    await expect(
+      queue.flushAllForSubmission('parent'),
+    ).resolves.toBeUndefined();
+    expect(putMock).toHaveBeenCalledOnce();
+  });
+
+  it('finishes the original content flush when navigation replaces the active Space', async () => {
+    const node = noteNode('v1');
+    const { queue, state } = makeQueue(node);
+    putMock.mockImplementation(async () => {
+      state.canvasId = 'parent';
+      state.nodes = [];
+      return { nodeId: 'n1', label: 'Note', rev: 'saved' };
+    });
+    queue.scheduleChanges('c1', [], [node]);
+    await expect(queue.flushAllForSubmission('c1')).resolves.toBeUndefined();
+    expect(putMock).toHaveBeenCalledOnce();
+    expect(putMock.mock.calls[0][0]).toBe('c1');
   });
 
   it('surfaces a retryable danger toast even on the auto path', async () => {

@@ -1331,7 +1331,7 @@ async function executeAgentTurn(
     try {
       if (requestScope.includeCanvasSelection && requestScope.canvasId) {
         await waitForPreparation(
-          useCanvasStore.getState().flushCanvasEvents(),
+          useCanvasStore.getState().flushCanvasEvents(requestScope.canvasId),
           streamClaim.signal,
         );
       }

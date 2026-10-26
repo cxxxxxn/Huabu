@@ -1038,21 +1038,20 @@ export function createNodeContentQueue(opts: {
     },
 
     async flushAllForSubmission(canvasId) {
-      const assertCanvas = () => {
-        if (opts.getState().canvasId !== canvasId) {
-          throw new Error(`Content save Canvas changed: ${canvasId}`);
-        }
-      };
-      assertCanvas();
-      do {
+      // Navigation drains the outgoing Space; never flush the new Space for it.
+      while (opts.getState().canvasId === canvasId) {
         await this.flushAll();
-        assertCanvas();
-      } while (debouncer.pendingKeys().length > 0 || inflight.size > 0);
-      const nodeIds = new Set(opts.getState().nodes.map((node) => node.id));
+        if (debouncer.pendingKeys().length === 0 && inflight.size === 0) break;
+      }
+      const state = opts.getState();
+      const nodeIds =
+        state.canvasId === canvasId
+          ? new Set(state.nodes.map((node) => node.id))
+          : undefined;
       const errors = Array.from(failures.entries())
         .filter(
           ([nodeId, failure]) =>
-            failure.canvasId === canvasId && nodeIds.has(nodeId),
+            failure.canvasId === canvasId && (!nodeIds || nodeIds.has(nodeId)),
         )
         .map(
           ([nodeId, failure]) =>

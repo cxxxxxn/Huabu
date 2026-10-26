@@ -41,6 +41,8 @@ import { useChatHistory } from './useChatHistory';
 
 import type { ChatSession } from './useChatSession';
 import type { AgentStreamCallbacks } from '@/api/agent';
+import type * as CanvasStoreModule from '@/store/canvasStore';
+import type * as ConversationOwnerModule from '@/store/conversationOwner';
 import type { ChatAttachment } from '@huabu/shared';
 
 const mocks = vi.hoisted(() => ({
@@ -1115,6 +1117,218 @@ describe('queued composer turns', () => {
     { external: false, anchored: true },
     { external: true, anchored: true },
   ])(
+    'drains queued turns in their original Space after navigation: %j',
+    async ({ external, anchored }) => {
+      const [canvasModule, ownerModule] = await Promise.all([
+        vi.importActual<typeof CanvasStoreModule>('@/store/canvasStore'),
+        vi.importActual<typeof ConversationOwnerModule>(
+          '@/store/conversationOwner',
+        ),
+      ]);
+      mocks.save.mockImplementation(canvasModule.saveCanvasForSubmission);
+      mocks.validate.mockImplementation(ownerModule.validateConversationView);
+      const owner = anchored ? questionSession : session;
+      const binding = external
+        ? { kind: 'external' as const, profileId: 'profile-1', alias: 'Agent' }
+        : { kind: 'internal' as const };
+      useChatStore.getState().setAgentBinding(owner.threadId, binding);
+      const prepared = request('text', owner);
+      for (const content of ['Second', 'Third']) {
+        useChatStore.getState().enqueueTurn(owner.threadId, {
+          id: content,
+          prepared: { ...prepared, content },
+          status: 'pending',
+        });
+      }
+      useCanvasStore.getState()._setStateNoAutosave({
+        canvasId: 'parent-space',
+        nodes: [
+          {
+            id: 'parent-note',
+            type: 'note',
+            selected: true,
+            position: { x: 0, y: 0 },
+            data: { content: 'Do not send this' },
+          },
+        ],
+      });
+      vi.spyOn(useAcpThreadChangesStore.getState(), 'load').mockResolvedValue();
+      mocks.stream.mockImplementation(
+        async (_content, threadId, _mode, callbacks: AgentStreamCallbacks) =>
+          finish(callbacks, threadId),
+      );
+      await act(async () => settleAgentTurnQueue(owner, true));
+      await waitForQueue();
+      expect(mocks.stream.mock.calls.map(([content]) => content)).toEqual([
+        'Second',
+        'Third',
+      ]);
+      for (const call of mocks.stream.mock.calls) {
+        expect(call[1]).toBe(owner.threadId);
+        expect(call[4]).toMatchObject({
+          canvasId: owner.ownerCanvasId,
+          canvasContext: prepared.sources.canvasContext,
+          agentBinding: binding,
+          anchorNodeId: anchored ? 'question-1' : undefined,
+        });
+      }
+      expect(mocks.save.mock.calls).toEqual([['canvas-1'], ['canvas-1']]);
+      expect(
+        vi.mocked(useCanvasStore.getState().flushCanvasEvents).mock.calls,
+      ).toEqual([['canvas-1'], ['canvas-1']]);
+      expect(useCanvasStore.getState().canvasId).toBe('parent-space');
+      expect(
+        useChatStore.getState().threadsById[owner.threadId].queuePaused,
+      ).toBe(false);
+    },
+  );
+
+  it.each(['draft', 'validate', 'save', 'flush'] as const)(
+    'continues queued preparation when navigation starts during %s',
+    async (stage) => {
+      const pending = deferred();
+      const operation =
+        stage === 'flush'
+          ? vi.mocked(useCanvasStore.getState().flushCanvasEvents)
+          : mocks[stage];
+      operation.mockReturnValueOnce(pending.promise);
+      useChatStore.getState().setAgentBinding(session.threadId, {
+        kind: 'external',
+        profileId: 'profile-1',
+        alias: 'Agent',
+      });
+      useChatStore.getState().enqueueTurn(session.threadId, {
+        id: 'queued-navigation',
+        status: 'pending',
+        prepared: request('text', questionSession),
+      });
+      vi.spyOn(useAcpThreadChangesStore.getState(), 'load').mockResolvedValue();
+      mocks.stream.mockImplementation(
+        async (_content, threadId, _mode, callbacks: AgentStreamCallbacks) =>
+          finish(callbacks, threadId),
+      );
+      try {
+        await act(async () => {
+          resumeAgentTurnQueue(questionSession);
+          await vi.waitFor(() => expect(operation).toHaveBeenCalledOnce());
+          useCanvasStore.getState()._setStateNoAutosave({ isLoading: true });
+          useCanvasStore.getState()._setStateNoAutosave({
+            canvasId: 'parent-space',
+            nodes: [],
+          });
+          expect(
+            hasAgentStreamClaim(session.ownerCanvasId, session.threadId),
+          ).toBe(true);
+        });
+      } finally {
+        pending.resolve();
+        await waitForQueue();
+      }
+      expect(mocks.stream).toHaveBeenCalledOnce();
+      expect(mocks.stream.mock.calls[0][4]).toMatchObject({
+        canvasId: session.ownerCanvasId,
+        anchorNodeId: 'question-1',
+      });
+      expect(mocks.stop).not.toHaveBeenCalled();
+      expect(
+        selectThreadMessages(useChatStore.getState(), session.threadId).filter(
+          (message) => message.role === 'status',
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it('retains and pauses an offscreen queued turn when the server rejects its owner', async () => {
+    useChatStore.getState().enqueueTurn(session.threadId, {
+      id: 'deleted-owner',
+      prepared: request('text', questionSession),
+      status: 'pending',
+    });
+    useCanvasStore.getState()._setStateNoAutosave({
+      canvasId: 'parent-space',
+      nodes: [],
+    });
+    vi.spyOn(useAcpThreadChangesStore.getState(), 'load').mockResolvedValue();
+    mocks.stream.mockImplementation(
+      async (_content, _threadId, _mode, callbacks: AgentStreamCallbacks) => {
+        callbacks.onError(
+          new ApiError(
+            409,
+            {
+              message: 'Question owner was deleted',
+              code: 'conversation_owner_mismatch',
+            },
+            'Submission failed',
+          ),
+        );
+      },
+    );
+    await act(async () => {
+      settleAgentTurnQueue(questionSession, true);
+      await vi.waitFor(() =>
+        expect(
+          useChatStore.getState().threadsById[session.threadId],
+        ).toMatchObject({
+          queuePaused: true,
+          queuedTurns: [{ id: 'deleted-owner', status: 'pending' }],
+        }),
+      );
+    });
+    expect(
+      selectThreadMessages(useChatStore.getState(), session.threadId),
+    ).toContainEqual(
+      expect.objectContaining({
+        role: 'status',
+        status: 'error',
+        detail: 'Question owner was deleted',
+      }),
+    );
+  });
+
+  it('keeps a dispatched queued turn running while leaving its Space', async () => {
+    const pending = deferred();
+    let signal: AbortSignal | undefined;
+    mocks.stream.mockImplementation(
+      async (
+        _content,
+        threadId,
+        _mode,
+        callbacks: AgentStreamCallbacks,
+        options,
+      ) => {
+        signal = options.signal;
+        await pending.promise;
+        finish(callbacks, threadId);
+      },
+    );
+    useChatStore.getState().enqueueTurn(session.threadId, {
+      id: 'queued-navigation',
+      status: 'pending',
+      prepared: request(),
+    });
+    try {
+      await act(async () => {
+        resumeAgentTurnQueue(session);
+        await vi.waitFor(() => expect(mocks.stream).toHaveBeenCalledOnce());
+        useCanvasStore.getState()._setStateNoAutosave({
+          canvasId: 'parent-space',
+          isLoading: true,
+        });
+      });
+      expect(signal?.aborted).toBe(false);
+      expect(mocks.stop).not.toHaveBeenCalled();
+    } finally {
+      pending.resolve();
+      await waitForQueue();
+    }
+  });
+
+  it.each([
+    { external: false, anchored: false },
+    { external: true, anchored: false },
+    { external: false, anchored: true },
+    { external: true, anchored: true },
+  ])(
     'dispatches queued turns through the shared owner/binding pipeline: %j',
     async ({ external, anchored }) => {
       const owner = anchored ? questionSession : session;
@@ -1242,6 +1456,7 @@ beforeEach(() => {
   });
   useCanvasStore.getState()._setStateNoAutosave({
     canvasId: 'canvas-1',
+    isLoading: false,
     isSaving: false,
     pendingSave: false,
     versionConflict: false,

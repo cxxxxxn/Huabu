@@ -105,12 +105,14 @@ export async function validateConversationView(
   const active = useCanvasStore.getState();
   const owner = view.conversationOwner;
   const node = active.nodes.find((candidate) => candidate.id === owner.nodeId);
+  // The server validates the owner again at admission, including offscreen Spaces.
+  const hasLiveOwnerCanvas =
+    active.canvasId === owner.canvasId && !active.isLoading;
   if (
-    active.canvasId !== owner.canvasId ||
     view.presentationAnchor.canvasId !== owner.canvasId ||
     view.presentationAnchor.nodeId !== owner.nodeId ||
-    node?.type !== 'question' ||
-    node.data.threadId !== owner.threadId
+    (hasLiveOwnerCanvas &&
+      (node?.type !== 'question' || node.data.threadId !== owner.threadId))
   ) {
     throw new ConversationIntegrityError(
       'Conversation owner no longer matches the active Agent node',

@@ -922,7 +922,7 @@ type RFState = {
    * the request context. Resolves once the in-flight POST settles
    * (success or fail); a failed flush is retried on the next trigger.
    */
-  flushCanvasEvents: () => Promise<void>;
+  flushCanvasEvents: (canvasId?: string) => Promise<void>;
 };
 
 function canChangeSpaceEntries(
@@ -1048,25 +1048,34 @@ async function waitForSidecarWrites(): Promise<void> {
  * Order mirrors {@link switchCanvas}: structure first (canvas-level
  * version PUT), then per-node content. Resurrection makes this ordering a
  * dependency: topology must admit the restored sidecar before its PUT.
+ * Keep the captured scope if navigation finishes during an await; outgoing
+ * saves were drained by navigation, and the new Space belongs to another turn.
  */
-export async function drainPendingSaves(): Promise<void> {
-  await structureScheduler.flushAsync();
+export async function drainPendingSaves(
+  canvasId = useCanvasStore.getState().canvasId,
+): Promise<void> {
+  const isActive = () => useCanvasStore.getState().canvasId === canvasId;
+  if (isActive()) await structureScheduler.flushAsync();
   while (
-    useCanvasStore.getState().isSaving ||
-    useCanvasStore.getState().pendingSave
+    isActive() &&
+    (useCanvasStore.getState().isSaving ||
+      useCanvasStore.getState().pendingSave)
   ) {
     await new Promise<void>((resolve) => {
       const unsubscribe = useCanvasStore.subscribe((state) => {
-        if (!state.isSaving && !state.pendingSave) {
+        if (
+          state.canvasId !== canvasId ||
+          (!state.isSaving && !state.pendingSave)
+        ) {
           unsubscribe();
           resolve();
         }
       });
     });
   }
-  await nodeContentQueue.flushAll();
-  await canvasHistoryManager.waitForDeletes(useCanvasStore.getState().canvasId);
-  if (nodeContentQueue.hasPendingRestoredContent()) {
+  if (isActive()) await nodeContentQueue.flushAll();
+  await canvasHistoryManager.waitForDeletes(canvasId);
+  if (isActive() && nodeContentQueue.hasPendingRestoredContent()) {
     throw new Error(
       'Restored node content is waiting for a successful structure save. Retry before leaving this Canvas.',
     );
@@ -1086,26 +1095,24 @@ export class CanvasSubmissionSaveError extends Error {
 }
 
 export async function saveCanvasForSubmission(canvasId: string): Promise<void> {
-  const assertCanvas = () => {
-    if (useCanvasStore.getState().canvasId !== canvasId) {
-      throw new Error(`Submission Canvas changed: ${canvasId}`);
-    }
-  };
   try {
-    assertCanvas();
     do {
-      await drainPendingSaves();
-      assertCanvas();
-    } while (structureScheduler.hasPending());
+      await drainPendingSaves(canvasId);
+    } while (
+      useCanvasStore.getState().canvasId === canvasId &&
+      structureScheduler.hasPending()
+    );
     const state = useCanvasStore.getState();
-    if (state.versionConflict || structureSaveErrors.has(canvasId)) {
+    if (
+      (state.canvasId === canvasId && state.versionConflict) ||
+      structureSaveErrors.has(canvasId)
+    ) {
       throw (
         structureSaveErrors.get(canvasId) ??
         new Error('Canvas version conflict')
       );
     }
     await nodeContentQueue.flushAllForSubmission(canvasId);
-    assertCanvas();
   } catch (error) {
     throw new CanvasSubmissionSaveError(canvasId, error);
   }
@@ -2865,8 +2872,8 @@ const useCanvasStore = create<RFState>()(
       }
     },
 
-    flushCanvasEvents: async () => {
-      await canvasEvents.flush(get().canvasId);
+    flushCanvasEvents: async (canvasId = get().canvasId) => {
+      await canvasEvents.flush(canvasId);
     },
 
     onNodeDragStart: (event, _draggedNode, draggedNodes) => {
