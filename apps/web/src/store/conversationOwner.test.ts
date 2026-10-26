@@ -41,7 +41,10 @@ import {
   awaitConversationDraft,
   acknowledgeConversationResult,
 } from './conversationOwner';
-import { useRemoteConversationOwnerStore } from './remoteConversationOwner';
+import {
+  refreshConversationOwner,
+  useRemoteConversationOwnerStore,
+} from './remoteConversationOwner';
 
 import type * as AgentApi from '@/api/agent';
 import type * as CanvasApi from '@/api/canvas';
@@ -117,6 +120,78 @@ beforeEach(() => {
 });
 
 describe('conversation owner routing', () => {
+  it.each([false, true])(
+    'verifies remote configuration using a read started after the write, with stale poll failure=%s',
+    async (pollFails) => {
+      useCanvasStore.getState()._setStateNoAutosave({
+        canvasId: 'parent',
+        nodes: [],
+      });
+      const oldOwner = {
+        ...ownerView.conversationOwner,
+        spaceTitle: 'Source',
+        source: {
+          agentBinding: { kind: 'internal' as const },
+          agentMode: 'operate' as const,
+        },
+      };
+      const binding = {
+        kind: 'external' as const,
+        profileId: 'new',
+        alias: 'New',
+      };
+      const newOwner = {
+        ...oldOwner,
+        source: { agentBinding: binding, agentMode: 'ask' as const },
+      };
+      let resolvePoll!: (owner: typeof oldOwner) => void;
+      let rejectPoll!: (error: Error) => void;
+      const stale = new Promise<typeof oldOwner>((resolve, reject) => {
+        resolvePoll = resolve;
+        rejectPoll = reject;
+      });
+      let resolveWrite!: (
+        response: Awaited<ReturnType<typeof CanvasApi.postCanvasExecute>>,
+      ) => void;
+      const write = new Promise<
+        Awaited<ReturnType<typeof CanvasApi.postCanvasExecute>>
+      >((resolve) => {
+        resolveWrite = resolve;
+      });
+      const response = await postCanvasExecute();
+      postCanvasExecute.mockClear();
+      postCanvasExecute.mockReturnValueOnce(write);
+      getOwner
+        .mockResolvedValueOnce(oldOwner)
+        .mockReturnValueOnce(stale)
+        .mockResolvedValue(newOwner);
+      const save = saveConversationDraft(ownerView, {
+        agentBinding: binding,
+        agentMode: 'ask',
+      });
+      await vi.waitFor(() =>
+        expect(postCanvasExecute).toHaveBeenCalledTimes(1),
+      );
+      const poll = refreshConversationOwner(
+        'canvas-source',
+        'node-source',
+        'thread-source',
+      );
+      const pollResult = Promise.allSettled([poll]);
+      resolveWrite(response);
+      await Promise.resolve();
+      if (pollFails) rejectPoll(new TypeError('Old poll failed'));
+      else resolvePoll(oldOwner);
+      await pollResult;
+      await expect(save).resolves.toBeUndefined();
+      await expect(awaitConversationDraft(ownerView)).resolves.toBeUndefined();
+      expect(getOwner).toHaveBeenCalledTimes(3);
+      expect(
+        resolveConversationOwnerSource('parent', [], ownerView)?.agentBinding,
+      ).toEqual(binding);
+    },
+  );
+
   it('acknowledges only the observed terminal invocation, never a viewed merge', async () => {
     const view = {
       ...ownerView,

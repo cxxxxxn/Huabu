@@ -31,9 +31,16 @@ export function refreshConversationOwner(
   canvasId: string,
   nodeId: string,
   threadId: string,
+  options?: { fresh?: boolean },
 ): Promise<AgentConversationOwnerResponse> {
   const key = conversationOwnerKey(canvasId, nodeId, threadId);
   const existing = requests.get(key);
+  if (existing && options?.fresh) {
+    // An older poll's outcome cannot confirm or reject a later successful write.
+    return Promise.allSettled([existing]).then(() =>
+      refreshConversationOwner(canvasId, nodeId, threadId),
+    );
+  }
   if (existing) return existing.then((owner) => validateOwner(owner, nodeId));
   const request = getAgentConversationOwner(canvasId, threadId)
     .then((owner) => {

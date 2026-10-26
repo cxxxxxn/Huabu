@@ -49,6 +49,7 @@ export async function remapImportedSpace(
     sanitizeId(record.canvasId, 'sourceCanvasId'),
   );
   const newCanvas = encodeURIComponent(canvasId);
+  const nodesDirectory = safeJoin(directory, 'nodes');
   function rewriteLinks(text: string): string {
     return text
       .split(`/api/canvas/${oldCanvas}/artifact/`)
@@ -59,8 +60,46 @@ export async function remapImportedSpace(
           `/canvas/${newCanvas}?node=${identities.get(nodeId) ?? nodeId}`,
       );
   }
+  function rewriteToolOutput(text: string): string {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch (error) {
+      // Tool output may legitimately be plain text rather than a JSON envelope.
+      if (error instanceof SyntaxError) return rewriteLinks(text);
+      throw error;
+    }
+    const envelope =
+      parsed !== null &&
+      typeof parsed === 'object' &&
+      'tool' in parsed &&
+      typeof parsed.tool === 'string' &&
+      'status' in parsed &&
+      (parsed.status === 'success' || parsed.status === 'error');
+    const snapshots =
+      Array.isArray(parsed) &&
+      parsed.length > 0 &&
+      parsed.every(
+        (item: unknown) =>
+          item !== null &&
+          typeof item === 'object' &&
+          'src' in item &&
+          typeof item.src === 'string' &&
+          'width' in item &&
+          typeof item.width === 'number' &&
+          'height' in item &&
+          typeof item.height === 'number' &&
+          'originNodeIds' in item &&
+          Array.isArray(item.originNodeIds) &&
+          item.originNodeIds.every((id: unknown) => typeof id === 'string'),
+      );
+    return envelope || snapshots
+      ? JSON.stringify(rewrite(parsed))
+      : rewriteLinks(text);
+  }
   function rewrite(value: unknown, field = '', parent = ''): unknown {
     if (typeof value === 'string') {
+      if (field === 'rawOutput') return rewriteToolOutput(value);
       if (
         NODE_REFERENCE.test(field) ||
         (parent === 'selection' && field === 'selectedIds')
@@ -107,7 +146,15 @@ export async function remapImportedSpace(
               rewrite(value, key),
             ]),
           );
-          updated = Object.keys(meta).length
+          if (root === nodesDirectory) {
+            const id =
+              typeof meta.id === 'string' && meta.id
+                ? meta.id
+                : entry.name.replace(/\.md$/, '');
+            const importedId = identities.get(id);
+            if (importedId) mapped.id = importedId;
+          }
+          updated = Object.keys(mapped).length
             ? `${toFrontmatter(mapped)}\n${rewriteLinks(content)}`
             : rewriteLinks(content);
         } else if (entry.name.endsWith('.jsonl')) {
@@ -129,7 +176,7 @@ export async function remapImportedSpace(
     }
   }
 
-  await rewriteFiles(safeJoin(directory, 'nodes'), true);
+  await rewriteFiles(nodesDirectory, true);
   await rewriteFiles(safeJoin(directory, '.history'), false);
   await rewriteFiles(safeJoin(directory, '.memory'), true);
   await rewriteFiles(

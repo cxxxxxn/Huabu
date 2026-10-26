@@ -22,6 +22,8 @@ Single-Space bundle import allocates fresh node and edge IDs before publication.
 
 History remapping includes ChatEnvelope `focus.selection.selectedIds` in both legacy JSONL and SQLite turns so reference chips and retries use imported node identities. Import also remaps current and pending pointers in `.ext/huabu.recentconversation/target.json`, preserving thread IDs and acceptance markers; unrelated extension documents remain opaque and unchanged.
 
+Legacy node sidecars without a nonempty string `id` use the filename stem, matching Disk indexing, and receive the mapped ID in frontmatter. Recognized JSON-string tool response envelopes and bare snapshot arrays in `rawOutput` are decoded, remapped, and re-encoded in JSONL and SQLite history; ordinary text and unrecognized JSON receive only the existing source-link rewriting, not identifier remapping.
+
 ```
 <HUABU_DATA_DIR>/
   storage/disk/

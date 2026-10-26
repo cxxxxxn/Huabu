@@ -226,6 +226,7 @@ async function applyConversationOwnerPatch(
       owner.canvasId,
       owner.nodeId,
       owner.threadId,
+      { fresh: true },
     );
   }
 }

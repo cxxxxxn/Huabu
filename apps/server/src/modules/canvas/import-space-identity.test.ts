@@ -192,6 +192,116 @@ it('rejects ambiguous duplicate identities instead of publishing broken referenc
   );
 });
 
+it.each([
+  'legacy body',
+  '---\ntype: note\nlabel: Legacy\n---\nlegacy body',
+  '---\nid: ""\ntype: note\n---\nlegacy body',
+  '---\nid: 123\ntype: note\n---\nlegacy body',
+])('preserves filename-identified legacy node content: %s', async (raw) => {
+  await mkdir(path.join(directory, 'nodes'));
+  const filename = path.join(directory, 'nodes', 'note.md');
+  await writeFile(filename, raw);
+  const imported = await remapImportedSpace(directory, record(), 'target');
+  const note = imported.state.nodes[1] as CanvasNode;
+  const sidecar = parseFrontmatter(await readFile(filename, 'utf8'));
+  expect(sidecar.meta.id).toBe(note.id);
+  expect(sidecar.content).toBe('legacy body');
+});
+
+it.each(['jsonl', 'sqlite'])(
+  'remaps JSON string tool results in %s without rewriting opaque output',
+  async (format) => {
+    const namespace = {
+      name: 'target',
+      storage: { root: path.join(directory, '.history') },
+    };
+    const snapshots = [
+      { src: 'image.png', width: 10, height: 10, originNodeIds: ['note'] },
+    ];
+    const outputs = [
+      JSON.stringify(snapshots),
+      JSON.stringify({
+        tool: 'snapshot_nodes',
+        status: 'success',
+        data: { snapshots },
+      }),
+      'not JSON: note',
+      '{"nodeId":"note"}',
+    ];
+    const persisted: PersistedTurn = {
+      seqStart: 1,
+      seqEnd: 5,
+      turn: {
+        request: null,
+        transcript: outputs.map((rawOutput, index) => ({
+          type: 'tool_call',
+          data: {
+            toolCallId: `call-${index}`,
+            title: index < 2 ? 'snapshot_nodes' : 'external',
+            status: 'completed',
+            rawOutput,
+          },
+        })),
+      },
+    };
+    const turns = new FileTurnStore();
+    if (format === 'sqlite') {
+      turns.append(namespace, 'thread', persisted);
+      turns.close(namespace);
+    } else {
+      const history = path.join(namespace.storage.root, 'chat_v2');
+      await mkdir(history, { recursive: true });
+      await writeFile(
+        path.join(history, 'thread.turns.jsonl'),
+        `${JSON.stringify(persisted)}\n`,
+      );
+    }
+    try {
+      const imported = await remapImportedSpace(directory, record(), 'target');
+      const note = imported.state.nodes[1] as CanvasNode;
+      const history = turns.list(namespace, 'thread');
+      const expectedSnapshots = [{ ...snapshots[0], originNodeIds: [note.id] }];
+      expect(history[0].turn.transcript).toMatchObject([
+        { data: { rawOutput: JSON.stringify(expectedSnapshots) } },
+        {
+          data: {
+            rawOutput: JSON.stringify({
+              tool: 'snapshot_nodes',
+              status: 'success',
+              data: { snapshots: expectedSnapshots },
+            }),
+          },
+        },
+        { data: { rawOutput: outputs[2] } },
+        { data: { rawOutput: outputs[3] } },
+      ]);
+      const messages: ChatHistoryItem[] = [];
+      buildHistoryFromTurns(
+        history.map((entry) => entry.turn),
+        messages,
+        { recoverInternalToolNames: true },
+      );
+      expect(messages[0]).toMatchObject({
+        role: 'assistant',
+        parts: [
+          {
+            variant: 'snapshot_nodes',
+            data: { data: { snapshots: expectedSnapshots } },
+          },
+          {
+            variant: 'snapshot_nodes',
+            data: { data: { snapshots: expectedSnapshots } },
+          },
+          {},
+          {},
+        ],
+      });
+    } finally {
+      turns.close(namespace);
+    }
+  },
+);
+
 it.each(['jsonl', 'sqlite'])(
   'remaps selected ChatEnvelope nodes in %s history and its client projection',
   async (format) => {
