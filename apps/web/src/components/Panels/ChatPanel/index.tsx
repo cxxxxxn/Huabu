@@ -1112,9 +1112,6 @@ export const ChatPanel = ({
                 />
               </div>
             ) : null}
-            {ownerCanvasId && threadId ? (
-              <ChangeReviewCard canvasId={ownerCanvasId} threadId={threadId} />
-            ) : null}
             <ThreadChatInput
               onSubmit={handleSubmit}
               onCommit={onCommit}
@@ -1214,7 +1211,14 @@ export const ChatPanel = ({
                 savingAgentDraft ||
                 savingWorkingDirectory
               }
-            />
+            >
+              {ownerCanvasId && threadId ? (
+                <ChangeReviewCard
+                  canvasId={ownerCanvasId}
+                  threadId={threadId}
+                />
+              ) : null}
+            </ThreadChatInput>
           </div>
         </div>
       </SidebarPanel>
