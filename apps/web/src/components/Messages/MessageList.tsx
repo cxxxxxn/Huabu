@@ -202,9 +202,18 @@ export const MessageList = memo(function MessageList({
     }
   }, [viewKey, submissionNonce, dismissReadingReturn]);
 
+  const syncScrollAnchoring = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    // Keep the browser out of Huabu-owned scrolling, but anchor ordinary reading.
+    container.style.overflowAnchor =
+      isAtBottomRef.current || prependAnchorRef.current ? 'none' : 'auto';
+  }, []);
+
   const updateBottomAffordance = useCallback(() => {
     const container = containerRef.current;
     if (!container || !canScroll()) return;
+    syncScrollAnchoring();
     const atBottom = isMessageListNearBottom(container);
     setIsAwayFromBottom(!atBottom);
     if (atBottom) setHasNewMessage(false);
@@ -256,6 +265,7 @@ export const MessageList = memo(function MessageList({
     tail,
     recentTurnCount,
     dismissReadingReturn,
+    syncScrollAnchoring,
   ]);
 
   const finishPrependAnchoring = useCallback(() => {
@@ -266,7 +276,8 @@ export const MessageList = memo(function MessageList({
       window.clearTimeout(prependSettleTimerRef.current);
       prependSettleTimerRef.current = undefined;
     }
-  }, []);
+    syncScrollAnchoring();
+  }, [syncScrollAnchoring]);
 
   const schedulePrependAnchorSettlement = useCallback(() => {
     if (prependSettleTimerRef.current !== undefined) {
@@ -293,6 +304,7 @@ export const MessageList = memo(function MessageList({
     readingScrollRef.current = null;
     readingScrollDistanceRef.current = 0;
     finishPrependAnchoring();
+    container.style.overflowAnchor = 'none';
     explicitReadingRef.current = hasNewRequest && openPosition === 'last-user';
     setReturnError(false);
     if (hasNewRequest) {
@@ -608,9 +620,15 @@ export const MessageList = memo(function MessageList({
         viewportTop: anchor.getBoundingClientRect().top,
       };
     }
+    syncScrollAnchoring();
     if (displayWindow.hasCachedEarlier) displayWindow.showEarlier();
     else onLoadOlderHistory?.();
-  }, [isLoadingOlderHistory, onLoadOlderHistory, displayWindow]);
+  }, [
+    isLoadingOlderHistory,
+    onLoadOlderHistory,
+    displayWindow,
+    syncScrollAnchoring,
+  ]);
 
   useEffect(() => {
     if (!isLoadingOlderHistory && olderHistoryError) {
@@ -626,6 +644,7 @@ export const MessageList = memo(function MessageList({
     const el = containerRef.current;
     if (!el || !canScroll()) return;
     readingScrollRef.current = null;
+    el.style.overflowAnchor = 'none';
     el.scrollTo({ top: el.scrollHeight, behavior: 'instant' });
     updateBottomAffordance();
   }, [canScroll, updateBottomAffordance]);

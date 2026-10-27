@@ -207,6 +207,69 @@ for (const theme of ['light', 'dark']) {
   });
 }
 
+for (const activation of ['manual', 'warm', 'cold']) {
+  test(`paused reading stays anchored during delayed resize (${activation})`, async ({
+    page,
+  }) => {
+    await openFixture(page);
+    await expand(page);
+    const scroller = panel(page).locator('[data-chat-thread-root]');
+    // Use a stable text block after rich content has mounted.
+    const paragraph = scroller
+      .locator('[data-chat-message-id="a-turn-9-answer"] p')
+      .last();
+    await expect(paragraph).toBeVisible();
+    await scroller.evaluate((element) => {
+      element.dispatchEvent(
+        new WheelEvent('wheel', { bubbles: true, deltaY: -100 }),
+      );
+    });
+    await paragraph.evaluate((element) =>
+      element.scrollIntoView({ block: 'start' }),
+    );
+    await expect(
+      panel(page).getByRole('button', { name: 'Back to bottom', exact: true }),
+    ).toBeVisible();
+    if (activation !== 'manual') {
+      await activate(page, 'b');
+      if (activation === 'cold') await activate(page, 'c');
+      await activate(page, 'a');
+      await expectTurns(page, 'a', 7, 12);
+    }
+    // Wait beyond the bounded prepend/restore compensation window.
+    await page.waitForTimeout(600);
+    await expect(scroller).toHaveCSS('overflow-anchor', 'auto');
+    const before = await paragraph.boundingBox();
+    if (!before) throw new Error('Missing reading paragraph');
+    await scroller
+      .locator('[data-chat-message-id="a-turn-8-answer"]')
+      .evaluate((element) => {
+        const delayedContent = document.createElement('div');
+        delayedContent.style.height = '240px';
+        element.appendChild(delayedContent);
+      });
+    await page.waitForTimeout(100);
+    const after = await paragraph.boundingBox();
+    if (!after) throw new Error('Missing reading paragraph after resize');
+    expect(Math.abs(after.y - before.y)).toBeLessThanOrEqual(2);
+    await scroller
+      .locator('[data-chat-message-id="a-turn-12-answer"]')
+      .evaluate((element) => {
+        element.style.paddingBottom = '180px';
+      });
+    await page.waitForTimeout(100);
+    const afterBelow = await paragraph.boundingBox();
+    if (!afterBelow)
+      throw new Error('Missing reading paragraph after lower resize');
+    expect(Math.abs(afterBelow.y - before.y)).toBeLessThanOrEqual(2);
+    await panel(page)
+      .getByRole('button', { name: 'Back to bottom', exact: true })
+      .click();
+    await expect(scroller).toHaveCSS('overflow-anchor', 'none');
+    await expectTurns(page, 'a', 10, 12);
+  });
+}
+
 for (const width of [360, 800]) {
   test(`history pagination remains clickable during reading recovery (${width}px)`, async ({
     page,

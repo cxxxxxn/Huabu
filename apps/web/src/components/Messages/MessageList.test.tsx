@@ -451,17 +451,21 @@ describe('MessageList bottom navigation', () => {
 
   it('honors an upward gesture before resize without preventing native scrolling', () => {
     mount(<MessageList messages={[]} isLoading={false} />);
+    expect(thread().style.overflowAnchor).toBe('none');
     const wheel = new WheelEvent('wheel', {
       deltaY: -100,
       bubbles: true,
       cancelable: true,
     });
     act(() => thread().dispatchEvent(wheel));
+    expect(thread().style.overflowAnchor).toBe('auto');
     height = 1_500;
     resize();
     expect(wheel.defaultPrevented).toBe(false);
     expect(top).toBe(800);
     expect(bottomButton()).toBeDefined();
+    act(() => bottomButton()?.click());
+    expect(thread().style.overflowAnchor).toBe('none');
   });
 
   it('does not stop following for downward wheel input already at bottom', () => {
@@ -719,12 +723,14 @@ describe('MessageList bottom navigation', () => {
         top = 0;
         mount(view());
         expect(top).toBe(400);
+        expect(thread().style.overflowAnchor).toBe('none');
         if (growth === 'after-frame') act(() => vi.advanceTimersByTime(32));
         height = 1200;
         resize();
         if (growth === 'before-frame') act(() => vi.advanceTimersByTime(32));
         expect(top).toBe(410);
         act(() => vi.advanceTimersByTime(501));
+        expect(thread().style.overflowAnchor).toBe('auto');
         height = 1400;
         resize();
         expect(top).toBe(410);
