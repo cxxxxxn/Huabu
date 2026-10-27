@@ -21,11 +21,11 @@ import { useGesturePreviewStore } from '@/store/gesturePreviewStore';
 import type { ChatAttachment, WireSelectionNode } from '@huabu/shared';
 
 const chipSurfaceClassName =
-  'bg-hover text-fg-muted group-focus-within/composer:bg-info-bg group-focus-within/composer:text-info transition-colors';
+  'bg-hover text-fg-muted group-focus-within/composer:bg-info-bg group-focus-within/composer:text-info-fg transition-colors';
 const chipActionClassName =
   'text-inherit group-focus-within/composer:enabled:hover:bg-info-bg-hover [&_svg]:h-3 [&_svg]:w-3';
 const candidateActionClassName =
-  'group-focus-within/composer:border-info/40 group-focus-within/composer:text-info h-6 max-w-full justify-start gap-1 border-dashed bg-transparent px-1.5 py-0 enabled:hover:bg-transparent [&_svg]:h-3 [&_svg]:w-3';
+  'group-focus-within/composer:border-info group-focus-within/composer:text-info-fg h-6 max-w-full justify-start gap-1 border-dashed bg-transparent px-1.5 py-0 enabled:hover:bg-transparent [&_svg]:h-3 [&_svg]:w-3';
 
 function AttachmentSource({
   attachment,

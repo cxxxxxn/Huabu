@@ -349,7 +349,7 @@ export const SpacePreviewNode = memo(
             {renameError ? (
               <span
                 role="alert"
-                className="text-danger"
+                className="text-danger-fg"
                 style={{ fontSize: SPACE_CARD_TYPOGRAPHY.metadata.size }}
               >
                 {renameError}
@@ -383,7 +383,7 @@ export const SpacePreviewNode = memo(
             {targetStatus !== 'ready' ||
             (target.error !== null && snapshot?.status !== 'error') ? (
               <span
-                className={failed ? 'text-warning' : 'text-fg-muted'}
+                className={failed ? 'text-warning-fg' : 'text-fg-muted'}
                 style={{
                   fontSize: SPACE_CARD_TYPOGRAPHY.metadata.size,
                   lineHeight: SPACE_CARD_TYPOGRAPHY.metadata.lineHeight,

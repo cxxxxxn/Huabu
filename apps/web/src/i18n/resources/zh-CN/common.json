@@ -6,6 +6,13 @@
     "retry": "重试",
     "canvasAction": "请进入原 Space 使用画布操作"
   },
+  "desktopTabs": {
+    "label": "已打开的 Space",
+    "newTab": "新标签页",
+    "noMatchingSpaces": "没有匹配的 Space。",
+    "closeTab": "关闭标签页",
+    "closeBeforeDeleting": "此 Space 正在打开，请关闭标签页后再删除。"
+  },
   "sigil": {
     "chooseResource": "选择资源",
     "bindingHint": "点击画布对象，或从列表选择资源",
@@ -34,7 +41,7 @@
   },
   "app": {
     "loadingWorkspace": "正在加载你的 Home 文件夹…",
-    "savingCanvas": "正在保存 Space…",
+    "savingCanvas": "正在保存…",
     "logoAlt": "Logo"
   },
   "actions": {
@@ -622,6 +629,9 @@
     }
   },
   "workspace": {
+    "switcher": "切换工作区",
+    "open": "打开工作区…",
+    "switchFailed": "无法打开工作区，请重试。",
     "welcome": "欢迎使用 {{appName}}",
     "intro": "选择一个 Home 文件夹来保存你的 Space、笔记和产物。",
     "folder": "Home 文件夹",
@@ -1046,6 +1056,7 @@
     "currentAgentThread": "当前对话使用的 Agent",
     "newConversation": "新对话",
     "titleSaveFailed": "无法同步对话标题",
+    "retryTitleSave": "重试标题保存",
     "renameTitle": "重命名对话",
     "newChatWith": "使用 {{name}} 新建聊天",
     "saveAsQuestion": "将聊天保存为 Agent 节点",

@@ -252,7 +252,7 @@ export const MainLayout = ({
     Math.min(Math.max(value, min), max);
 
   const resizeHandleClassName =
-    'hover:bg-info/30 active:bg-info/50 absolute inset-y-0 z-10 w-1 touch-none bg-transparent outline-none';
+    'hover:bg-info-light active:bg-info-light absolute inset-y-0 z-10 w-1 touch-none bg-transparent outline-none';
 
   const leftHandleDisabled = isLeftCollapsed;
   const rightHandleDisabled =

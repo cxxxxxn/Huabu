@@ -680,7 +680,7 @@ export const MessageList = memo(function MessageList({
                     })}
               </Button>
               {olderHistoryError ? (
-                <span role="alert" className="text-danger text-xs">
+                <span role="alert" className="text-danger-fg text-xs">
                   {olderHistoryError}
                 </span>
               ) : null}

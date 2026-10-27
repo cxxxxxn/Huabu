@@ -53,7 +53,11 @@ describe('ToastContainer', () => {
       expect(icon?.className).not.toMatch(/\bbg-/);
       expect(
         icon?.classList.contains(
-          tone === 'neutral' ? 'text-fg-muted' : `text-${tone}`,
+          tone === 'neutral'
+            ? 'text-fg-muted'
+            : tone === 'info'
+              ? 'text-info-fg'
+              : `text-${tone}-fg`,
         ),
       ).toBe(true);
     },
@@ -191,7 +195,7 @@ describe('ToastContainer', () => {
       expect(button?.classList.contains('bg-transparent')).toBe(true);
       expect(
         button?.classList.contains(
-          label === 'Keep mine' ? 'text-fg-muted' : 'text-info',
+          label === 'Keep mine' ? 'text-fg-muted' : 'text-info-fg',
         ),
       ).toBe(true);
       expect(button?.classList.contains('font-medium')).toBe(true);
@@ -242,7 +246,7 @@ describe('ToastContainer', () => {
     expect(message?.parentElement?.classList.contains('flow-root')).toBe(true);
     expect(actionButton?.classList.contains('inline-flex')).toBe(true);
     expect(actionButton?.classList.contains('bg-transparent')).toBe(true);
-    expect(actionButton?.classList.contains('text-info')).toBe(true);
+    expect(actionButton?.classList.contains('text-info-fg')).toBe(true);
     expect(actionButton?.textContent).toBe('Undo');
     act(() => {
       if (actionButton instanceof HTMLButtonElement) actionButton.click();

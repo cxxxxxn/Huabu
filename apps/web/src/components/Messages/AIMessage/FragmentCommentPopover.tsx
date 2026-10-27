@@ -159,7 +159,7 @@ export function FragmentCommentPopover({
             </Button>
           </div>
           {copyError ? (
-            <p role="alert" className="text-danger px-2 py-1 text-xs">
+            <p role="alert" className="text-danger-fg px-2 py-1 text-xs">
               {t('messages.fragmentCopyFailed')}
             </p>
           ) : null}

@@ -28,7 +28,7 @@ import {
 } from '@/utils/node/nodeFontConfig';
 
 import { resolveQuestionTakeoverTone } from './QuestionTakeoverMark';
-import { resolveNodeAccent } from '../design/nodeAccentPolicy';
+import { nodeAccentToken } from '../design/nodeAccentPolicy';
 import {
   NODE_BORDER_WIDTH,
   nodeBoundaryForAccent,
@@ -123,7 +123,7 @@ export function QuestionConversationCard({
             : state === 'idle'
               ? Pencil
               : MessageCircle;
-  const resolvedAccent = resolveNodeAccent('question', accent);
+  const resolvedAccent = nodeAccentToken('question', accent);
   const description =
     state === 'unread'
       ? t('node.questionCard.unreadDescription')
@@ -195,7 +195,7 @@ export function QuestionConversationCard({
       {titleEditor?.error ? (
         <div
           role="alert"
-          className="text-danger"
+          className="text-danger-fg"
           style={{ fontSize: NODE_TYPOGRAPHY.body.size * scale }}
         >
           {titleEditor.error}

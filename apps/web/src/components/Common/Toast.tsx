@@ -98,10 +98,10 @@ export function dismissToast(id: string) {
 /** Color stays on the status icon so messages and controls remain neutral. */
 const toneIconClasses: Record<ToastTone, string> = {
   neutral: 'text-fg-muted',
-  info: 'text-info',
-  success: 'text-success',
-  warning: 'text-warning',
-  danger: 'text-danger',
+  info: 'text-info-fg',
+  success: 'text-success-fg',
+  warning: 'text-warning-fg',
+  danger: 'text-danger-fg',
 };
 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;

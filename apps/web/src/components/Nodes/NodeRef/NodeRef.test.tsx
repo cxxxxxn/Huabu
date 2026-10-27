@@ -238,6 +238,9 @@ describe('NodeRef canvas navigation', () => {
         selectNodes,
       });
       act(() => root.render(<NodeRef nodeId="target" />));
+      expect(container.querySelector('[role="button"]')?.classList).toContain(
+        'text-fg-muted',
+      );
       act(() =>
         container.querySelector<HTMLElement>('[role="button"]')?.click(),
       );
