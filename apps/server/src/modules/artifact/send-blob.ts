@@ -145,10 +145,8 @@ function contentTypeFor(name: string): string {
   return type;
 }
 
-/**
- * Stream one blob to the client, honouring conditional requests and byte
- * ranges. Returns false when the blob is absent so the caller can 404.
- */
+const SANDBOX_POLICY = 'sandbox allow-scripts allow-forms allow-popups';
+
 /**
  * Under per-Space access a blob may come from another principal, and HTML or
  * SVG opened as a page would run with the viewer's session on this origin.
@@ -159,13 +157,22 @@ export function sandboxForRestrictedCaller(
   request: FastifyRequest,
   reply: FastifyReply,
 ): void {
-  if (isRestrictedRequest(request))
-    reply.header(
-      'Content-Security-Policy',
-      'sandbox allow-scripts allow-forms allow-popups',
-    );
+  if (!isRestrictedRequest(request)) return;
+  // A route's own policy (the Interactive View renderer's) stays enforced;
+  // the sandbox is a second policy, and a browser enforces both.
+  const existing = reply.getHeader('Content-Security-Policy');
+  reply.header(
+    'Content-Security-Policy',
+    existing === undefined
+      ? SANDBOX_POLICY
+      : [...[existing].flat().map(String), SANDBOX_POLICY],
+  );
 }
 
+/**
+ * Stream one blob to the client, honouring conditional requests and byte
+ * ranges. Returns false when the blob is absent so the caller can 404.
+ */
 export async function sendBlob(
   request: FastifyRequest,
   reply: FastifyReply,

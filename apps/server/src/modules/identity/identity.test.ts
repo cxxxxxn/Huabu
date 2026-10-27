@@ -58,13 +58,17 @@ describe('identity configuration', () => {
         ...POSTGRES,
         HUABU_IDENTITY_PROVIDER: 'bubble',
         HUABU_BUBBLE_AUTH:
-          '[{"driver":"local-token"},{"driver":"master-key","defaultPrincipalId":"admin"}]',
+          '[{"driver":"local-token"},{"driver":"master-key","masterKeyEnvVar":"HUABU_BUBBLE_MASTER_KEY","defaultPrincipalId":"admin"}]',
         HUABU_BUBBLE_OWNER: ' admin ',
       }),
     ).toMatchObject({
       authenticators: [
         { driver: 'local-token' },
-        { driver: 'master-key', defaultPrincipalId: 'admin' },
+        {
+          driver: 'master-key',
+          masterKeyEnvVar: 'HUABU_BUBBLE_MASTER_KEY',
+          defaultPrincipalId: 'admin',
+        },
       ],
       owner: 'admin',
     });
@@ -95,6 +99,19 @@ describe('identity configuration', () => {
       HUABU_IDENTITY_PROVIDER: 'bubble',
       HUABU_BUBBLE_AUTH: '[{"masterKey":"x"}]',
     },
+    // A master key agents could inherit: Bubble's default variable, or a
+    // named one outside the HUABU_ namespace the Agentlet strips.
+    {
+      ...POSTGRES,
+      HUABU_IDENTITY_PROVIDER: 'bubble',
+      HUABU_BUBBLE_AUTH: '[{"driver":"master-key"}]',
+    },
+    {
+      ...POSTGRES,
+      HUABU_IDENTITY_PROVIDER: 'bubble',
+      HUABU_BUBBLE_AUTH: '[{"driver":"master-key","masterKeyEnvVar":"MY_KEY"}]',
+    },
+    { ...POSTGRES, HUABU_IDENTITY_PROVIDER: 'bubble', BUBBLE_MASTER_KEY: 'k' },
     {
       ...POSTGRES,
       HUABU_IDENTITY_PROVIDER: 'bubble',

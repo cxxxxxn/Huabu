@@ -59,10 +59,12 @@ export function resolveIdentityConfig(
       'HUABU_IDENTITY_PROVIDER=bubble requires HUABU_POSTGRES_URL',
     );
   }
+  const authenticators = parseBubbleAuthenticators(env.HUABU_BUBBLE_AUTH);
+  assertSecretsStayHostOwned(env, authenticators);
   const owner = env.HUABU_BUBBLE_OWNER?.trim();
   return {
     provider,
-    authenticators: parseBubbleAuthenticators(env.HUABU_BUBBLE_AUTH),
+    authenticators,
     ...(owner ? { owner } : {}),
     postgresUrl,
   };
@@ -92,4 +94,33 @@ function parseBubbleAuthenticators(
     );
   }
   return parsed;
+}
+
+/**
+ * The embedded Agentlet and every agent it starts inherit the Server's
+ * environment except the `HUABU_` namespace, and a master key is a system
+ * owner credential. So Bubble's master key must be inline in
+ * HUABU_BUBBLE_AUTH or in a `HUABU_` variable it names, never Bubble's own
+ * `BUBBLE_MASTER_KEY` default.
+ */
+function assertSecretsStayHostOwned(
+  env: NodeJS.ProcessEnv,
+  authenticators: BubbleAuthenticatorEntry[],
+): void {
+  const leaks =
+    env.BUBBLE_MASTER_KEY !== undefined ||
+    authenticators.some(
+      (entry) =>
+        entry.driver === 'master-key' &&
+        typeof entry.masterKey !== 'string' &&
+        !(
+          typeof entry.masterKeyEnvVar === 'string' &&
+          entry.masterKeyEnvVar.startsWith('HUABU_')
+        ),
+    );
+  if (leaks) {
+    throw new Error(
+      'A Bubble master key must not reach agent processes: unset BUBBLE_MASTER_KEY and give the master-key entry "masterKeyEnvVar": "HUABU_BUBBLE_MASTER_KEY" (or another HUABU_ variable)',
+    );
+  }
 }

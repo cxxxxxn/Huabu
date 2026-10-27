@@ -279,15 +279,31 @@ describe('sendBlob under per-Space access', () => {
         await sendBlob(request, reply, scope, 'page.html');
         return reply;
       });
-      const response = await app.inject('/blob');
+      app.get('/renderer', async (request, reply) => {
+        reply.header('Content-Security-Policy', "connect-src 'none'");
+        await sendBlob(request, reply, scope, 'page.html');
+        return reply;
+      });
+      const [blob, renderer] = await Promise.all([
+        app.inject('/blob'),
+        app.inject('/renderer'),
+      ]);
       await app.close();
-      return response.headers['content-security-policy'];
+      return [
+        blob.headers['content-security-policy'],
+        renderer.headers['content-security-policy'],
+      ];
     };
     // Local mode: unchanged.
-    expect(await csp(UNRESTRICTED_ACCESS)).toBeUndefined();
-    // Bubble mode, even for a system owner.
-    expect(await csp({ can: async () => true, claim: async () => {} })).toBe(
-      'sandbox allow-scripts allow-forms allow-popups',
+    expect(await csp(UNRESTRICTED_ACCESS)).toEqual([
+      undefined,
+      "connect-src 'none'",
+    ]);
+    // Bubble mode, even for a system owner; a route's own policy stays
+    // enforced beside the sandbox.
+    const sandbox = 'sandbox allow-scripts allow-forms allow-popups';
+    expect(await csp({ can: async () => true, claim: async () => {} })).toEqual(
+      [sandbox, ["connect-src 'none'", sandbox]],
     );
   });
 });

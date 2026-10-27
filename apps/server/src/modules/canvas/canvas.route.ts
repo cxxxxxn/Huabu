@@ -88,9 +88,12 @@ import { ARTIFACT_URL_REGEX } from '../artifact/utils.js';
 import { getPreprocessDispatcher, getProfile } from '../preprocessing/index.js';
 import { isLabelProtected } from '../preprocessing/label-policy.js';
 import { stripOfficeparserPreamble } from '../preprocessing/loaders/office-strip.js';
+import { isOwnerRequest } from '../security/owner.js';
 import {
+  canReadCitedSpaces,
   canReadSpace,
   claimSpace,
+  isRestrictedRequest,
   readableSpaces,
 } from '../security/space-access.js';
 import {
@@ -1155,6 +1158,19 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
 
     const { nodeType, trigger, snapshot, previousSnapshot, options } =
       parsed.data;
+    // A snapshot may point at another Space's artifact, whose bytes the
+    // pipeline would read; that Space is as absent as a missing one.
+    if (
+      !(await canReadCitedSpaces(request, canvasId, [
+        snapshot,
+        previousSnapshot,
+      ]))
+    ) {
+      return reply.code(404).send({ message: 'Canvas not found' });
+    }
+    // Enrichment runs the Utility Agent through the shared machine
+    // credential, which a member may not use; extraction still runs.
+    const llmAllowed = !isRestrictedRequest(request) || isOwnerRequest(request);
     const dispatcher = getPreprocessDispatcher();
     if (
       MD_BACKED_NODE_TYPES.has(nodeType) &&
@@ -1176,7 +1192,7 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
         snapshot,
         previousSnapshot,
         options: {
-          allowLLM: options?.allowLLM ?? true,
+          allowLLM: llmAllowed && (options?.allowLLM ?? true),
           allowPersistence: options?.allowPersistence ?? true,
           force: options?.force ?? false,
           mode: options?.mode,

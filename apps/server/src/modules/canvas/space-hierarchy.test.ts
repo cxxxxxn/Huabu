@@ -23,6 +23,7 @@ import { registerSpaceHierarchyRoutes } from './space-hierarchy.route.js';
 import { moveCanvasSelection } from './space-move.service.js';
 import { assertChildSpaceEntriesAllowed } from './world-preview-policy.js';
 import { acquireAgentTurn } from '../agent/turn-lease.js';
+import { setRequestIdentity } from '../identity/request.js';
 import * as storage from '../storage/index.js';
 import { setWorkspacePath } from '../workspace.js';
 
@@ -856,6 +857,50 @@ describe('Space ownership', () => {
       parentEntryNodeId: result.sourcePreviewNodeId,
     });
     expect(result.sourcePreviewNodeId).toBeTruthy();
+  });
+
+  it('claims a detached Space before detaching it, so a failed claim keeps it under its parent', async () => {
+    const child = await createChildSpace('root', 'Inherited only');
+    const parents: Array<string | null | undefined> = [];
+    let failClaim = true;
+    const app = Fastify();
+    app.addHook('onRequest', async (request) => {
+      setRequestIdentity(request, {
+        principal: { principalId: 'carol', kind: 'user' },
+        member: true,
+        owner: false,
+        access: {
+          can: async () => true,
+          claim: async ({ id }) => {
+            parents.push(
+              (await list()).find((item) => item.canvasId === id)
+                ?.parentSpaceId,
+            );
+            if (failClaim) throw new Error('grant store unavailable');
+          },
+        },
+      });
+    });
+    registerSpaceHierarchyRoutes(app);
+    const detach = () =>
+      app.inject({
+        method: 'PATCH',
+        url: `/${child.canvasId}/parent`,
+        payload: { parentSpaceId: null, expectedParentSpaceId: 'root' },
+      });
+    try {
+      expect((await detach()).statusCode).toBe(500);
+      expect(
+        (await list()).find((item) => item.canvasId === child.canvasId)
+          ?.parentSpaceId,
+      ).toBe('root');
+      failClaim = false;
+      expect((await detach()).statusCode).toBe(200);
+      // Both claims ran while the Space was still under its parent.
+      expect(parents).toEqual(['root', 'root']);
+    } finally {
+      await app.close();
+    }
   });
 
   it('validates hierarchy HTTP inputs and returns explicit confirmation conflicts', async () => {
