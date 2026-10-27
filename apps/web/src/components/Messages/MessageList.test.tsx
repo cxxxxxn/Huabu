@@ -1129,6 +1129,38 @@ describe('MessageList bottom navigation', () => {
       />
     );
 
+    it('skips retired bookmark scans during bottom-follow updates', () => {
+      mount(view());
+      expect(returnButton()).toBeDefined();
+      scrollTo(350);
+      act(() => bottomButton()?.click());
+      expect(returnButton()).toBeUndefined();
+      const geometry = vi.mocked(HTMLElement.prototype.getBoundingClientRect);
+      geometry.mockClear();
+      const query = vi.spyOn(thread(), 'querySelectorAll');
+      height = 1200;
+      resize();
+      act(() =>
+        root?.render(
+          view({
+            messages: [
+              ...history(10),
+              {
+                id: 'stream',
+                role: 'assistant',
+                segments: [{ kind: 'text', text: 'New output' }],
+              },
+            ],
+            isLoading: true,
+          }),
+        ),
+      );
+      expect(query).not.toHaveBeenCalled();
+      expect(geometry).not.toHaveBeenCalled();
+      expect(top).toBe(1000);
+      expect(returnButton()).toBeUndefined();
+    });
+
     it('floats outside history and retires after a successful return', () => {
       mount(view());
       expect(returnButton()).toBeDefined();

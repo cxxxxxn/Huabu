@@ -208,7 +208,7 @@ export const MessageList = memo(function MessageList({
     const atBottom = isMessageListNearBottom(container);
     setIsAwayFromBottom(!atBottom);
     if (atBottom) setHasNewMessage(false);
-    const bookmark = returnState.bookmark;
+    const bookmark = returnState.dismissed ? undefined : returnState.bookmark;
     const anchor = bookmark
       ? Array.from(
           container.querySelectorAll<HTMLElement>('[data-chat-message-id]'),
@@ -250,6 +250,7 @@ export const MessageList = memo(function MessageList({
   }, [
     canScroll,
     returnState.bookmark,
+    returnState.dismissed,
     viewKey,
     messages,
     tail,
