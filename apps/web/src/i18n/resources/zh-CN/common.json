@@ -632,7 +632,9 @@
     "noAccessTitle": "暂无访问权限",
     "noAccessIntro": "你已以 {{name}} 的身份登录，但该账户尚不能使用 {{appName}}。请联系管理员授予访问权限。",
     "signOut": "退出登录",
-    "signOutAs": "退出登录（{{name}}）"
+    "signOutAs": "退出登录（{{name}}）",
+    "deniedIntro": "该账户无法使用 {{appName}}。请退出登录后使用其他账户。",
+    "signOutFailed": "无法退出登录。请检查网络连接后重试。"
   },
   "workspace": {
     "switcher": "切换工作区",

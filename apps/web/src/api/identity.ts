@@ -16,10 +16,18 @@ export interface InteractiveAuthenticator {
   audience?: string;
 }
 
+/** The identity provider refused this account outright, such as a disabled one. */
+export class IdentityDeniedError extends Error {
+  constructor() {
+    super('Identity access denied');
+  }
+}
+
 /** The caller as the Server resolves it, or `null` when it asks for a login. */
 export async function getIdentity(): Promise<IdentityResponse | null> {
   const response = await fetch(`${API_CONFIG.API_URL}/identity`);
   if (response.status === 401) return null;
+  if (response.status === 403) throw new IdentityDeniedError();
   if (!response.ok)
     throw new Error(`Identity request failed: ${response.status}`);
   return (await response.json()) as IdentityResponse;
@@ -74,8 +82,12 @@ export async function endSession(): Promise<void> {
   await apiFetch<void>('/identity/session', { method: 'DELETE' });
 }
 
-/** End the Server session and start again from the sign-in screen. */
+/**
+ * End the Server session and start again from the sign-in screen. Rejects,
+ * staying put, when the Server did not confirm: the cookie would otherwise
+ * admit the same account again on arrival.
+ */
 export async function signOut(): Promise<void> {
-  await endSession().catch(() => {});
+  await endSession();
   window.location.assign('/');
 }

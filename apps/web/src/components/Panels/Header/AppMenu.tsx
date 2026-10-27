@@ -33,6 +33,7 @@ import {
   DropdownMenuSubmenu,
 } from '../../Common/DropdownMenu';
 import { MENU_SEPARATOR_CLASS } from '../../Common/menuStyles';
+import { toast } from '../../Common/Toast.tsx';
 
 interface AppMenuProps {
   /**
@@ -230,7 +231,14 @@ export const AppMenu: React.FC<AppMenuProps> = ({
         {identity?.provider === 'bubble' && (
           <>
             <div role="separator" className={MENU_SEPARATOR_CLASS} />
-            <DropdownMenuItem onClick={runAndClose(() => void signOut())}>
+            <DropdownMenuItem
+              onClick={runAndClose(
+                () =>
+                  void signOut().catch(() =>
+                    toast(t('auth.signOutFailed'), { tone: 'danger' }),
+                  ),
+              )}
+            >
               {t('auth.signOutAs', {
                 name:
                   identity.principal.displayName ??

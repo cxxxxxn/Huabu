@@ -632,7 +632,9 @@
     "noAccessTitle": "No access yet",
     "noAccessIntro": "You are signed in as {{name}}, but this account cannot use {{appName}} yet. Ask an administrator to grant access.",
     "signOut": "Sign out",
-    "signOutAs": "Sign out ({{name}})"
+    "signOutAs": "Sign out ({{name}})",
+    "deniedIntro": "This account cannot use {{appName}}. Sign out to use another account.",
+    "signOutFailed": "Could not sign out. Check your connection and try again."
   },
   "workspace": {
     "switcher": "Switch Workspace",

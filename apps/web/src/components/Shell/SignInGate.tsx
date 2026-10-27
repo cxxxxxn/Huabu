@@ -1,12 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { AUTH_REQUIRED_EVENT } from '../../api/_client';
 import {
   getIdentity,
+  IdentityDeniedError,
   listInteractiveAuthenticators,
   signOut,
   startSession,
@@ -29,7 +30,9 @@ type GateState =
       authenticators: InteractiveAuthenticator[];
       error?: string;
     }
-  | { kind: 'noAccess'; identity: IdentityResponse };
+  | { kind: 'noAccess'; identity: IdentityResponse }
+  /** The provider refused the account itself, such as a disabled one. */
+  | { kind: 'denied' };
 
 const PROVIDER_NAMES: Record<string, string> = {
   entra: 'Microsoft Entra ID',
@@ -45,46 +48,67 @@ const PROVIDER_NAMES: Record<string, string> = {
 export function SignInGate({ children }: { children: ReactNode }) {
   const [state, setState] = useState<GateState>({ kind: 'checking' });
   const setIdentity = useIdentityStore((s) => s.setIdentity);
+  // Only the latest check may decide: an earlier one can still be waiting
+  // on a response from before the session existed.
+  const latestCheck = useRef(0);
+  // The provider's redirect is consumed once per mount, however often the
+  // effect runs, so no check starts before its session does.
+  const callback = useRef<Promise<string | undefined>>(undefined);
 
   const check = useCallback(
     async (loginError?: string) => {
+      const run = ++latestCheck.current;
+      const settle = (next: GateState) => {
+        if (run === latestCheck.current) setState(next);
+      };
       let identity: IdentityResponse | null;
       try {
         identity = await getIdentity();
-      } catch {
+      } catch (error) {
         // An unreachable Server is the app's own error to report, as before.
-        setState({ kind: 'ready' });
+        settle(
+          error instanceof IdentityDeniedError
+            ? { kind: 'denied' }
+            : { kind: 'ready' },
+        );
         return;
       }
       if (identity) {
+        if (run !== latestCheck.current) return;
         setIdentity(identity);
-        setState(
+        settle(
           identity.member ? { kind: 'ready' } : { kind: 'noAccess', identity },
         );
         return;
       }
-      const authenticators = await listInteractiveAuthenticators();
-      // Without Bubble a login prompt belongs to the browser (Basic Auth).
-      if (!authenticators) {
-        setState({ kind: 'ready' });
+      let authenticators: InteractiveAuthenticator[] | null;
+      try {
+        authenticators = await listInteractiveAuthenticators();
+      } catch {
+        settle({ kind: 'ready' });
         return;
       }
-      setState({ kind: 'signIn', authenticators, error: loginError });
+      // Without Bubble a login prompt belongs to the browser (Basic Auth).
+      if (!authenticators) {
+        settle({ kind: 'ready' });
+        return;
+      }
+      settle({ kind: 'signIn', authenticators, error: loginError });
     },
     [setIdentity],
   );
 
   useEffect(() => {
-    void (async () => {
-      let loginError: string | undefined;
+    callback.current ??= (async () => {
       try {
         const token = await completeLogin();
         if (token) await startSession(token);
+        return undefined;
       } catch (error) {
-        loginError = error instanceof Error ? error.message : String(error);
+        return error instanceof Error ? error.message : String(error);
       }
-      await check(loginError);
     })();
+    void callback.current.then((loginError) => check(loginError));
   }, [check]);
 
   useEffect(() => {
@@ -106,6 +130,7 @@ export function SignInScreen({
 }) {
   const { t } = useTranslation();
   const [pending, setPending] = useState<string | null>(null);
+  const [signOutFailed, setSignOutFailed] = useState(false);
 
   const title =
     state.kind === 'signIn'
@@ -114,13 +139,15 @@ export function SignInScreen({
   const intro =
     state.kind === 'signIn'
       ? t('auth.signInIntro')
-      : t('auth.noAccessIntro', {
-          name:
-            state.identity.principal.displayName ??
-            state.identity.principal.email ??
-            state.identity.principal.principalId,
-          appName: APP_NAME,
-        });
+      : state.kind === 'denied'
+        ? t('auth.deniedIntro', { appName: APP_NAME })
+        : t('auth.noAccessIntro', {
+            name:
+              state.identity.principal.displayName ??
+              state.identity.principal.email ??
+              state.identity.principal.principalId,
+            appName: APP_NAME,
+          });
 
   return (
     <div className="bg-bg-default flex h-full items-center justify-center">
@@ -170,10 +197,23 @@ export function SignInScreen({
             tone="neutral"
             size="lg"
             className="w-full"
-            onClick={() => void signOut()}
+            onClick={() => {
+              setSignOutFailed(false);
+              void signOut().catch(() => setSignOutFailed(true));
+            }}
           >
             {t('auth.signOut')}
           </Button>
+        )}
+
+        {signOutFailed && (
+          <p
+            className="text-danger-fg mt-3 text-center text-xs"
+            role="alert"
+            aria-live="assertive"
+          >
+            {t('auth.signOutFailed')}
+          </p>
         )}
 
         {state.kind === 'signIn' && state.error && (
