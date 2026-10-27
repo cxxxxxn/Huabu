@@ -620,6 +620,7 @@
     "continueWith": "Continue with {{provider}}",
     "signingIn": "Signing in…",
     "signInFailed": "Sign-in failed: {{message}}",
+    "noSignInMethods": "This server has no browser sign-in configured. Ask its administrator to add an Auth0 or Entra ID login with a client ID.",
     "noAccessTitle": "No access yet",
     "noAccessIntro": "You are signed in as {{name}}, but this account cannot use {{appName}} yet. Ask an administrator to grant access.",
     "signOut": "Sign out",

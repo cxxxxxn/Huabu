@@ -65,7 +65,7 @@ export function SignInGate({ children }: { children: ReactNode }) {
       }
       const authenticators = await listInteractiveAuthenticators();
       // Without Bubble a login prompt belongs to the browser (Basic Auth).
-      if (authenticators.length === 0) {
+      if (!authenticators) {
         setState({ kind: 'ready' });
         return;
       }
@@ -135,7 +135,11 @@ export function SignInScreen({
           <p className="text-fg-subtle mt-2 text-sm">{intro}</p>
         </div>
 
-        {state.kind === 'signIn' ? (
+        {state.kind === 'signIn' && state.authenticators.length === 0 ? (
+          <p className="text-fg-subtle text-center text-sm" role="status">
+            {t('auth.noSignInMethods')}
+          </p>
+        ) : state.kind === 'signIn' ? (
           <div className="space-y-2">
             {state.authenticators.map((authenticator) => (
               <Button

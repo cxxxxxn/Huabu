@@ -26,16 +26,16 @@ export async function getIdentity(): Promise<IdentityResponse | null> {
 }
 
 /**
- * Bubble's browser logins. Empty when this Server does not run Bubble, which
- * is how a local deployment's login prompt is told apart from Bubble's.
+ * Bubble's browser logins, or `null` when this Server does not run Bubble,
+ * which is how a local deployment's login prompt is told apart from Bubble's.
  */
 export async function listInteractiveAuthenticators(): Promise<
-  InteractiveAuthenticator[]
+  InteractiveAuthenticator[] | null
 > {
   const response = await fetch(
     `${API_CONFIG.BASE_URL}/bubble/v1/auth/authenticators`,
   );
-  if (!response.ok) return [];
+  if (!response.ok) return null;
   const body = (await response.json()) as {
     authenticators?: Array<
       Partial<InteractiveAuthenticator> & { interactive?: boolean }

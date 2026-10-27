@@ -102,6 +102,16 @@ describe('SignInGate', () => {
     expect(container.textContent).toBe('app');
   });
 
+  it('explains a Bubble Server that offers no browser login instead of rendering the app', async () => {
+    routes['GET /api/identity'] = () => json({}, 401);
+    routes['GET /bubble/v1/auth/authenticators'] = () =>
+      json({ authenticators: [{ driver: 'master-key', interactive: false }] });
+    await mount();
+    expect(container.textContent).toContain('auth.noSignInMethods');
+    expect(container.textContent).not.toContain('app');
+    expect(container.querySelectorAll('button')).toHaveLength(0);
+  });
+
   it('offers each interactive Bubble login and tells a non-member they lack access', async () => {
     routes['GET /api/identity'] = () => json({}, 401);
     routes['GET /bubble/v1/auth/authenticators'] = () =>
@@ -133,7 +143,11 @@ describe('SignInGate', () => {
         returnTo: '/canvas/mine',
       }),
     );
-    window.history.replaceState(null, '', '/?code=the-code&state=expected');
+    window.history.replaceState(
+      null,
+      '',
+      '/auth/callback?code=the-code&state=expected',
+    );
     routes[
       'GET https://login.example/tenant/v2.0/.well-known/openid-configuration'
     ] = () => json({ token_endpoint: 'https://login.example/token' });
@@ -156,6 +170,7 @@ describe('SignInGate', () => {
       code: 'the-code',
       code_verifier: 'verifier',
       client_id: 'spa',
+      redirect_uri: `${window.location.origin}/auth/callback`,
     });
     const session = calls.find((call) => call.url === '/api/identity/session');
     expect(new Headers(session?.init?.headers).get('Authorization')).toBe(
@@ -174,7 +189,11 @@ describe('SignInGate', () => {
         returnTo: '/',
       }),
     );
-    window.history.replaceState(null, '', '/?code=forged&state=other');
+    window.history.replaceState(
+      null,
+      '',
+      '/auth/callback?code=forged&state=other',
+    );
     routes['GET /api/identity'] = () => json(MEMBER);
     await mount();
     expect(calls.map((call) => call.url)).toEqual(['/api/identity']);

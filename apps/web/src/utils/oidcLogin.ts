@@ -30,11 +30,14 @@ function randomToken(): string {
   return base64Url(crypto.getRandomValues(new Uint8Array(32)));
 }
 
+/** Register this exact URI with the provider; only the sign-in gate handles it. */
+export const CALLBACK_PATH = '/auth/callback';
+
 function redirectUri(): string {
-  return `${window.location.origin}/`;
+  return `${window.location.origin}${CALLBACK_PATH}`;
 }
 
-/** Leave for the provider's login page; the browser returns to `/`. */
+/** Leave for the provider's login page; the browser returns to the callback. */
 export async function beginLogin(
   authenticator: InteractiveAuthenticator,
 ): Promise<void> {
@@ -72,6 +75,7 @@ export async function beginLogin(
  */
 export async function completeLogin(): Promise<string | null> {
   const url = new URL(window.location.href);
+  if (url.pathname !== CALLBACK_PATH) return null;
   const state = url.searchParams.get('state');
   const raw = sessionStorage.getItem(PENDING_KEY);
   if (!state || !raw) return null;
