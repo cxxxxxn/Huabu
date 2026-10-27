@@ -140,6 +140,7 @@ import { createUnloadFlush } from './canvasStore/save/unloadFlush';
 import { createResizePreviewController } from './canvasStore/slices/resizePreview';
 import { useChatStore } from './chatStore';
 import { useGesturePreviewStore } from './gesturePreviewStore';
+import { usePanelStore } from './panelStore';
 import {
   selectActiveNodeId,
   selectIsNodeOpen,
@@ -160,6 +161,7 @@ import type {
   FrameFitPreview,
   FrameFitPreviewRole,
 } from './gesturePreviewStore';
+import type { CanvasPreviewWorkspace } from './previewWorkspace/model';
 import type { NodeIngestionInfo } from '@/handler/canvasCommand/preprocess';
 import type {
   AgentChatContext,
@@ -1146,7 +1148,7 @@ export function clearNodeDuplicateGuard(nodeId: string): void {
  * editing it (exit-edit "settle").
  *
  * Called for editor-authored nodes (`note` / `text`) from their exit-edit
- * boundaries — `closeExpanded` / `openExpanded` for `note` and `TextNode`'s
+ * boundaries — Preview Workspace departure for `note` and `TextNode`'s
  * blur handler for `text` — whose auto-derived label (the on-disk `.md`
  * filename) must be committed only when the heading is settled, never on
  * every keystroke pause, which churned the filename through every partial
@@ -1161,6 +1163,38 @@ export function clearNodeDuplicateGuard(nodeId: string): void {
 export function settleNodePreprocess(nodeId: string): void {
   const node = useCanvasStore.getState().nodes.find((n) => n.id === nodeId);
   if (node) preprocessQueue.schedule(node);
+}
+
+function settleDepartingPreviewEditors(
+  previous: CanvasPreviewWorkspace,
+  next?: CanvasPreviewWorkspace,
+): void {
+  const { canvasId, nodes } = useCanvasStore.getState();
+  const retained = new Set(
+    next?.groups.flatMap((group) => {
+      const target = group.activeTabId
+        ? next.tabs[group.activeTabId]?.target
+        : undefined;
+      return target?.kind === 'node' && target.canvasId === canvasId
+        ? [target.nodeId]
+        : [];
+    }),
+  );
+  for (const group of previous.groups) {
+    const target = group.activeTabId
+      ? previous.tabs[group.activeTabId]?.target
+      : undefined;
+    if (
+      target?.kind !== 'node' ||
+      target.canvasId !== canvasId ||
+      retained.has(target.nodeId)
+    )
+      continue;
+    const node = nodes.find((candidate) => candidate.id === target.nodeId);
+    if (node?.type === 'note' || node?.type === 'text') {
+      settleNodePreprocess(node.id);
+    }
+  }
 }
 
 export function drainNodePreprocessing(): Promise<void> {
@@ -4691,5 +4725,20 @@ const useCanvasStore = create<RFState>()(
     },
   })),
 );
+
+// Observe topology rather than individual entry points, including reused tabs
+// in another split group. Still-visible editors and ordinary focus changes stay open.
+usePreviewWorkspaceStore.subscribe((next, previous) => {
+  if (next.workspace !== previous.workspace) {
+    settleDepartingPreviewEditors(previous.workspace, next.workspace);
+  }
+});
+usePanelStore.subscribe((next, previous) => {
+  if (next.isRightCollapsed && !previous.isRightCollapsed) {
+    settleDepartingPreviewEditors(
+      usePreviewWorkspaceStore.getState().workspace,
+    );
+  }
+});
 
 export default useCanvasStore;

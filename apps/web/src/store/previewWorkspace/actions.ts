@@ -5,15 +5,11 @@ import { toast } from '@/components/Common/Toast';
 import { pageLifecycle } from '@/utils/pageLifecycle';
 
 import { loadDefaultAgentBinding } from '../acpProfilesStore';
-import useCanvasStore, { settleNodePreprocess } from '../canvasStore';
+import useCanvasStore from '../canvasStore';
 import { createConversation } from '../conversationPreparation';
 import { usePanelStore } from '../panelStore';
 import { findTabByTarget, groupOfTab, normalizePreviewTarget } from './model';
-import {
-  selectActiveNodeId,
-  selectActiveTab,
-  usePreviewWorkspaceStore,
-} from './store';
+import { selectActiveTab, usePreviewWorkspaceStore } from './store';
 
 export function openSpaceConversation(
   canvasId: string,
@@ -41,16 +37,6 @@ export function openPreviewNode(
   },
 ): string {
   const canvas = useCanvasStore.getState();
-  const previousNodeId = selectActiveNodeId(
-    usePreviewWorkspaceStore.getState(),
-  );
-  if (previousNodeId && previousNodeId !== nodeId) {
-    const previous = canvas.nodes.find((node) => node.id === previousNodeId);
-    if (previous?.type === 'note' || previous?.type === 'text') {
-      settleNodePreprocess(previousNodeId);
-    }
-  }
-
   usePanelStore.getState().requestOpenRightPanel();
   const tabId = usePreviewWorkspaceStore.getState().openPreviewTarget(
     { kind: 'node', canvasId: canvas.canvasId, nodeId },
@@ -93,10 +79,7 @@ export async function openChat(): Promise<string> {
 }
 
 /** Creates a Chat only after defaults load, without stealing a changed UI. */
-export async function openNewChat(
-  groupId?: string,
-  settleTab?: (tabId: string) => void,
-): Promise<string> {
+export async function openNewChat(groupId?: string): Promise<string> {
   const initial = usePreviewWorkspaceStore.getState();
   const canvasId = initial.canvasId || useCanvasStore.getState().canvasId;
   if (!canvasId) return '';
@@ -116,7 +99,6 @@ export async function openNewChat(
       );
       if (!group) return '';
       const threadId = createConversation({ canvasId, binding });
-      if (group.activeTabId) settleTab?.(group.activeTabId);
       usePanelStore.getState().requestOpenRightPanel();
       const tabId = preview.openPreviewTarget(
         { kind: 'chat', canvasId, threadId },
@@ -166,9 +148,6 @@ export function openPreviewUrl(
     ? groupOfTab(preview.workspace, source.id)?.id
     : undefined;
   if (source) {
-    if (source.target.kind === 'node') {
-      settleNodePreprocess(source.target.nodeId);
-    }
     preview.promoteTab(source.id);
   }
   usePanelStore.getState().requestOpenRightPanel();
@@ -182,12 +161,5 @@ export function closeActivePreviewNode(): void {
   const target = activeTab?.target;
   if (target?.kind !== 'node') return;
 
-  const node = useCanvasStore
-    .getState()
-    .nodes.find((candidate) => candidate.id === target.nodeId);
-  preview.closeTab(activeTab.id, () => {
-    if (node?.type === 'note' || node?.type === 'text') {
-      settleNodePreprocess(node.id);
-    }
-  });
+  preview.closeTab(activeTab.id);
 }

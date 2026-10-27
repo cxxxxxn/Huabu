@@ -1042,6 +1042,8 @@
     "failedSwitchMode": "切换模式失败",
     "failedSwitchModeWithMessage": "切换模式失败：{{message}}",
     "failedSwitchModel": "切换模型失败",
+    "settingsUnavailable": "暂时无法修改对话配置，请稍后重试。",
+    "settingsUpdatePending": "配置正在更新，请稍候。",
     "failedSwitchModelWithMessage": "切换模型失败：{{message}}",
     "failedUpdateOption": "更新选项失败",
     "failedUpdateOptionWithMessage": "更新选项失败：{{message}}",

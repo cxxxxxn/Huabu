@@ -519,6 +519,21 @@ export const ChatPanel = ({
       : messages.length > 0,
   });
 
+  const handleBuiltinSelection = async (select: () => Promise<void>) => {
+    try {
+      if (!ownerScopeReady) throw new Error(t('chat.settingsUnavailable'));
+      await select();
+      onCommit?.();
+    } catch (error) {
+      toast(
+        error instanceof Error
+          ? t('chat.failedUpdateOptionWithMessage', { message: error.message })
+          : t('chat.failedUpdateOption'),
+        { tone: 'danger' },
+      );
+    }
+  };
+
   // Legacy status names describe cache reads, not live transport health.
   // A failed refresh with a usable snapshot keeps the optimistic green state.
   const acpConnectionStatus: AcpConnectionStatus | null =
@@ -787,7 +802,7 @@ export const ChatPanel = ({
   const handleSubmit = useCallback(
     async (e: React.FormEvent, agentMode: AgentMode, draft: string) => {
       e.preventDefault();
-      if (!ownerScopeReady) return;
+      if (!ownerScopeReady || builtinThreadSettings.saving) return;
       if (!selectThreadHistoryLoaded(useChatStore.getState(), threadId)) return;
       // Strip leading `/<id>` tokens that match a known slash command
       // and forward them as `invokedSkills`. Skill invocation is gated
@@ -833,18 +848,25 @@ export const ChatPanel = ({
       startStream,
       threadId,
       ownerScopeReady,
+      builtinThreadSettings.saving,
     ],
   );
 
   const handleRetry = useCallback(() => {
-    if (!ownerScopeReady) return;
+    if (!ownerScopeReady || builtinThreadSettings.saving) return;
     const lastUserMsg = [...messages]
       .reverse()
       .find((message) => message.role === 'user');
     if (lastUserMsg?.role === 'user') {
       void retryStream(lastUserMsg, mode);
     }
-  }, [messages, mode, retryStream, ownerScopeReady]);
+  }, [
+    messages,
+    mode,
+    retryStream,
+    ownerScopeReady,
+    builtinThreadSettings.saving,
+  ]);
 
   // Both presentations share preparation admission and frozen execution identity.
   const preparationEditable =
@@ -1233,16 +1255,17 @@ export const ChatPanel = ({
                         builtinThreadSettings.settings.reasoningEffort
                       }
                       loading={builtinThreadSettings.loading}
-                      onSelectModel={async (modelId) => {
-                        await builtinThreadSettings.selectModel(modelId);
-                        onCommit?.();
-                      }}
-                      onSelectReasoningEffort={async (effort) => {
-                        await builtinThreadSettings.selectReasoningEffort(
-                          effort,
-                        );
-                        onCommit?.();
-                      }}
+                      disabled={builtinThreadSettings.saving}
+                      onSelectModel={(modelId) =>
+                        handleBuiltinSelection(() =>
+                          builtinThreadSettings.selectModel(modelId),
+                        )
+                      }
+                      onSelectReasoningEffort={(effort) =>
+                        handleBuiltinSelection(() =>
+                          builtinThreadSettings.selectReasoningEffort(effort),
+                        )
+                      }
                     />
                   )}
                 </div>
@@ -1265,6 +1288,7 @@ export const ChatPanel = ({
               // user can retry / trigger a re-ensure on the next send.
               submitDisabled={
                 !ownerScopeReady ||
+                builtinThreadSettings.saving ||
                 !isHistoryLoaded ||
                 preparation.pending ||
                 savingAgentDraft ||

@@ -59,6 +59,7 @@ import {
   useRemoteConversationOwnerStore,
 } from '@/store/remoteConversationOwner';
 
+import { BuiltinSessionSelectors } from './BuiltinSessionSelectors';
 import {
   PreviewTab,
   PreviewTabDragOverlay,
@@ -146,6 +147,9 @@ vi.mock('@/hooks/useBuiltinThreadSettings', () => ({
     settings: { reasoningEffort: null },
     effectiveModelId: null,
     loading: false,
+    saving: false,
+    selectModel: vi.fn(),
+    selectReasoningEffort: vi.fn(),
   })),
 }));
 vi.mock('@/components/Messages/MessageList', () => ({
@@ -161,7 +165,9 @@ vi.mock('@/components/Messages/MessageList', () => ({
 vi.mock('./ChangeReviewCard', () => ({ ChangeReviewCard: () => null }));
 vi.mock('./AgentSelector', () => ({ AgentSelector: () => null }));
 vi.mock('./BuiltinSessionSelectors', () => ({
-  BuiltinSessionSelectors: () => null,
+  BuiltinSessionSelectors: vi.fn(
+    (_props: ComponentProps<typeof BuiltinSessionSelectors>) => null,
+  ),
 }));
 vi.mock('./AcpSessionSelectors', () => ({
   AcpSessionSelectors: ({
@@ -610,6 +616,14 @@ describe('rendered conversation titles', () => {
     await renderPanel(remoteSession, remoteTab, vi.fn(), {
       ownerUnavailable: true,
     });
+    const selectors = vi.mocked(BuiltinSessionSelectors).mock.lastCall?.[0];
+    assert(selectors);
+    await act(async () => {
+      await selectors.onSelectModel('unavailable-model');
+      await selectors.onSelectReasoningEffort('low');
+    });
+    expect(toast).toHaveBeenCalledTimes(2);
+    expect(useChatStore.getState().settingsByThread.thread).toEqual(selection);
     const form = container.querySelector('form');
     assert(form);
     expect(form.dataset.submitDisabled).toBe('true');
@@ -632,6 +646,39 @@ describe('rendered conversation titles', () => {
       'false',
     );
     expect(useChatStore.getState().settingsByThread.thread).toEqual(selection);
+  });
+
+  it('reports failed built-in selections without committing the tab', async () => {
+    const failure = new Error('Rejected by server');
+    const selectModel = vi.fn().mockRejectedValue(failure);
+    const selectReasoningEffort = vi.fn().mockRejectedValue(failure);
+    vi.mocked(useBuiltinThreadSettings).mockReturnValue({
+      models: [],
+      settings: { modelId: 'model-1', reasoningEffort: 'high' },
+      effectiveModelId: 'model-1',
+      loading: false,
+      saving: true,
+      selectModel,
+      selectReasoningEffort,
+    });
+    const onCommit = vi.fn();
+    await renderPanel(baseSession, baseTab, onCommit);
+    const selectors = vi.mocked(BuiltinSessionSelectors).mock.lastCall?.[0];
+    assert(selectors);
+    expect(selectors.disabled).toBe(true);
+    expect(container.querySelector('form')?.dataset.submitDisabled).toBe(
+      'true',
+    );
+    await act(async () => {
+      await selectors.onSelectModel('model-2');
+      await selectors.onSelectReasoningEffort('low');
+    });
+    expect(toast).toHaveBeenCalledWith(
+      expect.stringContaining('Rejected by server'),
+      { tone: 'danger' },
+    );
+    expect(toast).toHaveBeenCalledTimes(2);
+    expect(onCommit).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(

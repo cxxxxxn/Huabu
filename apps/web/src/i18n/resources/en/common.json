@@ -1042,6 +1042,8 @@
     "failedSwitchMode": "Failed to switch mode",
     "failedSwitchModeWithMessage": "Failed to switch mode: {{message}}",
     "failedSwitchModel": "Failed to switch model",
+    "settingsUnavailable": "Conversation settings are temporarily unavailable. Please try again.",
+    "settingsUpdatePending": "A settings update is already in progress.",
     "failedSwitchModelWithMessage": "Failed to switch model: {{message}}",
     "failedUpdateOption": "Failed to update option",
     "failedUpdateOptionWithMessage": "Failed to update option: {{message}}",
