@@ -1101,19 +1101,16 @@ export async function drainPendingSaves(): Promise<void> {
 export async function savedBeforeSignOut(): Promise<boolean> {
   const { canvasId } = useCanvasStore.getState();
   try {
-    await drainPendingSaves();
+    // The strict path an agent submission uses: structure and every node's
+    // content, failing on any retained structure or content failure.
+    if (canvasId) await saveCanvasForSubmission(canvasId);
+    else await drainPendingSaves();
     if (canvasId) await canvasEvents.flush(canvasId);
     await preprocessQueue.flushAll();
+    return true;
   } catch {
     return false;
   }
-  const state = useCanvasStore.getState();
-  return (
-    !structureScheduler.hasPending() &&
-    !state.isSaving &&
-    !state.pendingSave &&
-    !(canvasId && structureSaveErrors.has(canvasId))
-  );
 }
 
 export class CanvasSubmissionSaveError extends Error {
