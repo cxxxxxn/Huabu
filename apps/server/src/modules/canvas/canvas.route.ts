@@ -1726,6 +1726,18 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
         message: 'System command origin is reserved for internal callers',
       });
     }
+    // An agent batch fetches the sources its nodes name, as only an agent
+    // may; a member runs no agents, so cannot speak for one.
+    if (
+      parsed.data.originator.source === 'agent' &&
+      isRestrictedRequest(request) &&
+      !isOwnerRequest(request)
+    ) {
+      return reply.code(403).send({
+        message: 'Agents and conversations require an owner',
+        code: 'AGENT_ACCESS_REQUIRED',
+      });
+    }
     const { commands, originator, runId } = parsed.data;
     try {
       assertCurrentCanvasCommands(commands);

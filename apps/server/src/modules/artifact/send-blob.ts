@@ -151,13 +151,16 @@ const SANDBOX_POLICY = 'sandbox allow-scripts allow-forms allow-popups';
  * Under per-Space access a blob may come from another principal, and HTML or
  * SVG opened as a page would run with the viewer's session on this origin.
  * Bubble mode therefore renders every stored document in an opaque origin,
- * as the web app's iframes already do; local mode is unchanged.
+ * as the web app's iframes already do, and keeps it out of shared caches,
+ * which would serve it without asking the Space guard; local mode is
+ * unchanged.
  */
 export function sandboxForRestrictedCaller(
   request: FastifyRequest,
   reply: FastifyReply,
 ): void {
   if (!isRestrictedRequest(request)) return;
+  reply.header('Cache-Control', 'private, no-cache');
   // A route's own policy (the Interactive View renderer's) stays enforced;
   // the sandbox is a second policy, and a browser enforces both.
   const existing = reply.getHeader('Content-Security-Policy');

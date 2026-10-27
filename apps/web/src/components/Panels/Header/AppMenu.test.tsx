@@ -17,6 +17,16 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('../../../config/handbook', () => ({ openUserHandbook: vi.fn() }));
+const signOutMocks = vi.hoisted(() => ({
+  saved: vi.fn<() => Promise<boolean>>(),
+  signOut: vi.fn<() => Promise<void>>(),
+  toast: vi.fn(),
+}));
+vi.mock('../../../store/canvasStore', () => ({
+  savedBeforeSignOut: signOutMocks.saved,
+}));
+vi.mock('../../../api/identity', () => ({ signOut: signOutMocks.signOut }));
+vi.mock('../../Common/Toast.tsx', () => ({ toast: signOutMocks.toast }));
 vi.mock('../../../config/shortcuts', () => ({
   getShortcutKeys: () => undefined,
 }));
@@ -191,5 +201,44 @@ describe('AppMenu', () => {
     expect(
       items({ provider: 'bubble', principal, member: true, owner: false }),
     ).toContain('auth.signOutAs');
+  });
+
+  it('signs out only once Canvas edits are saved, and says so otherwise', async () => {
+    useIdentityStore.setState({
+      identity: {
+        provider: 'bubble',
+        principal: { principalId: 'carol', kind: 'user' },
+        member: true,
+        owner: false,
+      },
+    });
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() =>
+      root?.render(
+        <MemoryRouter initialEntries={['/canvas/c1']}>
+          <AppMenu />
+        </MemoryRouter>,
+      ),
+    );
+    const signOutItem = () =>
+      Array.from(
+        container!.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+      ).find((item) => item.textContent?.includes('auth.signOutAs'));
+    signOutMocks.saved.mockResolvedValueOnce(false);
+    await act(async () => signOutItem()?.click());
+    expect(signOutMocks.signOut).not.toHaveBeenCalled();
+    expect(signOutMocks.toast).toHaveBeenCalledWith('auth.signOutUnsaved', {
+      tone: 'danger',
+    });
+
+    signOutMocks.saved.mockResolvedValueOnce(true);
+    signOutMocks.signOut.mockRejectedValueOnce(new Error('503'));
+    await act(async () => signOutItem()?.click());
+    expect(signOutMocks.signOut).toHaveBeenCalledTimes(1);
+    expect(signOutMocks.toast).toHaveBeenLastCalledWith('auth.signOutFailed', {
+      tone: 'danger',
+    });
   });
 });

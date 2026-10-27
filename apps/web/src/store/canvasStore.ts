@@ -1092,6 +1092,30 @@ export async function drainPendingSaves(): Promise<void> {
   }
 }
 
+/**
+ * Drain every save queue for the current Canvas before the session ends,
+ * and report whether everything reached the Server. Signing out removes the
+ * credential the unload flush would need, so whatever is still queued or
+ * failed then would be lost.
+ */
+export async function savedBeforeSignOut(): Promise<boolean> {
+  const { canvasId } = useCanvasStore.getState();
+  try {
+    await drainPendingSaves();
+    if (canvasId) await canvasEvents.flush(canvasId);
+    await preprocessQueue.flushAll();
+  } catch {
+    return false;
+  }
+  const state = useCanvasStore.getState();
+  return (
+    !structureScheduler.hasPending() &&
+    !state.isSaving &&
+    !state.pendingSave &&
+    !(canvasId && structureSaveErrors.has(canvasId))
+  );
+}
+
 export class CanvasSubmissionSaveError extends Error {
   readonly code = 'canvas_save_failed';
 

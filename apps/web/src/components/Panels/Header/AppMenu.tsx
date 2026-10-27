@@ -19,6 +19,7 @@ import {
   openServerLog,
 } from '../../../hooks/useElectron';
 import { useRunDiagnostic } from '../../../hooks/useRunDiagnostic';
+import { savedBeforeSignOut } from '../../../store/canvasStore';
 import { useIdentityStore } from '../../../store/identityStore';
 import { useSettingsUiStore } from '../../../store/settingsUiStore';
 import { useShortcutsUiStore } from '../../../store/shortcutsUiStore';
@@ -88,6 +89,17 @@ export const AppMenu: React.FC<AppMenuProps> = ({
   const { status: updateStatus, check: checkForUpdates } = useAppUpdate();
   const updaterAvailable = !!getElectronBridge()?.updater;
 
+  // Ending the session first would leave queued Canvas saves without a
+  // credential, so sign-out waits for them and stays if any did not land.
+  const signOutKeepingEdits = async () => {
+    if (!(await savedBeforeSignOut())) {
+      toast(t('auth.signOutUnsaved'), { tone: 'danger' });
+      return;
+    }
+    await signOut().catch(() =>
+      toast(t('auth.signOutFailed'), { tone: 'danger' }),
+    );
+  };
   const runAndClose = (fn: () => void) => () => {
     setIsOpen(false);
     fn();
@@ -232,12 +244,7 @@ export const AppMenu: React.FC<AppMenuProps> = ({
           <>
             <div role="separator" className={MENU_SEPARATOR_CLASS} />
             <DropdownMenuItem
-              onClick={runAndClose(
-                () =>
-                  void signOut().catch(() =>
-                    toast(t('auth.signOutFailed'), { tone: 'danger' }),
-                  ),
-              )}
+              onClick={runAndClose(() => void signOutKeepingEdits())}
             >
               {t('auth.signOutAs', {
                 name:

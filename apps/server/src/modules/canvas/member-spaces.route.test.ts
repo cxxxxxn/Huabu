@@ -69,6 +69,46 @@ describe('a member’s Spaces', () => {
     ).toBe('root');
   });
 
+  it('refuses a member a batch that claims to come from an agent', async () => {
+    const execute = async (owner: boolean, source: 'agent' | 'ui') => {
+      const app = fastify();
+      app.addHook('onRequest', async (request) => {
+        setRequestIdentity(request, {
+          principal: { principalId: 'carol', kind: 'user' },
+          member: true,
+          owner,
+          access: { can: async () => true, claim: async () => {} },
+        });
+      });
+      await app.register(canvasRoutes, { prefix: '/canvas' });
+      const response = await app.inject({
+        method: 'POST',
+        url: '/canvas/root/execute',
+        payload: {
+          commands: [
+            {
+              type: 'CREATE_NODES',
+              nodes: [
+                {
+                  id: 'node-img',
+                  nodeType: 'image',
+                  data: { label: 'x', src: 'http://169.254.169.254/latest' },
+                  position: { x: 0, y: 0 },
+                  size: { width: 10, height: 10 },
+                },
+              ],
+            },
+          ],
+          originator: { source },
+        },
+      });
+      await app.close();
+      return response.statusCode;
+    };
+    expect(await execute(false, 'agent')).toBe(403);
+    expect(await execute(false, 'ui')).toBe(200);
+  });
+
   it('leaves no Space behind when its ownership cannot be recorded', async () => {
     const app = await host({
       can: async () => true,

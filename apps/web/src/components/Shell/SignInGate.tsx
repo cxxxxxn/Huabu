@@ -13,6 +13,7 @@ import {
   startSession,
   type InteractiveAuthenticator,
 } from '../../api/identity';
+import { API_CONFIG } from '../../config/api';
 import { APP_NAME } from '../../config/app';
 import { WorkspaceLoadingScreen } from '../../pages/WorkspaceLoadingScreen';
 import { useIdentityStore } from '../../store/identityStore';
@@ -29,10 +30,24 @@ type GateState =
       kind: 'signIn';
       authenticators: InteractiveAuthenticator[];
       error?: string;
+      /** The API is on another origin, where the session cookie never goes. */
+      crossOrigin?: boolean;
     }
   | { kind: 'noAccess'; identity: IdentityResponse }
   /** The provider refused the account itself, such as a disabled one. */
   | { kind: 'denied' };
+
+/**
+ * The session is an HttpOnly cookie for this origin, which an API on any
+ * other origin (`VITE_API_BASE`) neither receives nor can set.
+ */
+function sameOriginApi(): boolean {
+  if (!API_CONFIG.BASE_URL) return true;
+  return (
+    new URL(API_CONFIG.BASE_URL, window.location.href).origin ===
+    window.location.origin
+  );
+}
 
 const PROVIDER_NAMES: Record<string, string> = {
   entra: 'Microsoft Entra ID',
@@ -93,7 +108,11 @@ export function SignInGate({ children }: { children: ReactNode }) {
         settle({ kind: 'ready' });
         return;
       }
-      settle({ kind: 'signIn', authenticators, error: loginError });
+      settle(
+        sameOriginApi()
+          ? { kind: 'signIn', authenticators, error: loginError }
+          : { kind: 'signIn', authenticators: [], crossOrigin: true },
+      );
     },
     [setIdentity],
   );
@@ -164,7 +183,9 @@ export function SignInScreen({
 
         {state.kind === 'signIn' && state.authenticators.length === 0 ? (
           <p className="text-fg-subtle text-center text-sm" role="status">
-            {t('auth.noSignInMethods')}
+            {state.crossOrigin
+              ? t('auth.crossOriginUnsupported')
+              : t('auth.noSignInMethods')}
           </p>
         ) : state.kind === 'signIn' ? (
           <div className="space-y-2">

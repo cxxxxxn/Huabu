@@ -629,12 +629,14 @@
     "signingIn": "Signing in…",
     "signInFailed": "Sign-in failed: {{message}}",
     "noSignInMethods": "This server has no browser sign-in configured. Ask its administrator to add an Auth0 or Entra ID login with a client ID.",
+    "crossOriginUnsupported": "Browser sign-in needs the web app and its Server on the same origin. This build points at a Server elsewhere (VITE_API_BASE); serve both from one origin to sign in.",
     "noAccessTitle": "No access yet",
     "noAccessIntro": "You are signed in as {{name}}, but this account cannot use {{appName}} yet. Ask an administrator to grant access.",
     "signOut": "Sign out",
     "signOutAs": "Sign out ({{name}})",
     "deniedIntro": "This account cannot use {{appName}}. Sign out to use another account.",
-    "signOutFailed": "Could not sign out. Check your connection and try again."
+    "signOutFailed": "Could not sign out. Check your connection and try again.",
+    "signOutUnsaved": "Some changes haven't been saved yet, so you are still signed in. Wait for them to save or retry, then sign out again."
   },
   "workspace": {
     "switcher": "Switch Workspace",
