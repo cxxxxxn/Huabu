@@ -10,6 +10,7 @@ import { validatePathSchema, workspacePathSchema } from '@huabu/shared';
 
 import { resetPreprocessDispatcher } from './preprocessing/index.js';
 import { isOwnerRequest } from './security/owner.js';
+import { isRestrictedRequest } from './security/space-access.js';
 import {
   getStructuredStore,
   materializesWorkspaces,
@@ -188,9 +189,14 @@ async function buildWorkspaceState(): Promise<WorkspaceInfo> {
 }
 
 const workspaceRoutes: FastifyPluginAsync = async (app) => {
-  // The active Workspace is the whole Server's, so only an owner changes it.
+  // The active Workspace is the whole Server's, so a principal with
+  // per-Space access (a Bubble member) may not change it.
   app.addHook('preHandler', async (request, reply) => {
-    if (request.method !== 'GET' && !isOwnerRequest(request)) {
+    if (
+      request.method !== 'GET' &&
+      !isOwnerRequest(request) &&
+      isRestrictedRequest(request)
+    ) {
       return reply.status(403).send({
         message: 'Forbidden: changing the Workspace requires an owner',
       });

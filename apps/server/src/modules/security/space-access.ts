@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 import { getRequestIdentity } from '../identity/request.js';
+import { UNRESTRICTED_ACCESS } from '../identity/service.js';
 
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
@@ -24,14 +25,15 @@ const id = (value: unknown): string | undefined =>
  * whichever is present first; a route that moves content between Spaces also
  * names the other one in its body. A conversation outside any Space belongs
  * to nobody, so only an owner may address one. The identity provider decides
- * each check; the local owner and the machine credential pass every one.
+ * each check. Unrestricted callers, the local owner and the machine
+ * credential, skip the guard entirely, so local mode is unchanged.
  */
 export function registerSpaceAccess(app: FastifyInstance): void {
   app.addHook('preHandler', async (request, reply) => {
     if (request.routeOptions.config?.identity === 'route-owned') return;
     const identity = getRequestIdentity(request);
     // Credential-free routes were already admitted or refused by identity.
-    if (!identity) return;
+    if (!identity || !isRestrictedRequest(request)) return;
 
     const params = request.params as Fields;
     const query = request.query as Fields;
@@ -81,6 +83,12 @@ export function registerSpaceAccess(app: FastifyInstance): void {
       return reply.code(404).send({ message: 'Canvas not found' });
     }
   });
+}
+
+/** Whether the caller's access is decided per Workspace and Space. */
+export function isRestrictedRequest(request: FastifyRequest): boolean {
+  const access = getRequestIdentity(request)?.access;
+  return access !== undefined && access !== UNRESTRICTED_ACCESS;
 }
 
 /** Record the caller as owner of the Space it has just created. */

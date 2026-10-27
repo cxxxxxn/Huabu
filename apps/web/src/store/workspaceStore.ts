@@ -319,16 +319,20 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
 
       // ── Free mode ──
       // Server already activated (e.g. another tab beat us to it).
-      // A Workspace kept as a row has no path, and no other one to switch to.
-      const activated =
-        info.configured &&
-        (Boolean(info.path) || !info.capabilities.canChangeWorkspace);
+      const activated = info.configured && Boolean(info.path);
 
       let registered: WorkspaceDescriptor[] = [];
       try {
         registered = await listWorkspaces();
         set({ recentWorkspaces: registered });
       } catch (err) {
+        // Only an owner reads the registry. Anyone else uses the Workspace
+        // the Server already has active, whose row may carry no path.
+        if (info.configured && err instanceof ApiError && err.status === 403) {
+          set({ isSyncing: false });
+          emitWorkspaceChanged();
+          return true;
+        }
         // A registry we cannot read is only fatal when it is the sole route
         // back to a Workspace. An already-activated Server stays usable; the
         // welcome list is the one thing that degrades.

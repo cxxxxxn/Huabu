@@ -10,6 +10,7 @@ import {
   registerSpaceAccess,
 } from './space-access.js';
 import { setRequestIdentity } from '../identity/request.js';
+import { UNRESTRICTED_ACCESS } from '../identity/service.js';
 
 import type { FastifyInstance } from 'fastify';
 
@@ -162,6 +163,27 @@ describe('Space access', () => {
         })
       ).statusCode,
     ).toBe(404);
+  });
+
+  it('leaves unrestricted callers such as the local machine token unguarded', async () => {
+    const app = Fastify();
+    apps.push(app);
+    app.addHook('onRequest', async (request) => {
+      setRequestIdentity(request, {
+        principal: { principalId: 'huabu-agentlet', kind: 'bot' },
+        member: true,
+        owner: false,
+        access: UNRESTRICTED_ACCESS,
+      });
+    });
+    registerSpaceAccess(app);
+    app.get('/api/agent/history/:threadId', async () => ({ ok: true }));
+    app.put('/api/canvas/:canvasId', async () => ({ ok: true }));
+    expect((await app.inject('/api/agent/history/t1')).statusCode).toBe(200);
+    expect(
+      (await app.inject({ method: 'PUT', url: '/api/canvas/any', payload: {} }))
+        .statusCode,
+    ).toBe(200);
   });
 
   it('lists readable Spaces and claims created ones for the caller', async () => {
