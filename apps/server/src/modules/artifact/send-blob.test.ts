@@ -7,7 +7,10 @@ import Fastify from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 
 import { resolveRange, sendBlob } from './send-blob.js';
+import { setRequestIdentity } from '../identity/request.js';
+import { UNRESTRICTED_ACCESS } from '../identity/service.js';
 
+import type { ResourceAccess } from '../identity/service.js';
 import type { BlobInfo, BlobScope } from '../storage/index.js';
 
 /**
@@ -256,5 +259,35 @@ describe('sendBlob', () => {
 
     const res = await serveScope(scope, 'a.png');
     expect(res.statusCode).toBe(500);
+  });
+});
+
+describe('sendBlob under per-Space access', () => {
+  it('renders a stored document in an opaque origin only for restricted callers', async () => {
+    const scope = fakeScope({ 'page.html': Buffer.from('<script></script>') });
+    const csp = async (access: ResourceAccess) => {
+      const app = Fastify();
+      app.addHook('onRequest', async (request) => {
+        setRequestIdentity(request, {
+          principal: { principalId: 'p', kind: 'user' },
+          member: true,
+          owner: true,
+          access,
+        });
+      });
+      app.get('/blob', async (request, reply) => {
+        await sendBlob(request, reply, scope, 'page.html');
+        return reply;
+      });
+      const response = await app.inject('/blob');
+      await app.close();
+      return response.headers['content-security-policy'];
+    };
+    // Local mode: unchanged.
+    expect(await csp(UNRESTRICTED_ACCESS)).toBeUndefined();
+    // Bubble mode, even for a system owner.
+    expect(await csp({ can: async () => true, claim: async () => {} })).toBe(
+      'sandbox allow-scripts allow-forms allow-popups',
+    );
   });
 });

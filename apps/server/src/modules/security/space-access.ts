@@ -13,6 +13,8 @@ declare module 'fastify' {
   interface FastifyContextConfig {
     /** A non-GET route that only reads the Space it names. */
     spaceAccess?: 'read';
+    /** Starts or steers an agent outside the agent route prefixes. */
+    invokesAgent?: true;
   }
 }
 
@@ -21,9 +23,16 @@ type Fields = Record<string, unknown> | undefined;
 /**
  * Agents act through the shared machine credential, which reaches every
  * Space, so a member may not run or steer one until credentials carry the
- * caller's own authority. Matched by route pattern, not URL spelling.
+ * caller's own authority. RFS is that credential's own surface: it launches
+ * agents and Task Runs and leases shared service credentials, and the web
+ * app never calls it. Matched by route pattern, not URL spelling.
  */
-const AGENT_ROUTES = ['/api/agent', '/api/acp', '/api/agent-change-review'];
+const AGENT_ROUTES = [
+  '/api/agent',
+  '/api/acp',
+  '/api/agent-change-review',
+  '/api/rfs',
+];
 
 /**
  * The one value a request gives for `field` across its route parameters,
@@ -88,6 +97,7 @@ export function registerSpaceAccess(app: FastifyInstance): void {
     if (
       !identity.owner &&
       (threadId ||
+        request.routeOptions.config?.invokesAgent ||
         AGENT_ROUTES.some(
           (prefix) => route === prefix || route.startsWith(`${prefix}/`),
         ))

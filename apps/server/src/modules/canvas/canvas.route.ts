@@ -88,7 +88,11 @@ import { ARTIFACT_URL_REGEX } from '../artifact/utils.js';
 import { getPreprocessDispatcher, getProfile } from '../preprocessing/index.js';
 import { isLabelProtected } from '../preprocessing/label-policy.js';
 import { stripOfficeparserPreamble } from '../preprocessing/loaders/office-strip.js';
-import { claimSpace, readableSpaces } from '../security/space-access.js';
+import {
+  canReadSpace,
+  claimSpace,
+  readableSpaces,
+} from '../security/space-access.js';
 import {
   space,
   createSpace,
@@ -1637,13 +1641,12 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      const moved = await moveCanvasSelection(
-        params.data.canvasId,
-        parsed.data,
+      return reply.send(
+        await moveCanvasSelection(params.data.canvasId, parsed.data, {
+          canRead: (canvasId) => canReadSpace(request, canvasId),
+          claim: (canvasId) => claimSpace(request, canvasId),
+        }),
       );
-      if (moved.destination.created)
-        await claimSpace(request, moved.destination.canvasId);
-      return reply.send(moved);
     } catch (error) {
       if (error instanceof SpaceMoveError) {
         return reply.code(error.statusCode).send({

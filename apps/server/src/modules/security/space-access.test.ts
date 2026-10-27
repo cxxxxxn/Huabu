@@ -55,6 +55,12 @@ function host() {
   app.post('/api/acp/threads/:threadId/permission', ok);
   app.get('/api/canvas/:canvasId/threads/:threadId/changes', ok);
   app.post('/api/canvas-titles', ok);
+  app.post('/api/rfs/:canvasId/services/:serviceId/lease', ok);
+  app.post(
+    '/api/interactive-views/:canvasId/:nodeId/actions/:actionId',
+    { config: { invokesAgent: true } },
+    ok,
+  );
   app.post('/api/canvas/:canvasId/move-selection', ok);
   app.patch('/api/canvas/:canvasId/parent', ok);
   app.post('/api/canvas/:canvasId/artifact/clone-from', ok);
@@ -142,6 +148,10 @@ describe('Space access', () => {
       { method: 'POST', url: '/api/agent', payload: { canvasId: 'mine' } },
       { method: 'POST', url: '/api/acp/threads/t1/permission?canvasId=mine' },
       { url: '/api/canvas/mine/threads/t1/changes' },
+      // The machine credential's own surface: agent launches, Task Runs and
+      // shared service credentials.
+      { method: 'POST', url: '/api/rfs/mine/services/web-search/lease' },
+      { method: 'POST', url: '/api/interactive-views/mine/n1/actions/a1' },
     ] as const) {
       expect(
         (await app.inject({ ...request, headers: as('no') })).statusCode,
@@ -166,6 +176,15 @@ describe('Space access', () => {
     expect(
       (await app.inject({ url: '/api/agent/history/t1', headers: as('yes') }))
         .statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/api/interactive-views/mine/n1/actions/a1',
+          headers: as('yes'),
+        })
+      ).statusCode,
     ).toBe(200);
   });
 

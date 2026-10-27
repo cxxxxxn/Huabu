@@ -44,7 +44,6 @@ import syncRoutes from './modules/canvas/sync.route.js';
 import { createIdentity, registerIdentity } from './modules/identity/index.js';
 import integrationsRoutes from './modules/integrations/integrations.route.js';
 import interactiveViewRoutes from './modules/interactive-view/interactive-view.route.js';
-import { isPublicRfsSkillBootstrapRequest } from './modules/remote_fs/public-skill.js';
 import rfsRoutes from './modules/remote_fs/rfs.route.js';
 import canaryRedeployRoutes from './modules/security/canary-redeploy.route.js';
 import { createCorsOptions } from './modules/security/cors.js';
@@ -60,10 +59,8 @@ import { registerSpaceAccess } from './modules/security/space-access.js';
 import serviceRoutes from './modules/services/services.route.js';
 import { closeStorage } from './modules/storage/index.js';
 import webRoutes from './modules/web/web.route.js';
-import {
-  initWorkspaceFromEnv,
-  isWorkspaceConfigured,
-} from './modules/workspace.js';
+import { registerWorkspaceRequiredGuard } from './modules/workspace-required.js';
+import { initWorkspaceFromEnv } from './modules/workspace.js';
 import workspaceRoutes from './modules/workspace.route.js';
 import workspacesRoutes from './modules/workspaces.route.js';
 import { preloadSkills } from './prompt/index.js';
@@ -159,30 +156,7 @@ app.register(staticPlugin, {
 
 // Guard: reject requests to non-workspace routes when workspace is not yet configured.
 // The workspace routes themselves are always allowed so the client can set the path.
-app.addHook('preHandler', async (request, reply) => {
-  const url = request.url;
-  const publicSkillBootstrap = isPublicRfsSkillBootstrapRequest({
-    method: request.method,
-    url,
-    authorization: request.headers.authorization,
-  });
-  if (
-    !isWorkspaceConfigured() &&
-    url.startsWith('/api') &&
-    !publicSkillBootstrap &&
-    !url.startsWith('/api/workspace') &&
-    !url.startsWith('/api/deployment') &&
-    url.split('?', 1)[0] !== '/api/identity' &&
-    !url.startsWith('/api/llm') &&
-    !url.startsWith('/api/integrations') &&
-    !url.startsWith('/api/services')
-  ) {
-    return reply.status(503).send({
-      message:
-        'Workspace has not been configured yet. Please set a workspace path first.',
-    });
-  }
-});
+registerWorkspaceRequiredGuard(app);
 
 // Every Space a request names is authorized before its route runs.
 registerSpaceAccess(app);

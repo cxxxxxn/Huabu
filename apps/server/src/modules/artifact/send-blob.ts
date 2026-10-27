@@ -18,6 +18,7 @@
 import { Readable } from 'node:stream';
 
 import { getMimeType } from '../../utils/mime.js';
+import { isRestrictedRequest } from '../security/space-access.js';
 
 import type { BlobInfo, BlobScope } from '../storage/index.js';
 import type { FastifyReply, FastifyRequest } from 'fastify';
@@ -148,6 +149,23 @@ function contentTypeFor(name: string): string {
  * Stream one blob to the client, honouring conditional requests and byte
  * ranges. Returns false when the blob is absent so the caller can 404.
  */
+/**
+ * Under per-Space access a blob may come from another principal, and HTML or
+ * SVG opened as a page would run with the viewer's session on this origin.
+ * Bubble mode therefore renders every stored document in an opaque origin,
+ * as the web app's iframes already do; local mode is unchanged.
+ */
+export function sandboxForRestrictedCaller(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): void {
+  if (isRestrictedRequest(request))
+    reply.header(
+      'Content-Security-Policy',
+      'sandbox allow-scripts allow-forms allow-popups',
+    );
+}
+
 export async function sendBlob(
   request: FastifyRequest,
   reply: FastifyReply,
@@ -169,6 +187,7 @@ export async function sendBlob(
     .header('ETag', etag)
     .header('Last-Modified', lastModified)
     .header('X-Content-Type-Options', 'nosniff');
+  sandboxForRestrictedCaller(request, reply);
 
   if (preconditionFailed(request, lastModified, etag)) {
     await reply.code(412).send({ message: 'Precondition failed' });
