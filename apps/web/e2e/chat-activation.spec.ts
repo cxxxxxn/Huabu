@@ -207,6 +207,67 @@ for (const theme of ['light', 'dark']) {
   });
 }
 
+for (const growth of ['above', 'below']) {
+  test(`layout growth ${growth} does not retire recovery after a small gesture`, async ({
+    page,
+  }) => {
+    await openFixture(page);
+    await expand(page);
+    await scrollHistory(page, false);
+    await activate(page, 'b');
+    await page
+      .getByRole('button', { name: 'Add background turn to A' })
+      .click();
+    await activate(page, 'a');
+    const scroller = panel(page).locator('[data-chat-thread-root]');
+    const recovery = panel(page).getByRole('button', {
+      name: 'Back to last reading position',
+      exact: true,
+    });
+    const paragraph = scroller
+      .locator('[data-chat-message-id="a-turn-11-answer"] p')
+      .last();
+    await scroller.evaluate((element) => {
+      element.dispatchEvent(
+        new WheelEvent('wheel', { bubbles: true, deltaY: -100 }),
+      );
+    });
+    await paragraph.evaluate((element) =>
+      element.scrollIntoView({ block: 'start' }),
+    );
+    await expect(scroller).toHaveCSS('overflow-anchor', 'auto');
+    await page.waitForTimeout(600);
+    await expect(recovery).toBeVisible();
+    const before = await paragraph.boundingBox();
+    if (!before) throw new Error('Missing reading paragraph');
+    await scroller.evaluate(async (element, direction) => {
+      element.dispatchEvent(
+        new WheelEvent('wheel', { bubbles: true, deltaY: 10 }),
+      );
+      element.scrollTop += 10;
+      element.dispatchEvent(new Event('scroll', { bubbles: true }));
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
+      const resized = element.querySelector<HTMLElement>(
+        direction === 'above'
+          ? '[data-chat-message-id="a-turn-11-tool"]'
+          : '[data-chat-message-id="a-turn-13-answer"]',
+      );
+      if (!resized) throw new Error('Missing content to resize');
+      resized.style.paddingBottom = `${element.clientHeight + 100}px`;
+    }, growth);
+    await page.waitForTimeout(100);
+    const after = await paragraph.boundingBox();
+    if (!after) throw new Error('Missing reading paragraph after resize');
+    expect(Math.abs(after.y - (before.y - 10))).toBeLessThanOrEqual(2);
+    await expect(recovery).toBeVisible();
+    await recovery.click();
+    await expect(recovery).toBeHidden();
+    await expectTurns(page, 'a', 7, 13);
+  });
+}
+
 for (const activation of ['manual', 'warm', 'cold']) {
   test(`paused reading stays anchored during delayed resize (${activation})`, async ({
     page,

@@ -151,9 +151,12 @@ export const MessageList = memo(function MessageList({
   const lastScrollTopRef = useRef(0);
   const scrollInteractionRef = useRef(0);
   const touchYRef = useRef<number | undefined>(undefined);
-  const readingScrollRef = useRef<{ top: number; expires: number } | null>(
-    null,
-  );
+  const readingScrollRef = useRef<{
+    top: number;
+    height: number;
+    viewportHeight: number;
+    expires: number;
+  } | null>(null);
   const readingScrollDistanceRef = useRef(0);
   const scrollbarPointerRef = useRef<number | undefined>(undefined);
   const observedSubmissionRef = useRef({ viewKey, submissionNonce });
@@ -246,14 +249,22 @@ export const MessageList = memo(function MessageList({
     }
     lastScrollTopRef.current = container.scrollTop;
     if (recentTurnCount !== undefined) {
+      const pendingAnchor = prependAnchorRef.current;
       rememberChatViewport(viewKey, {
         scrollTop: container.scrollTop,
-        messageAnchor: atBottom
-          ? undefined
-          : captureMessageListScrollAnchor(container),
+        messageAnchor: pendingAnchor
+          ? {
+              messageId: pendingAnchor.messageId,
+              offsetTop:
+                pendingAnchor.viewportTop -
+                container.getBoundingClientRect().top,
+            }
+          : atBottom
+            ? undefined
+            : captureMessageListScrollAnchor(container),
         firstMessageId: messages[0]?.id,
         tail,
-        atBottom,
+        atBottom: !pendingAnchor && atBottom,
       });
     }
   }, [
@@ -517,8 +528,14 @@ export const MessageList = memo(function MessageList({
     if (!el || !canScroll()) return;
     const readingScroll = readingScrollRef.current;
     if (readingScroll && performance.now() <= readingScroll.expires) {
-      const delta = el.scrollTop - readingScroll.top;
+      // Layout compensation and input can share a scroll event; do not count ambiguous movement.
+      const layoutChanged =
+        readingScroll.height !== el.scrollHeight ||
+        readingScroll.viewportHeight !== el.clientHeight;
+      const delta = layoutChanged ? 0 : el.scrollTop - readingScroll.top;
       readingScroll.top = el.scrollTop;
+      readingScroll.height = el.scrollHeight;
+      readingScroll.viewportHeight = el.clientHeight;
       if (delta > 0) {
         readingScrollDistanceRef.current += delta;
         if (
@@ -592,6 +609,8 @@ export const MessageList = memo(function MessageList({
     // Only movement shortly after native input counts, never idle layout changes.
     readingScrollRef.current = {
       top: container.scrollTop,
+      height: container.scrollHeight,
+      viewportHeight: container.clientHeight,
       expires: performance.now() + 250,
     };
   };

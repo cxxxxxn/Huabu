@@ -691,7 +691,14 @@ describe('MessageList bottom navigation', () => {
     },
   );
 
-  it.each(['before-frame', 'after-frame'])(
+  it.each([
+    'before-frame',
+    'after-frame',
+    'cold-interruption',
+    'warm-interruption',
+    'user-interruption',
+    'bottom-interruption',
+  ])(
     'keeps a clamped non-bottom restoration paused when content grows %s',
     (growth) => {
       vi.useFakeTimers();
@@ -703,31 +710,79 @@ describe('MessageList bottom navigation', () => {
         const id = this.dataset.chatMessageId;
         return new DOMRect(0, id ? (id === 'u4' ? 400 : 0) - top : 0, 300, 200);
       });
-      const view = () => (
+      const view = (isActive = true, activationId = 0) => (
         <MessageList
           messages={history(10)}
           recentTurnCount={3}
           isLoading={false}
           viewKey={viewKey}
+          isActive={isActive}
+          activationId={activationId}
         />
       );
-      try {
-        mount(view());
-        act(() => earlier()?.click());
-        scrollTo(410);
+      const unmountView = () => {
         act(() => root?.unmount());
         root = undefined;
         container?.remove();
         container = undefined;
+      };
+      try {
+        mount(view());
+        act(() => earlier()?.click());
+        scrollTo(410);
+        unmountView();
         height = 600;
         top = 0;
         mount(view());
         expect(top).toBe(400);
         expect(thread().style.overflowAnchor).toBe('none');
+        expect(readChatViewport(viewKey)).toMatchObject({
+          atBottom: false,
+          messageAnchor: { messageId: 'u4', offsetTop: -10 },
+        });
+        if (
+          growth === 'user-interruption' ||
+          growth === 'bottom-interruption'
+        ) {
+          if (growth === 'user-interruption') {
+            act(() =>
+              thread().dispatchEvent(
+                new WheelEvent('wheel', { bubbles: true, deltaY: -200 }),
+              ),
+            );
+            scrollTo(200);
+            expect(readChatViewport(viewKey)?.messageAnchor?.offsetTop).toBe(
+              200,
+            );
+          } else {
+            height = 800;
+            resize();
+            act(() => bottomButton()?.click());
+            expect(readChatViewport(viewKey)?.atBottom).toBe(true);
+          }
+          unmountView();
+          height = 1200;
+          top = 0;
+          mount(view());
+          expect(top).toBe(growth === 'user-interruption' ? 200 : 1000);
+          return;
+        }
+        if (growth === 'cold-interruption') {
+          unmountView();
+          height = 1200;
+          top = 0;
+          mount(view());
+          expect(top).toBe(410);
+        } else if (growth === 'warm-interruption') {
+          act(() => root?.render(view(false)));
+          height = 1200;
+          act(() => root?.render(view(true, 1)));
+          expect(top).toBe(410);
+        }
         if (growth === 'after-frame') act(() => vi.advanceTimersByTime(32));
         height = 1200;
         resize();
-        if (growth === 'before-frame') act(() => vi.advanceTimersByTime(32));
+        if (growth !== 'after-frame') act(() => vi.advanceTimersByTime(32));
         expect(top).toBe(410);
         act(() => vi.advanceTimersByTime(501));
         expect(thread().style.overflowAnchor).toBe('auto');
@@ -1214,6 +1269,39 @@ describe('MessageList bottom navigation', () => {
       wheel(1, 700);
       expect(returnButton()).toBeUndefined();
       wheel(-100, 600);
+      expect(returnButton()).toBeUndefined();
+    });
+
+    it.each(['before-scroll', 'after-scroll'])(
+      'excludes layout compensation when ResizeObserver runs %s',
+      (order) => {
+        mount(view());
+        scrollTo(500);
+        wheel(10, 510);
+        expect(returnButton()).toBeDefined();
+        height += 400;
+        if (order === 'before-scroll') resize();
+        scrollTo(910);
+        if (order === 'after-scroll') resize();
+        expect(returnButton()).toBeDefined();
+        wheel(189, 1099);
+        expect(returnButton()).toBeDefined();
+        wheel(1, 1100);
+        expect(returnButton()).toBeUndefined();
+      },
+    );
+
+    it('does not count viewport resize clamping as downward reading', () => {
+      mount(view());
+      scrollTo(500);
+      wheel(10, 510);
+      viewportHeight = 100;
+      scrollTo(650);
+      resize();
+      expect(returnButton()).toBeDefined();
+      wheel(89, 739);
+      expect(returnButton()).toBeDefined();
+      wheel(1, 740);
       expect(returnButton()).toBeUndefined();
     });
 
