@@ -7,8 +7,17 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { FileThreadStore } from '@agenetes/agenetes';
 
-import { createId } from '@huabu/shared';
+import {
+  chatEnvelopeSchema,
+  createId,
+  interactiveViewAgentEventV1Schema,
+} from '@huabu/shared';
 
+import {
+  rewriteImportContract,
+  rewriteImportedChange,
+  rewriteImportedInputs,
+} from './import-space-contracts.js';
 import { safeJoin, sanitizeId } from '../../utils/fs.js';
 import {
   parseFrontmatter,
@@ -37,7 +46,7 @@ const REFERENCE_TOOLS = new Set([
   'complete_task_run',
   'report_ink_intent',
 ]);
-// Only descend into host-owned containers, never arbitrary application JSON.
+// Legacy records and host extensions only; canonical contracts dispatch before this walker.
 const REFERENCE_CONTAINERS = new Set([
   'nodes',
   'node',
@@ -230,7 +239,11 @@ export async function remapImportedSpace(
           `/canvas/${newCanvas}?node=${identities.get(nodeId) ?? nodeId}`,
       );
   }
-  function rewriteToolOutput(text: string): string {
+  function rewriteToolOutput(
+    text: string,
+    internalHistory = false,
+    trusted = false,
+  ): string {
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
@@ -264,8 +277,8 @@ export async function remapImportedSpace(
           Array.isArray(item.originNodeIds) &&
           item.originNodeIds.every((id: unknown) => typeof id === 'string'),
       );
-    return envelope || snapshots
-      ? JSON.stringify(rewrite(parsed))
+    return envelope || snapshots || trusted
+      ? JSON.stringify(rewrite(parsed, '', '', internalHistory))
       : rewriteLinks(text);
   }
   function rewrite(
@@ -275,10 +288,12 @@ export async function remapImportedSpace(
     internalHistory = false,
   ): unknown {
     if (typeof value === 'string') {
-      if (field === 'rawOutput') return rewriteToolOutput(value);
+      if (field === 'rawOutput')
+        return rewriteToolOutput(value, internalHistory);
       if (THREAD_REFERENCE.test(field)) return threads.get(value) ?? value;
       if (
         NODE_REFERENCE.test(field) ||
+        field === 'edge-ref' ||
         (field === 'id' && /^(nodes|node|edges|edge|refs)$/.test(parent)) ||
         (/^(source|target)$/.test(field) &&
           /^(edges|edge|relevantEdges)$/.test(parent)) ||
@@ -296,6 +311,38 @@ export async function remapImportedSpace(
     if (Array.isArray(value))
       return value.map((item) => rewrite(item, field, parent, internalHistory));
     if (isRecord(value)) {
+      const visit = (item: unknown, context = '') =>
+        rewrite(item, context, '', internalHistory);
+      if (
+        (field === 'request' || field === 'submission') &&
+        (value.type === 'huabu.chat' || value.type === 'huabu.interactive-view')
+      ) {
+        const envelope =
+          value.type === 'huabu.chat'
+            ? chatEnvelopeSchema.parse(value.content)
+            : undefined;
+        if (!envelope) interactiveViewAgentEventV1Schema.parse(value.content);
+        return {
+          ...value,
+          content: visit(
+            value.content,
+            envelope ? 'chat-envelope' : 'view-event',
+          ),
+          ...(value.rendered !== undefined
+            ? {
+                rendered: rewriteImportedInputs(
+                  value.rendered,
+                  envelope?.user.text,
+                  identities,
+                  rewriteLinks,
+                  visit,
+                ),
+              }
+            : {}),
+        };
+      }
+      const contract = rewriteImportContract(value, field, visit);
+      if (contract) return contract;
       if (
         /^(nodes|edges)$/.test(field) &&
         Object.values(value).every(isRecord)
@@ -312,7 +359,7 @@ export async function remapImportedSpace(
           ]),
         );
       }
-      return Object.fromEntries(
+      const mapped = Object.fromEntries(
         Object.entries(value).map(([key, item]) => {
           if (key === 'data' && /^(node|nodes)$/.test(field))
             return [key, rewrite(item, 'node-data', '', internalHistory)];
@@ -338,18 +385,22 @@ export async function remapImportedSpace(
           )
             return [key, rewrite(item, 'edge', '', internalHistory)];
           if (key === 'rawInput' || key === 'rawOutput') {
-            return [
-              key,
-              (key === 'rawOutput' && typeof item === 'string') ||
-              (key === 'rawOutput' &&
-                isRecord(item) &&
-                typeof item.tool === 'string' &&
-                REFERENCE_TOOLS.has(item.tool)) ||
+            const knownTool =
               (internalHistory &&
                 typeof value.title === 'string' &&
                 REFERENCE_TOOLS.has(value.title)) ||
               (typeof value.internalToolName === 'string' &&
-                REFERENCE_TOOLS.has(value.internalToolName))
+                REFERENCE_TOOLS.has(value.internalToolName));
+            if (key === 'rawOutput' && typeof item === 'string') {
+              return [key, rewriteToolOutput(item, internalHistory, knownTool)];
+            }
+            return [
+              key,
+              (key === 'rawOutput' &&
+                isRecord(item) &&
+                typeof item.tool === 'string' &&
+                REFERENCE_TOOLS.has(item.tool)) ||
+              knownTool
                 ? rewrite(item, key, field, internalHistory)
                 : item,
             ];
@@ -370,6 +421,9 @@ export async function remapImportedSpace(
           return [key, item];
         }),
       );
+      return Array.isArray(value.revertDeltas)
+        ? rewriteImportedChange(value, mapped)
+        : mapped;
     }
     return value;
   }
@@ -399,6 +453,10 @@ export async function remapImportedSpace(
               hostContext: {
                 ...(isRecord(spec.hostContext) ? spec.hostContext : {}),
                 canvasId,
+                ...(isRecord(spec.hostContext) &&
+                spec.hostContext.origin !== undefined
+                  ? { origin: rewrite(spec.hostContext.origin, 'origin') }
+                  : {}),
               },
             };
           } else if (isRecord(spec) && workload.kind === 'external') {

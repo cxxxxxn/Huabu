@@ -20,7 +20,11 @@ Space ownership is logical metadata, not directory nesting. Ordinary Space recor
 
 Single-Space bundle import allocates fresh node, edge, and conversation thread IDs before publication. Mappings update topology, Frame parents, edge endpoints, node frontmatter, known structured history references, and SQLite Tier-2 conversation payloads. Source-scoped node deep links and artifact URLs follow the imported Space; prose and labels are not treated as identifiers. Turn ordering, sequence fences, and cursor generations remain unchanged. Invalid/duplicate identities or unreadable structured records fail the staged import instead of publishing a partially remapped Space. Existing Spaces are not rewritten.
 
-History remapping includes ChatEnvelope `focus.selection.selectedIds` in both legacy JSONL and SQLite turns so reference chips and retries use imported node identities. Import also remaps current and pending pointers in `.ext/huabu.recentconversation/target.json`, preserving acceptance markers; unrelated extension documents remain opaque and unchanged.
+History remapping uses explicit per-contract field plans for ChatEnvelope, attachments, Ink resources/grounding, Canvas commands, and recent actions. Envelope and attachment plans cover every shared type field, including fields deliberately kept opaque; command and action plans cover every discriminant, so adding a contract member requires an import decision at compile time. Singular/plural attachment origins, selection references, grounding operands, command geometry/layout/order/edge references, action endpoints/Frames, and excerpt provenance all follow the imported identity map in JSONL and SQLite. Import also remaps current and pending pointers in `.ext/huabu.recentconversation/target.json`, preserving acceptance markers; unrelated extension documents remain opaque and unchanged.
+
+Canonical Huabu `request.rendered` inputs are migrated as captured inputs, not rebuilt from live Space contents. Text, multipart, and command-context inputs retain images and command text; host node/edge/attachment XML, source-scoped URLs, and embedded Ink/Interactive View reference records are rebased. User requests, quoted comments, skill bodies, and application event inputs remain unchanged, including when an adapter flattened text parts. Interactive View event content and its rendered event use the same node identity. This preserves historical screenshots and point-in-time neighbourhoods without a live storage read.
+
+Change-review fingerprints are recalculated from the remapped historical applied snapshot (`DELETE_NODE.node` or `REPLACE_NODE.prev` in the inverse deltas), never from the current node. The original fingerprint must match that original snapshot; inconsistent records fail import. A later human edit therefore remains stale after import, while a source-link rewrite alone does not disable Undo.
 
 Legacy node sidecars without a nonempty string `id` use the filename stem, matching Disk indexing, and receive the mapped ID in frontmatter. Recognized JSON-string tool response envelopes and bare snapshot arrays in `rawOutput` are decoded, remapped, and re-encoded in JSONL and SQLite history; ordinary text and unrecognized JSON receive only the existing source-link rewriting, not identifier remapping.
 
@@ -28,7 +32,7 @@ Thread discovery covers Question nodes, durable workload records, per-thread log
 
 External workload imports retain configuration and visible history but start a fresh native session: copied session IDs and launch snapshots are discarded, and the existing reachback environment builder targets the new Space and thread. Internal workload host context targets the new Space. Supported legacy v3 ACP records pass through the existing migration before this reset; unsupported or malformed legacy records fail import rather than restoring a source session. This does not copy a CLI's private native conversation state.
 
-Identity rewriting descends only through known host containers in node metadata and recognized history documents. Node/edge `id` and edge `source`/`target` fields are mapped only in their structural contexts. Interactive-view schemas and values, provenance `source`, task/change/tool-call IDs, driver settings, unknown nested application objects, and unrelated JSON files remain opaque. Folded tool arguments without a live `internalToolName` marker are interpreted only when the owning workload is internal; external tool arguments are not Canvas commands.
+Canonical contracts dispatch before the bounded legacy-history/host-extension walker. Node/edge `id` and edge `source`/`target` fields are mapped only in their structural contexts. Interactive-view schemas and values, provenance `source`, task/change/tool-call IDs, driver settings, unknown nested application objects, and unrelated JSON files remain opaque. Folded tool arguments and JSON-string results without a live `internalToolName` marker are interpreted as host records only when the owning workload is internal and the tool is recognized; external tool arguments are not Canvas commands.
 
 ```
 <HUABU_DATA_DIR>/
@@ -311,12 +315,14 @@ An explicit title rename is resolved before the protected node → record → de
 
 ## Code entry points
 
-| File                                                                                          | Responsibility                                               |
-| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| [storage/index.ts](../../apps/server/src/modules/storage/index.ts)                            | Portable Space facade and storage composition exports        |
-| [structured.ts](../../apps/server/src/modules/storage/ports/structured.ts)                    | Space, node, and ordered-write ports                         |
-| [write-coordinator.ts](../../apps/server/src/modules/canvas/write-coordinator.ts)             | Per-Canvas non-reentrant application mutex                   |
-| [canvas-executor.ts](../../apps/server/src/modules/canvas/canvas-executor.ts)                 | Editable command/inverse composition and ordered persistence |
-| [agent-node-binding.ts](../../apps/server/src/modules/agent/agent-node-binding.ts)            | Canonical record confirmation before Bound acknowledgement   |
-| [conversation-stores.ts](../../apps/server/src/modules/agent/agenetes/conversation-stores.ts) | Agenetes persistence dispatch per namespace and profile      |
-| [postgres-stores.ts](../../apps/server/src/modules/agent/agenetes/postgres-stores.ts)         | Postgres thread, event, and turn tables for conversations    |
+| File                                                                                          | Responsibility                                                                  |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| [storage/index.ts](../../apps/server/src/modules/storage/index.ts)                            | Portable Space facade and storage composition exports                           |
+| [structured.ts](../../apps/server/src/modules/storage/ports/structured.ts)                    | Space, node, and ordered-write ports                                            |
+| [write-coordinator.ts](../../apps/server/src/modules/canvas/write-coordinator.ts)             | Per-Canvas non-reentrant application mutex                                      |
+| [canvas-executor.ts](../../apps/server/src/modules/canvas/canvas-executor.ts)                 | Editable command/inverse composition and ordered persistence                    |
+| [import-space-identity.ts](../../apps/server/src/modules/canvas/import-space-identity.ts)     | Staged bundle identity discovery and storage migration                          |
+| [import-space-contracts.ts](../../apps/server/src/modules/canvas/import-space-contracts.ts)   | Contract-specific reference plans, captured inputs, and historical fingerprints |
+| [agent-node-binding.ts](../../apps/server/src/modules/agent/agent-node-binding.ts)            | Canonical record confirmation before Bound acknowledgement                      |
+| [conversation-stores.ts](../../apps/server/src/modules/agent/agenetes/conversation-stores.ts) | Agenetes persistence dispatch per namespace and profile                         |
+| [postgres-stores.ts](../../apps/server/src/modules/agent/agenetes/postgres-stores.ts)         | Postgres thread, event, and turn tables for conversations                       |
