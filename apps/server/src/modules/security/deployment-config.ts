@@ -73,14 +73,17 @@ export function resolveDeploymentConfig(
     );
   }
 
-  // Bubble's `default` driver trusts the bearer text as the principal id.
+  // Bubble's `default` driver trusts the bearer text as the principal id. A
+  // loopback listener behind a proxy is still reachable from its public
+  // origin, so either one beyond loopback rules it out.
   if (
-    bindScope === 'network' &&
+    (bindScope === 'network' ||
+      (publicOrigin && !isLoopbackHost(new URL(publicOrigin).hostname))) &&
     identity.provider === 'bubble' &&
     identity.authenticators.some((entry) => entry.driver === 'default')
   ) {
     throw new Error(
-      'The Bubble "default" authenticator verifies nothing and is not allowed when HUABU_BIND_HOST is not loopback',
+      'The Bubble "default" authenticator verifies nothing and is not allowed when HUABU_BIND_HOST or HUABU_PUBLIC_ORIGIN is not loopback',
     );
   }
 

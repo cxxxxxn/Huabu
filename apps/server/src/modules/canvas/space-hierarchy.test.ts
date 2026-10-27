@@ -898,6 +898,17 @@ describe('Space ownership', () => {
       expect((await detach()).statusCode).toBe(200);
       // Both claims ran while the Space was still under its parent.
       expect(parents).toEqual(['root', 'root']);
+
+      // A stale request, and one detaching an already-root Space, claim
+      // nothing.
+      expect((await detach()).statusCode).toBe(409);
+      const noOp = await app.inject({
+        method: 'PATCH',
+        url: `/${child.canvasId}/parent`,
+        payload: { parentSpaceId: null, expectedParentSpaceId: null },
+      });
+      expect(noOp.statusCode).toBe(200);
+      expect(parents).toHaveLength(2);
     } finally {
       await app.close();
     }

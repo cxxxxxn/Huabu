@@ -99,6 +99,7 @@ import {
 import {
   space,
   createSpace,
+  deleteSpace,
   isWorldCanvasId,
   stageSpaceImport,
   storageServes,
@@ -150,7 +151,7 @@ import type {
   RecentCanvasConversationParams,
   RecentCanvasConversationResponse,
 } from '@huabu/shared';
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 
 /**
  * Loose node type for processing unknown/untyped node structures.
@@ -603,6 +604,22 @@ async function hydrateNodeContent(
   });
 }
 
+/**
+ * Make the caller owner of a Space it has just created, or remove the Space:
+ * one nobody can reach must not be left behind, nor duplicated by a retry.
+ */
+async function claimOrDiscard(
+  request: FastifyRequest,
+  canvasId: string,
+): Promise<void> {
+  try {
+    await claimSpace(request, canvasId);
+  } catch (error) {
+    await deleteSpace(canvasId).catch(() => {});
+    throw error;
+  }
+}
+
 const canvasRoutes: FastifyPluginAsync = async (fastify) => {
   registerSpaceHierarchyRoutes(fastify);
   registerSpaceCardRoutes(fastify);
@@ -644,12 +661,20 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get<{ Reply: ApiResult<ListCanvasesResponse> }>(
     '/',
     async function (request, reply) {
-      const summaries = [
-        ...(await readableSpaces(
-          request,
-          await getStructuredStore().spaces().list(),
-        )),
-      ].sort((a, b) => b.updatedAt - a.updatedAt);
+      const readable = await readableSpaces(
+        request,
+        await getStructuredStore().spaces().list(),
+      );
+      // A readable Space under a parent the caller cannot see is listed as
+      // a root of its own; the stored hierarchy is unchanged.
+      const listed = new Set(readable.map((item) => item.canvasId));
+      const summaries = readable
+        .map((item) =>
+          item.parentSpaceId && !listed.has(item.parentSpaceId)
+            ? { ...item, parentSpaceId: null }
+            : item,
+        )
+        .sort((a, b) => b.updatedAt - a.updatedAt);
 
       return reply.send({ canvases: summaries });
     },
@@ -676,7 +701,7 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     const canvas = created.record;
-    await claimSpace(request, canvas.canvasId);
+    await claimOrDiscard(request, canvas.canvasId);
     return reply
       .code(201)
       .send({ canvasId: canvas.canvasId, title: canvas.title });
@@ -2223,7 +2248,7 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
         });
         stagingCleanedUp = true;
 
-        await claimSpace(request, targetCanvasId);
+        await claimOrDiscard(request, targetCanvasId);
         const response: ImportCanvasResponse = {
           canvasId: targetCanvasId,
         };

@@ -84,11 +84,12 @@ export function registerSpaceHierarchyRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ message: 'Invalid Space parent request' });
     return respond(reply, async () => {
       // A root Space inherits from no parent, so whoever detaches it keeps
-      // it. The claim comes first: until it holds, the Space stays under the
-      // parent the caller reaches it through.
-      if (body.data.parentSpaceId === null)
-        await claimSpace(request, params.data.canvasId);
-      return setSpaceParent(params.data.canvasId, body.data);
+      // it. The claim is made only for a valid, real detachment and before
+      // it commits: until it holds, the Space stays under the parent the
+      // caller reaches it through.
+      return setSpaceParent(params.data.canvasId, body.data, undefined, () =>
+        claimSpace(request, params.data.canvasId),
+      );
     });
   });
   fastify.get('/:canvasId/deletion-preview', async (request, reply) => {

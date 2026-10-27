@@ -141,5 +141,14 @@ describe('resolveDeploymentConfig', () => {
         HUABU_BIND_HOST: '127.0.0.1',
       }),
     ).toMatchObject({ bindScope: 'loopback' });
+    // Behind a TLS-terminating proxy a loopback listener is still public.
+    expect(() =>
+      resolveDeploymentConfig({
+        ...bubble,
+        ...unverified,
+        HUABU_BIND_HOST: '127.0.0.1',
+        HUABU_PUBLIC_ORIGIN: 'https://huabu.example.com',
+      }),
+    ).toThrow(/default/);
   });
 });

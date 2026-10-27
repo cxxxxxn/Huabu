@@ -606,7 +606,8 @@ describe('workspaceStore registry persistence', () => {
       configured: true,
       workspaceId: FIRST_ID,
       name: 'First',
-      capabilities: { canChangeWorkspace: false, nativePicker: false },
+      // A free-mode disk Server reports what an owner could do.
+      capabilities: { canChangeWorkspace: true, nativePicker: true },
     };
     apiMocks.listWorkspaces.mockRejectedValueOnce(
       new ApiError(403, {}, 'Forbidden'),
@@ -620,6 +621,7 @@ describe('workspaceStore registry persistence', () => {
       isReady: true,
       isSyncing: false,
       error: null,
+      capabilities: { canChangeWorkspace: false, nativePicker: false },
     });
   });
 

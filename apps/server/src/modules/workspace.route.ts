@@ -10,7 +10,7 @@ import { validatePathSchema, workspacePathSchema } from '@huabu/shared';
 
 import { resetPreprocessDispatcher } from './preprocessing/index.js';
 import { isOwnerRequest } from './security/owner.js';
-import { isRestrictedRequest } from './security/space-access.js';
+import { canReadSpace, isRestrictedRequest } from './security/space-access.js';
 import {
   getStructuredStore,
   materializesWorkspaces,
@@ -207,9 +207,17 @@ const workspaceRoutes: FastifyPluginAsync = async (app) => {
   // GET /api/workspace — read-only state + capabilities
   // Always available (clients need to know the mode).
   // ────────────────────────────────────────────────────────────────
-  app.get<{ Reply: ApiResult<WorkspaceInfo> }>('/', async () =>
-    buildWorkspaceState(),
-  );
+  app.get<{ Reply: ApiResult<WorkspaceInfo> }>('/', async (request) => {
+    const state = await buildWorkspaceState();
+    // World is an ordinary Space here, advertised only to who may read it.
+    if (
+      state.worldCanvasId &&
+      isRestrictedRequest(request) &&
+      !(await canReadSpace(request, state.worldCanvasId))
+    )
+      return { ...state, worldCanvasId: null };
+    return state;
+  });
 
   // ────────────────────────────────────────────────────────────
   // The endpoints below mutate the active workspace and only exist

@@ -394,7 +394,17 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
         // Only an owner reads the registry. Anyone else uses the Workspace
         // the Server already has active, whose row may carry no path.
         if (info.configured && err instanceof ApiError && err.status === 403) {
-          set({ isSyncing: false });
+          // Nor may they switch it, whatever the Server's mode allows.
+          set({
+            isSyncing: false,
+            ...(info.capabilities && {
+              capabilities: {
+                ...info.capabilities,
+                canChangeWorkspace: false,
+                nativePicker: false,
+              },
+            }),
+          });
           emitWorkspaceChanged();
           return true;
         }
