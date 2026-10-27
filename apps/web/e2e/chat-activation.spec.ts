@@ -207,6 +207,50 @@ for (const theme of ['light', 'dark']) {
   });
 }
 
+for (const width of [360, 800]) {
+  test(`history pagination remains clickable during reading recovery (${width}px)`, async ({
+    page,
+  }, testInfo) => {
+    await openFixture(page);
+    await panel(page).evaluate((element, panelWidth) => {
+      element.style.width = `${panelWidth}px`;
+      element.style.alignSelf = 'center';
+    }, width);
+    await expand(page);
+    await scrollHistory(page, false);
+    await activate(page, 'b');
+    await page
+      .getByRole('button', { name: 'Add background turn to A' })
+      .click();
+    await activate(page, 'a');
+    await scrollHistory(page, false);
+    const recovery = panel(page).getByRole('button', {
+      name: 'Back to last reading position',
+      exact: true,
+    });
+    const pagination = panel(page).getByRole('button', {
+      name: /Show \d+ earlier turns/i,
+    });
+    await expect(recovery).toBeVisible();
+    const recoveryBox = await recovery.boundingBox();
+    const paginationBox = await pagination.boundingBox();
+    if (!recoveryBox || !paginationBox)
+      throw new Error('Missing navigation geometry');
+    expect(recoveryBox.y).toBeGreaterThan(
+      paginationBox.y + paginationBox.height,
+    );
+    await page.screenshot({
+      path: testInfo.outputPath('recovery-pagination.png'),
+    });
+    await pagination.click();
+    await expectTurns(page, 'a', 8, 13);
+    await expect(recovery).toBeVisible();
+    await recovery.click();
+    await expect(recovery).toBeHidden();
+    await expectTurns(page, 'a', 7, 13);
+  });
+}
+
 for (const action of ['scroll', 'bottom', 'submit']) {
   test(`reading return retires when continuing with ${action}`, async ({
     page,

@@ -633,6 +633,62 @@ describe('MessageList bottom navigation', () => {
     },
   );
 
+  it.each(['before-frame', 'after-frame'])(
+    'keeps a clamped non-bottom restoration paused when content grows %s',
+    (growth) => {
+      vi.useFakeTimers();
+      const viewKey = `clamped-restore-${growth}`;
+      vi.spyOn(
+        HTMLElement.prototype,
+        'getBoundingClientRect',
+      ).mockImplementation(function (this: HTMLElement) {
+        const id = this.dataset.chatMessageId;
+        return new DOMRect(0, id ? (id === 'u4' ? 400 : 0) - top : 0, 300, 200);
+      });
+      const view = () => (
+        <MessageList
+          messages={history(10)}
+          recentTurnCount={3}
+          isLoading={false}
+          viewKey={viewKey}
+        />
+      );
+      try {
+        mount(view());
+        act(() => earlier()?.click());
+        scrollTo(410);
+        act(() => root?.unmount());
+        root = undefined;
+        container?.remove();
+        container = undefined;
+        height = 600;
+        top = 0;
+        mount(view());
+        expect(top).toBe(400);
+        if (growth === 'after-frame') act(() => vi.advanceTimersByTime(32));
+        height = 1200;
+        resize();
+        if (growth === 'before-frame') act(() => vi.advanceTimersByTime(32));
+        expect(top).toBe(410);
+        act(() => vi.advanceTimersByTime(501));
+        height = 1400;
+        resize();
+        expect(top).toBe(410);
+        expect(bottomButton()?.textContent).toBe('Back to bottom');
+        act(() => bottomButton()?.click());
+        expect(top).toBe(1200);
+        height = 1600;
+        resize();
+        expect(top).toBe(1400);
+      } finally {
+        act(() => root?.unmount());
+        root = undefined;
+        forgetMessageListScrollPosition(viewKey);
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each(['appended', 'streamed', 'prepended', 'explicit'])(
     'handles %s content when reactivating a saved viewport',
     (change) => {
@@ -1023,7 +1079,7 @@ describe('MessageList bottom navigation', () => {
       mount(view());
       expect(returnButton()).toBeDefined();
       expect(thread().contains(returnButton() ?? null)).toBe(false);
-      expect(returnButton()?.className).toContain('absolute top-2');
+      expect(returnButton()?.className).toContain('absolute top-12');
       expect(thread().contains(earlier() ?? null)).toBe(true);
 
       scrollTo(350);

@@ -325,7 +325,9 @@ export const MessageList = memo(function MessageList({
           savedViewport.messageAnchor.offsetTop,
       };
     }
-    const restoredAtBottom = restored && isMessageListNearBottom(container);
+    const restoredAtBottom =
+      restored &&
+      (savedViewport?.atBottom ?? isMessageListNearBottom(container));
     const position = restored
       ? restoredAtBottom
         ? 'bottom'
@@ -361,7 +363,8 @@ export const MessageList = memo(function MessageList({
       }
       if (savedViewport?.atBottom) positionMessageListOnOpen(current, 'bottom');
       else restoreMessageListScrollPosition(current, viewKey, savedViewport);
-      isAtBottomRef.current = isMessageListNearBottom(current);
+      isAtBottomRef.current =
+        savedViewport?.atBottom ?? isMessageListNearBottom(current);
       updateBottomAffordance();
     });
     return () => cancelAnimationFrame(frame);
@@ -989,7 +992,7 @@ export const MessageList = memo(function MessageList({
         returnError ? (
           <div
             role="status"
-            className="border-edge-default bg-surface text-fg-muted absolute top-2 left-1/2 z-10 w-max max-w-[calc(100%-1.5rem)] -translate-x-1/2 rounded-md border px-3 py-2 text-center text-xs shadow-lg"
+            className="border-edge-default bg-surface text-fg-muted absolute top-12 left-1/2 z-10 w-max max-w-[calc(100%-1.5rem)] -translate-x-1/2 rounded-md border px-3 py-2 text-center text-xs shadow-lg"
             data-search-exclude
           >
             {t('chat.readingPositionUnavailable')}
@@ -999,7 +1002,7 @@ export const MessageList = memo(function MessageList({
             variant="outline"
             shape="pill"
             tone="neutral"
-            className="absolute top-2 left-1/2 z-10 w-max max-w-[calc(100%-1.5rem)] -translate-x-1/2 shadow-lg"
+            className="absolute top-12 left-1/2 z-10 w-max max-w-[calc(100%-1.5rem)] -translate-x-1/2 shadow-lg"
             data-search-exclude
             onClick={(event) => {
               const bookmark = returnState.bookmark;
