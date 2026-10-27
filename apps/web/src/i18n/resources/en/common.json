@@ -28,6 +28,11 @@
   "app": {
     "loadingWorkspace": "Loading your Home folder…",
     "savingCanvas": "Saving Space…",
+    "unsavedChangesTitle": "Space could not be saved",
+    "unsavedChangesDescription": "Stay to keep your edits and retry saving. Leaving discards changes that have not been saved; changes already saved are kept.",
+    "stayInSpace": "Stay in this Space",
+    "discardAndLeave": "Discard and leave",
+    "discardFailed": "Could not finish discarding changes. Stay here or try again.",
     "logoAlt": "Logo"
   },
   "actions": {

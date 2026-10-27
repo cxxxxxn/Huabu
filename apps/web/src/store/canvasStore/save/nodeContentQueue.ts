@@ -31,7 +31,7 @@ import {
   NodeDuplicateFilesError,
   putNodeContent,
 } from '@/api/canvas';
-import { toast } from '@/components/Common/Toast';
+import { dismissToast, toast } from '@/components/Common/Toast';
 import { i18n } from '@/i18n';
 import { copyToClipboard } from '@/utils/io/clipboard';
 
@@ -74,6 +74,7 @@ function revOfNode(node: Node): string {
  */
 export type NodeContentQueueState = {
   canvasId: string;
+  isLoading: boolean;
   nodes: readonly Node[];
   _setStateNoAutosave: (partial: { nodes: Node[] }) => void;
   patchNodeSilent: (nodeId: string, patch: Record<string, unknown>) => void;
@@ -148,6 +149,9 @@ export type NodeContentQueue = {
    */
   flushAll(): Promise<void>;
   flushAllForSubmission(canvasId: string): Promise<void>;
+  cancelPending(): void;
+  /** Forget explicitly discarded edits after issued writes have settled. */
+  discardCanvas(canvasId: string): void;
 
   /**
    * `beforeunload` best-effort flush of pending content saves via
@@ -222,6 +226,12 @@ export function createNodeContentQueue(opts: {
   const restoredContent = new Map<string, string>();
   const generations = new Map<string, object>();
   const failures = new Map<string, { canvasId: string; error: unknown }>();
+  const failureToasts = new Map<string, string>();
+  function dismissFailureToast(nodeId: string): void {
+    const id = failureToasts.get(nodeId);
+    if (id) dismissToast(id);
+    failureToasts.delete(nodeId);
+  }
   const pendingFields = new Map<string, Map<string, object>>();
   const suppressNextNewNodeSave = new Set<string>();
   /**
@@ -440,6 +450,7 @@ export function createNodeContentQueue(opts: {
       if (livePending?.size === 0) pendingFields.delete(nodeId);
       const completedRestore = restoredContent.delete(nodeId);
       failures.delete(nodeId);
+      dismissFailureToast(nodeId);
       contentConflictToasted.delete(nodeId);
       saveErrorToasted.delete(nodeId);
       // A write that succeeded means any prior duplicate has been
@@ -523,22 +534,27 @@ export function createNodeContentQueue(opts: {
       node && typeof node.data?.['label'] === 'string'
         ? (node.data['label'] as string)
         : i18n.t('node.untitled');
-    toast(i18n.t('node.contentConflict', { label }), {
+    const generation = generations.get(nodeId);
+    dismissFailureToast(nodeId);
+    const toastId = toast(i18n.t('node.contentConflict', { label }), {
       tone: 'danger',
       duration: 0,
       secondaryAction: {
         label: i18n.t('node.contentConflictKeepMine'),
         onClick: () => {
+          if (generations.get(nodeId) !== generation) return;
           void resolveKeepMine(nodeId);
         },
       },
       action: {
         label: i18n.t('node.contentConflictLoadLatest'),
         onClick: () => {
+          if (generations.get(nodeId) !== generation) return;
           void resolveLoadLatest(nodeId);
         },
       },
     });
+    failureToasts.set(nodeId, toastId);
     console.warn('[node-content] write refused (stale content):', nodeId);
   }
 
@@ -716,7 +732,11 @@ export function createNodeContentQueue(opts: {
     });
     if (duplicateToasted.has(nodeId)) return;
     duplicateToasted.add(nodeId);
-    toast(err.message, { tone: 'danger', duration: 0, dismissible: true });
+    dismissFailureToast(nodeId);
+    failureToasts.set(
+      nodeId,
+      toast(err.message, { tone: 'danger', duration: 0, dismissible: true }),
+    );
     console.error('Node write refused — duplicate files on disk:', nodeId, err);
   }
 
@@ -825,13 +845,16 @@ export function createNodeContentQueue(opts: {
   ): void {
     if (source === 'auto' && saveErrorToasted.has(nodeId)) return;
     saveErrorToasted.add(nodeId);
-    toast(message, {
+    const generation = generations.get(nodeId);
+    dismissFailureToast(nodeId);
+    const toastId = toast(message, {
       tone: 'danger',
       duration: 0,
       dismissible: true,
       action: {
         label: i18n.t('messages.retry'),
         onClick: () => {
+          if (generations.get(nodeId) !== generation) return;
           // Allow a later failure to re-alert, then re-attempt the write.
           saveErrorToasted.delete(nodeId);
           if (restores.get(nodeId)?.canvasId === canvasId) {
@@ -844,6 +867,7 @@ export function createNodeContentQueue(opts: {
         },
       },
     });
+    failureToasts.set(nodeId, toastId);
   }
 
   /**
@@ -1045,7 +1069,7 @@ export function createNodeContentQueue(opts: {
       }
       const state = opts.getState();
       const nodeIds =
-        state.canvasId === canvasId
+        state.canvasId === canvasId && !state.isLoading
           ? new Set(state.nodes.map((node) => node.id))
           : undefined;
       const errors = Array.from(failures.entries())
@@ -1067,6 +1091,24 @@ export function createNodeContentQueue(opts: {
       }
     },
 
+    discardCanvas(canvasId) {
+      const state = opts.getState();
+      const ids = new Set(
+        state.canvasId === canvasId ? state.nodes.map((node) => node.id) : [],
+      );
+      for (const [id, failure] of failures) {
+        if (failure.canvasId === canvasId) ids.add(id);
+      }
+      for (const [id, owner] of restoredContent) {
+        if (owner === canvasId) ids.add(id);
+      }
+      for (const id of ids) this.forgetNode(id);
+    },
+
+    cancelPending() {
+      debouncer.cancelAll();
+    },
+
     flushAllKeepalive() {
       const canvasId = opts.getState().canvasId;
       const pendingIds = debouncer.cancelAll();
@@ -1084,6 +1126,7 @@ export function createNodeContentQueue(opts: {
     },
 
     forgetNode(nodeId) {
+      dismissFailureToast(nodeId);
       generations.delete(nodeId);
       restores.delete(nodeId);
       restoredContent.delete(nodeId);
@@ -1107,6 +1150,7 @@ export function createNodeContentQueue(opts: {
         baselineRev.set(node.id, revOfNode(node));
         baselineGeneration.set(node.id, {});
         failures.delete(node.id);
+        dismissFailureToast(node.id);
         // A fresh authoritative baseline means any prior conflict for this
         // node is resolved — drop the toast guard and unfreeze it so a
         // later divergence alerts again and writes resume.

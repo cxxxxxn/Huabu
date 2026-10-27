@@ -27,7 +27,9 @@ import { toast } from '@/components/Common/Toast';
 
 import { canvasHistoryManager } from './canvasHistoryManager';
 import useCanvasStore, {
+  discardPendingSaves,
   drainPendingSaves,
+  saveCanvasForSubmission,
   settleNodePreprocess,
 } from './canvasStore';
 import { CanvasConflictError } from '../api/canvas';
@@ -275,6 +277,7 @@ describe('undo/redo persistence ordering', () => {
   it.each([false, true])(
     'preserves preprocessing across an unrelated history change (issued=%s)',
     async (issued) => {
+      await state().loadCanvas('restore-canvas');
       const other: Node = {
         ...note,
         id: 'node-other',
@@ -760,5 +763,129 @@ describe('undo/redo persistence ordering', () => {
     expect(api.putNodeContent.mock.calls[0][2].expectRev).toBe(
       nodeRevisionOf({ content: note.data.content as string }),
     );
+  });
+
+  it('blocks switching after ordinary content failure and preserves edits for Retry', async () => {
+    await state().loadCanvas('restore-canvas');
+    api.putNodeContent.mockRejectedValueOnce(new Error('disk unavailable'));
+    useCanvasStore.setState({
+      nodes: [
+        {
+          ...state().nodes[0],
+          data: { ...state().nodes[0].data, content: 'Unsaved' },
+        },
+      ],
+    });
+    await expect(state().switchCanvas('other')).rejects.toThrow(
+      'Content saves failed',
+    );
+    expect(state().canvasId).toBe('restore-canvas');
+    expect(state().isLoading).toBe(false);
+    expect(state().nodes[0].data.content).toBe('Unsaved');
+    expect(state().pendingContentNodeIds()).toContain(note.id);
+    expect(api.getCanvas).toHaveBeenCalledTimes(1);
+    vi.mocked(toast).mock.calls.at(-1)?.[1]?.action?.onClick();
+    await tick();
+    await state().switchCanvas('other');
+    expect(body).toBe('Unsaved');
+    expect(state().canvasId).toBe('other');
+  });
+
+  it('explicit discard clears failed and pending edits without another write or fetch', async () => {
+    await state().loadCanvas('restore-canvas');
+    api.putNodeContent.mockRejectedValueOnce(new Error('disk unavailable'));
+    useCanvasStore.setState({
+      nodes: [
+        {
+          ...state().nodes[0],
+          data: { ...state().nodes[0].data, content: 'Unsaved' },
+        },
+      ],
+    });
+    await expect(drainPendingSaves()).rejects.toThrow('Content saves failed');
+    useCanvasStore.setState({
+      nodes: [
+        {
+          ...state().nodes[0],
+          position: { x: 100, y: 100 },
+          data: { ...state().nodes[0].data, content: 'Later edit' },
+        },
+      ],
+    });
+    const retry = vi.mocked(toast).mock.calls.at(-1)?.[1]?.action?.onClick;
+    await discardPendingSaves('restore-canvas');
+    retry?.();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(api.putNodeContent).toHaveBeenCalledTimes(1);
+    expect(api.putCanvas).not.toHaveBeenCalled();
+    expect(api.getCanvas).toHaveBeenCalledTimes(1);
+    expect(state().canvasId).toBe('');
+    expect(state().nodes).toEqual([]);
+    expect(state().pendingContentNodeIds()).toEqual([]);
+    await expect(
+      saveCanvasForSubmission('restore-canvas'),
+    ).resolves.toBeUndefined();
+    await state().loadCanvas('restore-canvas');
+    expect(state().nodes[0].data.content).toBe(note.data.content);
+    expect(state().canUndo).toBe(false);
+  });
+
+  it('blocks an ordinary structure failure and clears it only on explicit discard', async () => {
+    await state().loadCanvas('restore-canvas');
+    api.putCanvas.mockRejectedValueOnce(new Error('structure unavailable'));
+    useCanvasStore.setState({
+      nodes: [{ ...state().nodes[0], position: { x: 100, y: 100 } }],
+    });
+    await expect(state().switchCanvas('other')).rejects.toThrow(
+      'structure unavailable',
+    );
+    expect(state().canvasId).toBe('restore-canvas');
+    expect(state().nodes[0].position).toEqual({ x: 100, y: 100 });
+    await expect(saveCanvasForSubmission('restore-canvas')).rejects.toThrow(
+      'Cannot submit',
+    );
+    await discardPendingSaves('restore-canvas');
+    await expect(
+      saveCanvasForSubmission('restore-canvas'),
+    ).resolves.toBeUndefined();
+    await state().switchCanvas('other');
+    expect(state().canvasId).toBe('other');
+  });
+
+  it('explicit discard releases a failed resurrection without resurrecting its body', async () => {
+    await deleted();
+    state().undo();
+    api.putCanvas.mockRejectedValueOnce(new Error('structure unavailable'));
+    await expect(drainPendingSaves()).rejects.toThrow('Restored node content');
+    await discardPendingSaves('restore-canvas');
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(api.putNodeContent).not.toHaveBeenCalled();
+    expect(body).toBeUndefined();
+    expect(state().pendingContentNodeIds()).toEqual([]);
+    await expect(state().switchCanvas('other')).resolves.toBeUndefined();
+  });
+
+  it('waits for an issued save before discarding and cannot patch a later Space', async () => {
+    await state().loadCanvas('restore-canvas');
+    useCanvasStore.setState({
+      nodes: [
+        {
+          ...state().nodes[0],
+          data: { ...state().nodes[0].data, content: 'Issued edit' },
+        },
+      ],
+    });
+    const gate = (contentGate = deferred());
+    const draining = drainPendingSaves();
+    await tick();
+    const discarding = discardPendingSaves('restore-canvas');
+    await tick();
+    expect(state().canvasId).toBe('restore-canvas');
+    gate.resolve();
+    await Promise.all([draining, discarding]);
+    await state().switchCanvas('other');
+    expect(body).toBe('Issued edit');
+    expect(state().nodes).toEqual([]);
+    expect(state().pendingContentNodeIds()).toEqual([]);
   });
 });

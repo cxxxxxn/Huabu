@@ -1030,34 +1030,9 @@ async function waitForSidecarWrites(): Promise<void> {
   ]);
 }
 
-/**
- * Promote every pending canvas-level structure save AND every pending
- * debounced per-node content save into an immediate flush, then
- * resolve once both have settled.
- *
- * Called from `CanvasPage` via `useBlocker` so that navigating away
- * from a canvas (back to list, into settings, into docs, into another
- * canvas) holds the navigation until every queued PUT has been sent
- * and its response received. Without this, trailing edits would fire
- * later under a stale captured `canvasId` — by which time the user
- * has moved on and there's nothing left in the store to revert if the
- * PUT fails. Ordinary failures retain the existing non-blocking behavior.
- * A failed resurrection rejects: the current Canvas owns the only restored
- * body, so navigation must retain it until Retry or explicit deletion.
- *
- * Order mirrors {@link switchCanvas}: structure first (canvas-level
- * version PUT), then per-node content. Resurrection makes this ordering a
- * dependency: topology must admit the restored sidecar before its PUT.
- * Keep the captured scope if navigation finishes during an await; outgoing
- * saves were drained by navigation, and the new Space belongs to another turn.
- */
-export async function drainPendingSaves(
-  canvasId = useCanvasStore.getState().canvasId,
-): Promise<void> {
-  const isActive = () => useCanvasStore.getState().canvasId === canvasId;
-  if (isActive()) await structureScheduler.flushAsync();
+async function waitForStructureSave(canvasId: string): Promise<void> {
   while (
-    isActive() &&
+    useCanvasStore.getState().canvasId === canvasId &&
     (useCanvasStore.getState().isSaving ||
       useCanvasStore.getState().pendingSave)
   ) {
@@ -1073,12 +1048,99 @@ export async function drainPendingSaves(
       });
     });
   }
-  if (isActive()) await nodeContentQueue.flushAll();
-  await canvasHistoryManager.waitForDeletes(canvasId);
-  if (isActive() && nodeContentQueue.hasPendingRestoredContent()) {
-    throw new Error(
-      'Restored node content is waiting for a successful structure save. Retry before leaving this Canvas.',
-    );
+}
+
+/**
+ * Promote every pending canvas-level structure save AND every pending
+ * debounced per-node content save into an immediate flush, then
+ * resolve once both have settled.
+ *
+ * Called from the router-root `SpaceNavigationGuard` so navigating away
+ * from a canvas (back to list, into settings, into docs, into another
+ * canvas) holds the navigation until every queued PUT has been sent
+ * and its response received. Without this, trailing edits would fire
+ * later under a stale captured `canvasId` — by which time the user
+ * has moved on and there's nothing left in the store to revert if the
+ * PUT fails. Any unresolved structure or content failure rejects: navigation
+ * must retain local edits until saved or explicitly discarded.
+ *
+ * Order mirrors {@link switchCanvas}: structure first (canvas-level
+ * version PUT), then per-node content. Resurrection makes this ordering a
+ * dependency: topology must admit the restored sidecar before its PUT.
+ * Keep the captured scope if navigation finishes during an await; outgoing
+ * saves were drained by navigation, and the new Space belongs to another turn.
+ */
+export async function drainPendingSaves(
+  canvasId = useCanvasStore.getState().canvasId,
+): Promise<void> {
+  const isActive = () => useCanvasStore.getState().canvasId === canvasId;
+  do {
+    if (isActive()) await structureScheduler.flushAsync();
+    await waitForStructureSave(canvasId);
+    if (isActive()) await nodeContentQueue.flushAll();
+    await canvasHistoryManager.waitForDeletes(canvasId);
+    if (isActive() && nodeContentQueue.hasPendingRestoredContent()) {
+      throw new Error(
+        'Restored node content is waiting for a successful structure save. Retry before leaving this Canvas.',
+      );
+    }
+    const state = useCanvasStore.getState();
+    if (
+      (state.canvasId === canvasId && state.versionConflict) ||
+      structureSaveErrors.has(canvasId)
+    ) {
+      throw (
+        structureSaveErrors.get(canvasId) ??
+        new Error('Canvas version conflict')
+      );
+    }
+    await nodeContentQueue.flushAllForSubmission(canvasId);
+  } while (isActive() && structureScheduler.hasPending());
+}
+
+/** Explicit navigation-only discard; already-issued writes cannot be undone. */
+export async function discardPendingSaves(canvasId: string): Promise<void> {
+  const state = useCanvasStore.getState();
+  if (state.canvasId !== canvasId)
+    throw new Error('Cannot discard edits from a different Space');
+  state._setStateNoAutosave({ isLoading: true, pendingSave: false });
+  structureScheduler.cancelPending();
+  preprocessQueue.cancelAll();
+  nodeContentQueue.cancelPending();
+  try {
+    // Keep failure records until every admitted writer has settled.
+    await waitForStructureSave(canvasId);
+    await waitForSidecarWrites();
+    await canvasHistoryManager.waitForDeletes(canvasId);
+    if (useCanvasStore.getState().canvasId !== canvasId)
+      throw new Error('Space changed while discarding edits');
+    structureScheduler.cancelPending();
+    preprocessQueue.cancelAll();
+    nodeContentQueue.discardCanvas(canvasId);
+    structureSaveErrors.delete(canvasId);
+    canvasHistoryManager.clearCanvas(canvasId);
+    dismissVersionConflictToast();
+    useCanvasStore.getState()._setStateNoAutosave({
+      canvasId: '',
+      canvasTitle: '',
+      nodes: [],
+      edges: [],
+      version: 0,
+      viewport: null,
+      isLoading: false,
+      isSaving: false,
+      pendingSave: false,
+      versionConflict: false,
+      versionConflictServerVersion: null,
+      canUndo: false,
+      canRedo: false,
+      ingestionByNodeId: {},
+      pendingForkThreadIds: {},
+    });
+  } catch (error) {
+    if (useCanvasStore.getState().canvasId === canvasId)
+      useCanvasStore.getState()._setStateNoAutosave({ isLoading: false });
+    throw error;
   }
 }
 
@@ -1096,23 +1158,7 @@ export class CanvasSubmissionSaveError extends Error {
 
 export async function saveCanvasForSubmission(canvasId: string): Promise<void> {
   try {
-    do {
-      await drainPendingSaves(canvasId);
-    } while (
-      useCanvasStore.getState().canvasId === canvasId &&
-      structureScheduler.hasPending()
-    );
-    const state = useCanvasStore.getState();
-    if (
-      (state.canvasId === canvasId && state.versionConflict) ||
-      structureSaveErrors.has(canvasId)
-    ) {
-      throw (
-        structureSaveErrors.get(canvasId) ??
-        new Error('Canvas version conflict')
-      );
-    }
-    await nodeContentQueue.flushAllForSubmission(canvasId);
+    await drainPendingSaves(canvasId);
   } catch (error) {
     throw new CanvasSubmissionSaveError(canvasId, error);
   }

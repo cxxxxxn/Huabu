@@ -1285,6 +1285,62 @@ describe('queued composer turns', () => {
     );
   });
 
+  it('pauses a queued turn while its Space is returning with an unresolved content save', async () => {
+    const canvasModule = await vi.importActual<typeof CanvasStoreModule>(
+      '@/store/canvasStore',
+    );
+    const canvasApi = await import('@/api/canvas');
+    vi.spyOn(canvasApi, 'putNodeContent').mockRejectedValue(
+      new Error('disk unavailable'),
+    );
+    mocks.save.mockImplementation(canvasModule.saveCanvasForSubmission);
+    const prepared = request();
+    useCanvasStore.setState({
+      nodes: useCanvasStore
+        .getState()
+        .nodes.map((node) =>
+          node.id === 'note-1'
+            ? { ...node, data: { ...node.data, content: 'Unsaved' } }
+            : node,
+        ),
+    });
+    await expect(canvasModule.drainPendingSaves()).rejects.toThrow(
+      'Content saves failed',
+    );
+    useCanvasStore.getState()._setStateNoAutosave({
+      canvasId: 'parent-space',
+      nodes: [],
+    });
+    useCanvasStore.getState()._setStateNoAutosave({
+      canvasId: session.ownerCanvasId,
+      isLoading: true,
+    });
+    useChatStore.getState().enqueueTurn(session.threadId, {
+      id: 'failed-return-load',
+      prepared,
+      status: 'pending',
+    });
+    try {
+      await act(async () => settleAgentTurnQueue(session, true));
+      await act(async () => {
+        await vi.waitFor(() =>
+          expect(
+            useChatStore.getState().threadsById[session.threadId].queuePaused,
+          ).toBe(true),
+        );
+      });
+      expect(mocks.stream).not.toHaveBeenCalled();
+      expect(
+        useChatStore.getState().threadsById[session.threadId],
+      ).toMatchObject({
+        queuePaused: true,
+        queuedTurns: [{ id: 'failed-return-load', status: 'pending' }],
+      });
+    } finally {
+      await canvasModule.discardPendingSaves(session.ownerCanvasId);
+    }
+  });
+
   it('keeps a dispatched queued turn running while leaving its Space', async () => {
     const pending = deferred();
     let signal: AbortSignal | undefined;

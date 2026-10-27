@@ -15,7 +15,7 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import { CanvasConflictError, putNodeContent } from '@/api/canvas';
-import { toast } from '@/components/Common/Toast';
+import { dismissToast, toast } from '@/components/Common/Toast';
 
 import { createNodeContentQueue } from '../nodeContentQueue';
 
@@ -29,6 +29,7 @@ vi.mock('@/api/canvas', async (importActual) => {
 
 vi.mock('@/components/Common/Toast', () => ({
   toast: vi.fn(),
+  dismissToast: vi.fn(),
 }));
 
 const putMock = putNodeContent as unknown as Mock;
@@ -46,6 +47,7 @@ function noteNode(content: string, label = 'Note'): Node {
 function makeQueue(node: Node) {
   const state = {
     canvasId: 'c1',
+    isLoading: false,
     nodes: [node] as Node[],
     _setStateNoAutosave: vi.fn(),
     patchNodeSilent: vi.fn(),
@@ -63,7 +65,7 @@ beforeEach(() => {
 });
 
 describe('nodeContentQueue — save-failure surfacing', () => {
-  it('keeps navigation nonrejecting but reports failed saves to submissions', async () => {
+  it('reports retained failures after a best-effort flush', async () => {
     const node = noteNode('v1');
     const { queue } = makeQueue(node);
     putMock.mockRejectedValue(new Error('disk fail'));
@@ -74,6 +76,74 @@ describe('nodeContentQueue — save-failure surfacing', () => {
     );
     putMock.mockResolvedValue({ nodeId: 'n1', label: 'Note', rev: 'saved' });
     await queue.flushNow('c1', 'n1');
+    await expect(queue.flushAllForSubmission('c1')).resolves.toBeUndefined();
+  });
+
+  it('does not filter retained failures using nodes from an incomplete return load', async () => {
+    const node = noteNode('v1');
+    const { queue, state } = makeQueue(node);
+    putMock.mockRejectedValue(new Error('disk fail'));
+    queue.scheduleChanges('c1', [], [node]);
+    await queue.flushAll();
+    state.canvasId = 'parent';
+    state.nodes = [];
+    state.canvasId = 'c1';
+    state.isLoading = true;
+    await expect(queue.flushAllForSubmission('c1')).rejects.toThrow(
+      'Content saves failed',
+    );
+    expect(putMock).toHaveBeenCalledOnce();
+  });
+
+  it('forgets only the discarded Space and retires its Retry action', async () => {
+    const node = noteNode('v1');
+    const { queue, state } = makeQueue(node);
+    toastMock.mockReturnValue('failure-toast');
+    putMock.mockRejectedValue(new Error('disk fail'));
+    queue.scheduleChanges('c1', [], [node]);
+    await queue.flushAll();
+    const retry = toastMock.mock.calls.at(-1)?.[1].action.onClick;
+    state.canvasId = 'other';
+    state.nodes = [{ ...node, id: 'n2' }];
+    queue.scheduleChanges('other', [], state.nodes);
+    await queue.flushAll();
+    queue.discardCanvas('c1');
+    expect(dismissToast).toHaveBeenCalledWith('failure-toast');
+    await expect(queue.flushAllForSubmission('c1')).resolves.toBeUndefined();
+    await expect(queue.flushAllForSubmission('other')).rejects.toThrow(
+      'Content saves failed',
+    );
+    state.canvasId = 'c1';
+    state.nodes = [node];
+    queue.seedBaselines([node]);
+    retry();
+    await tick();
+    expect(putMock).toHaveBeenCalledTimes(2);
+    queue.discardCanvas('other');
+  });
+
+  it('retires conflict actions after discard even when the same Space is reopened', async () => {
+    const node = noteNode('local edit');
+    const { queue, state } = makeQueue(node);
+    toastMock.mockReturnValue('conflict-toast');
+    putMock.mockRejectedValue(
+      new CanvasConflictError({
+        code: 'NODE_CONTENT_CONFLICT',
+        message: 'stale',
+        currentRev: 'server-rev',
+      }),
+    );
+    await queue.flushNow('c1', node.id);
+    const conflict = toastMock.mock.calls.at(-1)?.[1];
+    queue.discardCanvas('c1');
+    expect(dismissToast).toHaveBeenCalledWith('conflict-toast');
+    state.nodes = [noteNode('server text')];
+    queue.seedBaselines(state.nodes);
+    conflict.secondaryAction.onClick();
+    conflict.action.onClick();
+    await tick();
+    expect(putMock).toHaveBeenCalledOnce();
+    expect(queue.pendingNodeIds()).toEqual([]);
     await expect(queue.flushAllForSubmission('c1')).resolves.toBeUndefined();
   });
 

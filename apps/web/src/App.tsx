@@ -18,21 +18,19 @@ import {
   Navigate,
   Outlet,
   RouterProvider,
-  useBlocker,
 } from 'react-router-dom';
 
 import { RATE_LIMITED_EVENT, type RateLimitedEventDetail } from './api/_client';
-import { Loading } from './components/Common/Loading';
 import { dismissToast, toast, ToastContainer } from './components/Common/Toast';
 import { GlobalModals } from './components/Shell/GlobalModals';
 import { NativeMenuBridge } from './components/Shell/NativeMenuBridge';
 import { WindowChrome } from './components/Shell/WindowChrome';
+import { SpaceNavigationGuard } from './components/Space/SpaceNavigationGuard';
 import { useDisableBrowserZoom } from './hooks/useDisableBrowserZoom';
 import { useInputModeListener } from './hooks/useInputMode';
 import CanvasListPage from './pages/CanvasListPage';
 import { WorkspaceLoadingScreen } from './pages/WorkspaceLoadingScreen';
 import WorkspaceSetupPage from './pages/WorkspaceSetupPage';
-import { drainPendingSaves } from './store/canvasStore.ts';
 import { useWorkspaceStore } from './store/workspaceStore';
 
 /**
@@ -153,60 +151,6 @@ const InitialisingContext = createContext(true);
  * future unmount means no leak window.
  */
 function RootLayout() {
-  const { t } = useTranslation();
-  // Block any pathname change that's *leaving* a canvas route, so
-  // pending debounced editor edits and the canvas-level structure
-  // PUT have time to land before the captured `canvasId` becomes
-  // stale. /canvas/X → /canvas/Y also blocks (then `switchCanvas`'s
-  // internal drain becomes a no-op); pure search/hash changes don't
-  // trigger because we compare `pathname` only.
-  const [isDraining, setIsDraining] = useState(false);
-  const blocker = useBlocker(
-    ({ currentLocation, nextLocation }) =>
-      currentLocation.pathname.startsWith('/canvas/') &&
-      currentLocation.pathname !== nextLocation.pathname,
-  );
-  useEffect(() => {
-    if (blocker.state !== 'blocked') return;
-    let cancelled = false;
-    // Defer the overlay by a short grace window so a drain that
-    // finishes in well under perceptible time (the common case —
-    // debounce window is ~500 ms and most PUTs round-trip in <100 ms,
-    // but if nothing is pending the drain is effectively instant)
-    // never flashes a spinner. If the drain outruns the timer, we
-    // skip turning the overlay on at all.
-    const SHOW_OVERLAY_AFTER_MS = 150;
-    const overlayTimer = window.setTimeout(() => {
-      if (!cancelled) setIsDraining(true);
-    }, SHOW_OVERLAY_AFTER_MS);
-    void (async () => {
-      let drained = false;
-      try {
-        await drainPendingSaves();
-        drained = true;
-      } catch {
-        // Resurrection failures retain the only body snapshot in this Canvas.
-        // The queue has already surfaced Retry; do not discard that snapshot.
-      } finally {
-        // `cancelled` is only ever true here if some external code
-        // resets the blocker mid-drain (nothing does today, but the
-        // guard keeps us honest). Wrapping the cleanup in an `if`
-        // rather than `return`-ing early satisfies
-        // `no-unsafe-finally`.
-        if (!cancelled) {
-          window.clearTimeout(overlayTimer);
-          setIsDraining(false);
-          if (drained) blocker.proceed?.();
-          else blocker.reset?.();
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-      window.clearTimeout(overlayTimer);
-    };
-  }, [blocker]);
-
   return (
     // `h-full` (not `h-screen`/`100vh`) so the app tracks the *visible*
     // viewport. On mobile Safari `100vh` resolves to the large viewport,
@@ -226,20 +170,7 @@ function RootLayout() {
           router root so every trigger (title-bar gear, floating canvas
           gear, AppMenu, canvas menu) drives one shared instance. */}
       <GlobalModals />
-      {/* Full-screen overlay shown while pending saves drain before a
-          blocked route change proceeds. `Loading layout="block"`
-          already provides the centered loading state. Rendered as a sibling
-          of the page area so it stacks on top of whatever route is
-          currently mounted. */}
-      {isDraining && (
-        <Loading
-          variant="spinner"
-          layout="block"
-          size="md"
-          message={t('app.savingCanvas')}
-          indicatorClassName="text-fg-subtle"
-        />
-      )}
+      <SpaceNavigationGuard />
     </div>
   );
 }
