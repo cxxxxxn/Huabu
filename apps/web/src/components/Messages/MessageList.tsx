@@ -239,7 +239,9 @@ export const MessageList = memo(function MessageList({
     if (recentTurnCount !== undefined) {
       rememberChatViewport(viewKey, {
         scrollTop: container.scrollTop,
-        messageAnchor: captureMessageListScrollAnchor(container),
+        messageAnchor: atBottom
+          ? undefined
+          : captureMessageListScrollAnchor(container),
         firstMessageId: messages[0]?.id,
         tail,
         atBottom,

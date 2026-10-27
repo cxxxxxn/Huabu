@@ -11,6 +11,7 @@ import {
   rememberMessageListScrollAnchor,
   rememberMessageListScrollPosition,
 } from './messageListScroll';
+import { readChatViewport } from '../../store/previewWorkspace/scrollMemory';
 
 import type { ChatMessage } from '../../store/chatTypes';
 import type { InkInterpretation } from '@huabu/shared';
@@ -344,6 +345,59 @@ describe('MessageList bottom navigation', () => {
     for (const args of vi.mocked(HTMLElement.prototype.scrollTo).mock.calls) {
       expect(args).toEqual([expect.objectContaining({ behavior: 'instant' })]);
     }
+  });
+
+  it('skips anchor geometry for bottom snapshots while preserving reading anchors', () => {
+    const viewKey = 'bottom-snapshot-geometry';
+    const messages = history(10);
+    const view = () => (
+      <MessageList
+        messages={messages}
+        recentTurnCount={10}
+        isLoading
+        viewKey={viewKey}
+      />
+    );
+    const geometry = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockReturnValue(new DOMRect(0, 0, 300, 200));
+    mount(view());
+    geometry.mockClear();
+    height = 1200;
+    resize();
+    act(() =>
+      root?.render(
+        <MessageList
+          messages={[
+            ...messages,
+            {
+              id: 'stream',
+              role: 'assistant',
+              segments: [{ kind: 'text', text: 'New output' }],
+            },
+          ]}
+          recentTurnCount={10}
+          isLoading
+          viewKey={viewKey}
+        />,
+      ),
+    );
+    expect(geometry).not.toHaveBeenCalled();
+    expect(readChatViewport(viewKey)).toMatchObject({ atBottom: true });
+    expect(readChatViewport(viewKey)?.messageAnchor).toBeUndefined();
+    scrollTo(100);
+    expect(geometry).toHaveBeenCalled();
+    expect(readChatViewport(viewKey)).toMatchObject({
+      atBottom: false,
+      messageAnchor: { messageId: 'u0', offsetTop: 0 },
+    });
+    act(() => bottomButton()?.click());
+    geometry.mockClear();
+    height = 1400;
+    resize();
+    expect(geometry).not.toHaveBeenCalled();
+    expect(readChatViewport(viewKey)?.messageAnchor).toBeUndefined();
+    forgetMessageListScrollPosition(viewKey);
   });
 
   it('does not hide the button before the scroll actually reaches bottom', () => {
