@@ -1,7 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { getRequestIdentity } from '../identity/request.js';
+import {
+  getRequestIdentity,
+  recordRequestAuthorization,
+} from '../identity/request.js';
 import { UNRESTRICTED_ACCESS } from '../identity/service.js';
 
 import type { FastifyInstance, FastifyRequest } from 'fastify';
@@ -15,18 +18,45 @@ declare module 'fastify' {
 
 type Fields = Record<string, unknown> | undefined;
 
-const id = (value: unknown): string | undefined =>
-  typeof value === 'string' && value ? value : undefined;
+/**
+ * Agents act through the shared machine credential, which reaches every
+ * Space, so a member may not run or steer one until credentials carry the
+ * caller's own authority. Matched by route pattern, not URL spelling.
+ */
+const AGENT_ROUTES = ['/api/agent', '/api/acp', '/api/agent-change-review'];
+
+/**
+ * The one value a request gives for `field` across its route parameters,
+ * query and body: `undefined` when absent, `null` when the sources disagree or
+ * the value is not a single id, so a handler can never read a different
+ * resource from the one authorized.
+ */
+function single(
+  field: string,
+  ...sources: Fields[]
+): string | null | undefined {
+  let found: string | undefined;
+  for (const source of sources) {
+    const value = source?.[field];
+    if (value === undefined) continue;
+    if (typeof value !== 'string' || !value || (found && found !== value))
+      return null;
+    found = value;
+  }
+  return found;
+}
 
 /**
  * Authorize every Space a request names before its route runs.
  *
  * The Space is the `canvasId` route parameter, query field or body field,
- * whichever is present first; a route that moves content between Spaces also
- * names the other one in its body. A conversation outside any Space belongs
- * to nobody, so only an owner may address one. The identity provider decides
- * each check. Unrestricted callers, the local owner and the machine
- * credential, skip the guard entirely, so local mode is unchanged.
+ * which must agree wherever more than one is given; a route that moves
+ * content between Spaces also names the other one in its body. Conversations
+ * and agents are an owner's alone, as {@link AGENT_ROUTES} explains. The
+ * identity provider decides each check, and each granted check is recorded so
+ * a long-lived response is closed once it no longer holds. Unrestricted
+ * callers, the local owner and the machine credential, skip the guard
+ * entirely, so local mode is unchanged.
  */
 export function registerSpaceAccess(app: FastifyInstance): void {
   app.addHook('preHandler', async (request, reply) => {
@@ -47,19 +77,29 @@ export function registerSpaceAccess(app: FastifyInstance): void {
         ? 'read'
         : 'write');
 
-    const checks: Array<['read' | 'write', string]> = [];
-    const canvasId =
-      id(params?.canvasId) ?? id(query?.canvasId) ?? id(body?.canvasId);
-    if (canvasId) checks.push([level, canvasId]);
-    else if (
-      (id(params?.threadId) ?? id(query?.threadId) ?? id(body?.threadId)) &&
-      !identity.owner
+    const canvasId = single('canvasId', params, query, body);
+    const threadId = single('threadId', params, query, body);
+    if (canvasId === null || threadId === null)
+      return reply.code(400).send({
+        message: 'A request may name only one Space and one conversation',
+        code: 'SPACE_ACCESS_AMBIGUOUS',
+      });
+    const route = request.routeOptions.url ?? '';
+    if (
+      !identity.owner &&
+      (threadId ||
+        AGENT_ROUTES.some(
+          (prefix) => route === prefix || route.startsWith(`${prefix}/`),
+        ))
     ) {
       return reply.code(403).send({
-        message: 'Conversations outside a Space require an owner',
-        code: 'SPACE_ACCESS_REQUIRED',
+        message: 'Agents and conversations require an owner',
+        code: 'AGENT_ACCESS_REQUIRED',
       });
     }
+
+    const checks: Array<['read' | 'write', string]> = [];
+    if (canvasId) checks.push([level, canvasId]);
     const destination = body?.destination as Fields;
     for (const [needed, value] of [
       ['write', body?.targetCanvasId],
@@ -67,13 +107,21 @@ export function registerSpaceAccess(app: FastifyInstance): void {
       ['write', body?.parentSpaceId],
       ['read', body?.srcCanvasId],
     ] as const) {
-      const other = id(value);
-      if (other) checks.push([needed, other]);
+      if (value === undefined || value === null) continue;
+      if (typeof value !== 'string' || !value)
+        return reply.code(400).send({
+          message: 'A request may name only one Space and one conversation',
+          code: 'SPACE_ACCESS_AMBIGUOUS',
+        });
+      checks.push([needed, value]);
     }
 
     for (const [needed, spaceId] of checks) {
       const space = { type: 'space', id: spaceId } as const;
-      if (await identity.access.can(needed, space)) continue;
+      if (await identity.access.can(needed, space)) {
+        recordRequestAuthorization(request, needed, space);
+        continue;
+      }
       // Without read access the Space is indistinguishable from a missing one.
       if (needed === 'write' && (await identity.access.can('read', space)))
         return reply.code(403).send({

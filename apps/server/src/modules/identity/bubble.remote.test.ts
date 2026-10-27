@@ -50,24 +50,26 @@ it('keeps principals, grants and local tokens across a restart, in a schema of i
   };
 
   const first = await start(env);
-  const bubbleApi = (method: 'POST' | 'PUT', path: string, payload: object) =>
+  const bubbleApi = (path: string, payload: object) =>
     first.inject({
-      method,
+      method: 'POST',
       url: `/bubble/v1${path}`,
       headers: MASTER,
       payload,
     });
-  await bubbleApi('POST', '/principals', {
-    principalId: 'ci-bot',
-    kind: 'bot',
-  });
-  const minted = await bubbleApi('POST', '/principals/ci-bot/tokens', {});
+  expect(
+    (await bubbleApi('/principals', { principalId: 'ci-bot', kind: 'bot' }))
+      .statusCode,
+  ).toBeLessThan(300);
+  const minted = await bubbleApi('/principals/ci-bot/tokens', {});
+  expect(minted.statusCode).toBeLessThan(300);
   const { token } = (minted.json() as { token: { token: string } }).token;
-  await bubbleApi('PUT', '/grants', {
+  const granted = await bubbleApi('/grants', {
     target: { type: 'system' },
     principalId: 'ci-bot',
     role: 'owner',
   });
+  expect(granted.statusCode).toBeLessThan(300);
   await first.close();
 
   const second = await start(env);

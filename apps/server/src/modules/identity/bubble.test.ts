@@ -11,11 +11,12 @@ import { openBubbleIdentity } from './bubble.js';
 import { registerIdentity } from './http.js';
 import { getRequestIdentity } from './request.js';
 import { isOwnerRequest } from '../security/owner.js';
+import { registerSpaceAccess } from '../security/space-access.js';
 
 import type { HuabuResource, ResourceDirectory } from './service.js';
 import type { BubbleStore } from '@octostaff/bubble';
 import type { AuthzTarget, Role } from '@octostaff/sdk';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { AddressInfo } from 'node:net';
 
 type Authenticator = Parameters<typeof openBubbleIdentity>[0]['authenticator'];
@@ -82,14 +83,22 @@ async function host(
     authenticator?: Authenticator;
     owner?: string;
     revalidationIntervalMs?: number;
+    secureOrigin?: boolean;
   } = {},
 ) {
   const store = new InMemoryBubbleStore();
+  const lookups: string[] = [];
   const bubble = await openBubbleIdentity({
     authenticator: options.authenticator ?? AUTHENTICATORS,
     owner: 'owner' in options ? options.owner : 'admin',
     store,
-    resources: RESOURCES,
+    resources: {
+      ...RESOURCES,
+      spaceParent: async (id) => {
+        lookups.push(id);
+        return RESOURCES.spaceParent(id);
+      },
+    },
   });
   const app = Fastify();
   servers.push(app);
@@ -97,8 +106,11 @@ async function host(
     service: bubble.service,
     getConnectionToken: () => 'machine-secret',
     revalidationIntervalMs: options.revalidationIntervalMs,
+    secureOrigin: options.secureOrigin,
   });
   void app.register(bubble.plugin, { prefix: '/bubble' });
+  registerSpaceAccess(app);
+  app.get('/', { config: { identity: 'shell' } }, async () => 'shell');
   app.get('/api/data', async () => ({ private: true }));
   // Answers what the caller may do with each Space, and claims one on POST.
   app.get('/api/access', async (request) => {
@@ -130,12 +142,14 @@ async function host(
   app.get('/api/settings', async (request, reply) =>
     isOwnerRequest(request) ? { private: true } : reply.code(403).send({}),
   );
-  app.get('/api/events', (_request, reply) => {
+  const events = (_request: unknown, reply: FastifyReply) => {
     reply.hijack();
     reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream' });
     reply.raw.write('data: ready\n\n');
-  });
-  return { app, store };
+  };
+  app.get('/api/events', events);
+  app.get('/api/canvas/:canvasId/events', events);
+  return { app, store, lookups };
 }
 
 /** Whether a WebSocket on `path` opens and, when asked, carries a clean reply. */
@@ -356,6 +370,41 @@ describe('Bubble identity', () => {
     expect((await closed).done).toBe(true);
   });
 
+  it('ends an open Space stream once the caller loses that Space', async () => {
+    const { app, store } = await host({ revalidationIntervalMs: 20 });
+    const origin = await app.listen({ port: 0, host: '127.0.0.1' });
+    await grant(store, 'carol', 'member');
+    const space = { type: 'huabu.space', id: 'b' } as const;
+    await grant(store, 'carol', 'huabu.space.owner', space);
+    const response = await fetch(`${origin}/api/canvas/b/events`, {
+      headers: as('carol'),
+      signal: AbortSignal.timeout(3_000),
+    });
+    const reader = response.body!.getReader();
+    expect((await reader.read()).done).toBe(false);
+    // Still a member, and still able to make other requests.
+    await revokeAll(store, 'carol', space);
+    expect((await reader.read()).done).toBe(true);
+    expect(
+      (await app.inject({ url: '/api/canvas/b/events', headers: as('carol') }))
+        .statusCode,
+    ).toBe(404);
+  });
+
+  it('answers every check in a request from one policy scope', async () => {
+    const { app, lookups } = await host();
+    await app.inject({ url: '/api/access', headers: MASTER });
+    // Ten questions about five Spaces, each Space resolved once.
+    expect(lookups.filter((id) => id === 'a')).toHaveLength(1);
+  });
+
+  it('serves the application shell to a browser that has not signed in', async () => {
+    const { app } = await host();
+    const shell = await app.inject('/');
+    expect([shell.statusCode, shell.body]).toEqual([200, 'shell']);
+    expect((await app.inject('/api/data')).statusCode).toBe(401);
+  });
+
   it('lets a member reach only the Spaces they own, and a Workspace owner every Space in it', async () => {
     const { app, store } = await host();
     const access = async (principalId: string) =>
@@ -447,6 +496,7 @@ describe('Bubble identity', () => {
     expect(cookie).toMatch(/^huabu_session=master-secret; /);
     expect(cookie).toContain('HttpOnly');
     expect(cookie).toContain('SameSite=Strict');
+    expect(cookie).not.toContain('Secure');
 
     const session = { cookie: cookie.split(';', 1)[0] };
     expect(
@@ -471,6 +521,16 @@ describe('Bubble identity', () => {
     expect(String(ended.headers['set-cookie'])).toMatch(
       /^huabu_session=; .*Max-Age=0/,
     );
+  });
+
+  it('marks the session cookie Secure behind an HTTPS origin', async () => {
+    const { app } = await host({ secureOrigin: true });
+    const started = await app.inject({
+      method: 'POST',
+      url: '/api/identity/session',
+      headers: MASTER,
+    });
+    expect(String(started.headers['set-cookie'])).toContain('; Secure');
   });
 
   it('fails closed with a redacted error when the verifier fails', async () => {

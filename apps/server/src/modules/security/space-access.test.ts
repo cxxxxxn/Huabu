@@ -9,7 +9,10 @@ import {
   readableSpaces,
   registerSpaceAccess,
 } from './space-access.js';
-import { setRequestIdentity } from '../identity/request.js';
+import {
+  getRequestAuthorizations,
+  setRequestIdentity,
+} from '../identity/request.js';
 import { UNRESTRICTED_ACCESS } from '../identity/service.js';
 
 import type { FastifyInstance } from 'fastify';
@@ -49,6 +52,9 @@ function host() {
   );
   app.get('/api/agent/history/:threadId', ok);
   app.post('/api/agent', ok);
+  app.post('/api/acp/threads/:threadId/permission', ok);
+  app.get('/api/canvas/:canvasId/threads/:threadId/changes', ok);
+  app.post('/api/canvas-titles', ok);
   app.post('/api/canvas/:canvasId/move-selection', ok);
   app.patch('/api/canvas/:canvasId/parent', ok);
   app.post('/api/canvas/:canvasId/artifact/clone-from', ok);
@@ -97,24 +103,81 @@ describe('Space access', () => {
     ).toBe(200);
   });
 
-  it('finds the Space in the query or body, and refuses Space-less conversations to members', async () => {
+  it('authorizes the one Space a request names, and refuses conflicting ones', async () => {
     const { app } = host();
-    const history = (query: string, owner = 'no') =>
+    const search = (query: string, payload: object) =>
       app.inject({
-        url: `/api/agent/history/t1${query}`,
-        headers: { 'x-owner': owner },
+        method: 'POST',
+        url: `/api/canvas/mine/search${query}`,
+        payload,
       });
-    expect((await history('?canvasId=mine')).statusCode).toBe(200);
-    expect((await history('?canvasId=other')).statusCode).toBe(404);
-    expect((await history('')).statusCode).toBe(403);
-    expect((await history('', 'yes')).statusCode).toBe(200);
-    const submit = (payload: object) =>
-      app.inject({ method: 'POST', url: '/api/agent', payload });
+    expect((await search('', { canvasId: 'mine' })).statusCode).toBe(200);
+    // A handler reading the body must never see a Space other than the one
+    // authorized from the path or query.
+    expect((await search('', { canvasId: 'other' })).statusCode).toBe(400);
+    expect((await search('?canvasId=other', {})).statusCode).toBe(400);
+    expect((await search('?canvasId=mine&canvasId=other', {})).statusCode).toBe(
+      400,
+    );
+    const titles = (query: string, payload: object) =>
+      app.inject({
+        method: 'POST',
+        url: `/api/canvas-titles${query}`,
+        headers: { 'x-owner': 'yes' },
+        payload,
+      });
+    expect((await titles('', { canvasId: 'other' })).statusCode).toBe(404);
     expect(
-      (await submit({ canvasId: 'mine', threadId: 't1' })).statusCode,
+      (await titles('?canvasId=mine', { canvasId: 'other' })).statusCode,
+    ).toBe(400);
+    expect((await titles('', { canvasId: ['mine'] })).statusCode).toBe(400);
+  });
+
+  it('keeps agents and conversations to owners, whatever Space a request names', async () => {
+    const { app } = host();
+    const as = (owner: 'yes' | 'no') => ({ 'x-owner': owner });
+    for (const request of [
+      { url: '/api/agent/history/t1?canvasId=mine' },
+      { url: '/api/agent/history/t1' },
+      { method: 'POST', url: '/api/agent', payload: { canvasId: 'mine' } },
+      { method: 'POST', url: '/api/acp/threads/t1/permission?canvasId=mine' },
+      { url: '/api/canvas/mine/threads/t1/changes' },
+    ] as const) {
+      expect(
+        (await app.inject({ ...request, headers: as('no') })).statusCode,
+      ).toBe(403);
+    }
+    expect(
+      (
+        await app.inject({
+          url: '/api/agent/history/t1?canvasId=mine',
+          headers: as('yes'),
+        })
+      ).statusCode,
     ).toBe(200);
-    expect((await submit({ canvasId: 'other' })).statusCode).toBe(404);
-    expect((await submit({ threadId: 't1' })).statusCode).toBe(403);
+    expect(
+      (
+        await app.inject({
+          url: '/api/agent/history/t1?canvasId=other',
+          headers: as('yes'),
+        })
+      ).statusCode,
+    ).toBe(404);
+    expect(
+      (await app.inject({ url: '/api/agent/history/t1', headers: as('yes') }))
+        .statusCode,
+    ).toBe(200);
+  });
+
+  it('records each Space it let a request into', async () => {
+    const { app } = host();
+    app.get('/api/canvas/:canvasId/granted', async (request) =>
+      getRequestAuthorizations(request),
+    );
+    const response = await app.inject('/api/canvas/mine/granted');
+    expect(response.json()).toEqual([
+      { level: 'read', resource: { type: 'space', id: 'mine' } },
+    ]);
   });
 
   it('also authorizes the other Space a request moves content to or from', async () => {

@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 import { resolveAuthenticationMode } from '../../security/deployment-settings.js';
-import { parseStorageProfile } from '../storage/index.js';
 
 /** One entry of Bubble's ordered authenticator list; Bubble validates the rest. */
 export type BubbleAuthenticatorEntry = { driver: string } & Record<
@@ -52,11 +51,12 @@ export function resolveIdentityConfig(
       'Bubble identity cannot be combined with HUABU_BASIC_AUTH_USER or HUABU_BASIC_AUTH_PASS',
     );
   }
-  // Bubble has no durable store other than Postgres.
+  // Bubble has no durable store other than Postgres. It opens its own
+  // connection, so Huabu's content may live in any backend.
   const postgresUrl = env.HUABU_POSTGRES_URL;
-  if (parseStorageProfile(env).structured.kind !== 'postgres' || !postgresUrl) {
+  if (!postgresUrl) {
     throw new Error(
-      'HUABU_IDENTITY_PROVIDER=bubble requires HUABU_STRUCTURED_BACKEND=postgres and HUABU_POSTGRES_URL',
+      'HUABU_IDENTITY_PROVIDER=bubble requires HUABU_POSTGRES_URL',
     );
   }
   const owner = env.HUABU_BUBBLE_OWNER?.trim();

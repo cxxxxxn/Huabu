@@ -166,7 +166,9 @@ export async function openBubbleIdentity(options: {
             bubbleAuthContextToPrincipal(registered),
           );
           const { principalId } = registered;
-          const { policy } = runtime;
+          // One grant load and ancestry walk per request; a later request or
+          // stream revalidation authenticates again and gets a fresh scope.
+          const policy = runtime.policy.scoped();
           return {
             principal: identityPrincipalSchema.parse(whoami.principal),
             member: await policy.can(USE, principalId, { type: 'system' }),

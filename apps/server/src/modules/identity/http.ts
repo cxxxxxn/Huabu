@@ -3,7 +3,11 @@
 
 import { timingSafeEqual } from 'node:crypto';
 
-import { getRequestIdentity, setRequestIdentity } from './request.js';
+import {
+  getRequestAuthorizations,
+  getRequestIdentity,
+  setRequestIdentity,
+} from './request.js';
 import { IdentityError, UNRESTRICTED_ACCESS } from './service.js';
 import { isPublicRfsSkillBootstrapRequest } from '../remote_fs/public-skill.js';
 import { isLoopbackRequest } from '../security/peer.js';
@@ -14,8 +18,12 @@ import type { FastifyInstance } from 'fastify';
 
 declare module 'fastify' {
   interface FastifyContextConfig {
-    /** Set by a mounted service that authenticates its own callers. */
-    identity?: 'route-owned';
+    /**
+     * `route-owned`: set by a mounted service that authenticates its own
+     * callers. `shell`: the web application itself, which a browser must load
+     * before it can sign in to Bubble; local mode still guards it.
+     */
+    identity?: 'route-owned' | 'shell';
   }
 }
 
@@ -49,6 +57,8 @@ export function registerIdentity(
   options: {
     service: IdentityService;
     getConnectionToken: () => string | undefined;
+    /** The Server is reached over HTTPS, as its configured public origin says. */
+    secureOrigin?: boolean;
     /** Bounded revocation for long-lived HTTP responses such as canvas SSE. */
     revalidationIntervalMs?: number;
   },
@@ -69,6 +79,13 @@ export function registerIdentity(
     if (request.method === 'OPTIONS') return;
     // Matched by route, not URL, so no path spelling can borrow the exemption.
     if (request.routeOptions.config?.identity === 'route-owned') return;
+    // The application shell holds no data, so Bubble mode serves it, with its
+    // index.html fallback, to a browser that has yet to sign in.
+    if (
+      service.provider === 'bubble' &&
+      request.routeOptions.config?.identity === 'shell'
+    )
+      return;
     // A browser cannot attach a header to an image, frame or download, so in
     // Bubble mode its session cookie carries the same Bearer credential.
     const authorization =
@@ -85,8 +102,9 @@ export function registerIdentity(
     )
       return;
 
-    // Existing machine reachback remains available, but even a loopback daemon
-    // is not a human owner and may not change credentials or configuration.
+    // Existing machine reachback remains available. Whether it is also an
+    // owner is the provider's call: local mode keeps its loopback rule, and in
+    // Bubble mode a daemon is never a human owner.
     const machineToken = options.getConnectionToken();
     const supplied = Buffer.from(authorization ?? '');
     const expected = machineToken
@@ -100,7 +118,7 @@ export function registerIdentity(
       setRequestIdentity(request, {
         principal: { principalId: 'huabu-agentlet', kind: 'bot' },
         member: true,
-        owner: false,
+        owner: service.machineOwner?.(isLoopbackRequest(request)) ?? false,
         access: UNRESTRICTED_ACCESS,
       });
       return;
@@ -114,16 +132,16 @@ export function registerIdentity(
         return Array.isArray(value) ? value[0] : value;
       },
     };
+    // Without a login the RFS surface still requires the machine token.
+    // Basic-authenticated owners retain their current access.
+    if (service.credentialFree && request.url.startsWith('/api/rfs/'))
+      return reply.code(401).send({
+        message: 'Authentication required',
+        code: 'IDENTITY_REQUIRED',
+      });
     try {
-      // In the zero-config local mode the RFS surface still requires its
-      // machine token. Basic-authenticated owners retain their current access.
       const identity = await service.authenticate(credentials);
-      if (
-        !identity ||
-        (service.provider === 'local' &&
-          !authorization &&
-          request.url.startsWith('/api/rfs/'))
-      ) {
+      if (!identity) {
         return reply
           .header('WWW-Authenticate', service.challenge)
           .code(401)
@@ -158,19 +176,27 @@ export function registerIdentity(
           clearInterval(timer);
           activeResponses.delete(close);
         };
+        // Every Space the request was let into must still be open to it.
+        const stillAuthorized = async (current: typeof identity) => {
+          for (const { level, resource } of getRequestAuthorizations(request))
+            if (!(await current.access.can(level, resource))) return false;
+          return true;
+        };
         const timer = setInterval(() => {
           if (closed || checking) return;
           checking = true;
           void service
             .authenticate(credentials)
-            .then((current) => {
+            .then(async (current) => {
               if (
                 !closed &&
                 (!current ||
                   current.principal.principalId !==
                     identity.principal.principalId ||
                   (!identityRoute &&
-                    (!current.member || current.owner !== identity.owner)))
+                    (!current.member ||
+                      current.owner !== identity.owner ||
+                      !(await stillAuthorized(current)))))
               )
                 close();
             })
@@ -206,6 +232,9 @@ export function registerIdentity(
   );
 
   if (service.provider !== 'bubble') return;
+  // Behind a TLS-terminating proxy the listener itself sees plain HTTP.
+  const secure = (request: { protocol: string }) =>
+    options.secureOrigin === true || request.protocol === 'https';
   // The SPA hands over the credential it obtained once; Bubble validates it on
   // every request, so the cookie is a carrier and never a session of its own.
   app.post(SESSION_PATH, async (request, reply) => {
@@ -225,7 +254,7 @@ export function registerIdentity(
     return reply
       .header(
         'Set-Cookie',
-        sessionCookie(encodeURIComponent(token), request.protocol === 'https'),
+        sessionCookie(encodeURIComponent(token), secure(request)),
       )
       .code(204)
       .send();
@@ -236,10 +265,7 @@ export function registerIdentity(
     { config: { identity: 'route-owned' } },
     async (request, reply) =>
       reply
-        .header(
-          'Set-Cookie',
-          sessionCookie('', request.protocol === 'https', 0),
-        )
+        .header('Set-Cookie', sessionCookie('', secure(request), 0))
         .code(204)
         .send(),
   );

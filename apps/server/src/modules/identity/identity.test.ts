@@ -69,12 +69,21 @@ describe('identity configuration', () => {
       owner: 'admin',
     });
   });
+  it('keeps Bubble independent of the backend holding Huabu content', () => {
+    expect(
+      resolveIdentityConfig({
+        HUABU_IDENTITY_PROVIDER: 'bubble',
+        HUABU_STRUCTURED_BACKEND: 'sqlite',
+        HUABU_POSTGRES_URL: POSTGRES.HUABU_POSTGRES_URL,
+      }),
+    ).toMatchObject({ provider: 'bubble' });
+  });
   it.each([
     { HUABU_IDENTITY_PROVIDER: 'typo' },
     { HUABU_BASIC_AUTH_USER: 'owner' },
     // Bubble keeps its records only in Postgres.
     { HUABU_IDENTITY_PROVIDER: 'bubble' },
-    { HUABU_IDENTITY_PROVIDER: 'bubble', HUABU_STRUCTURED_BACKEND: 'sqlite' },
+    { HUABU_IDENTITY_PROVIDER: 'bubble', HUABU_STRUCTURED_BACKEND: 'postgres' },
     { ...POSTGRES, HUABU_IDENTITY_PROVIDER: 'bubble', HUABU_BUBBLE_AUTH: '[]' },
     {
       ...POSTGRES,
@@ -98,7 +107,7 @@ describe('identity configuration', () => {
 });
 
 describe('local identity admission', () => {
-  it('provides a stable local owner without a directory and rejects remote spoofing', async () => {
+  it('provides a stable local owner over loopback and no owner to remote spoofing', async () => {
     const app = host(createLocalIdentityService());
     for (let i = 0; i < 2; i++) {
       const response = await app.inject('/api/identity');
@@ -122,15 +131,24 @@ describe('local identity admission', () => {
         'x-principal-id': 'local-owner',
       },
     });
-    expect(remote.statusCode).toBe(401);
+    // Without Basic Auth every caller is admitted, as before identity
+    // existed; only a loopback peer is the owner.
+    expect(remote.statusCode).toBe(200);
     expect(
       (
         await app.inject({
-          url: '/api/data',
-          headers: { authorization: 'Bearer unknown' },
+          url: '/api/settings',
+          remoteAddress: '192.0.2.1',
+          headers: { 'x-forwarded-for': '127.0.0.1' },
         })
       ).statusCode,
-    ).toBe(401);
+    ).toBe(403);
+    // An unrelated credential, such as one a proxy adds, changes nothing.
+    const proxied = await app.inject({
+      url: '/api/settings',
+      headers: { authorization: 'Bearer unrelated-proxy-token' },
+    });
+    expect(proxied.statusCode).toBe(200);
   });
   it('keeps Basic Auth mandatory even on loopback when configured', async () => {
     const app = host(
@@ -151,10 +169,9 @@ describe('local identity admission', () => {
     const remote = { url: '/api/settings', remoteAddress: '192.0.2.1' };
     expect(
       (await host(createLocalIdentityService()).inject(remote)).statusCode,
-    ).toBe(401);
+    ).toBe(403);
     const open = host(createLocalIdentityService({ open: true }));
     expect((await open.inject(remote)).statusCode).toBe(200);
-    // Disabling login never opens the machine surface or accepts a stray token.
     expect(
       (
         await open.inject({
@@ -162,7 +179,8 @@ describe('local identity admission', () => {
           headers: { authorization: 'Bearer guess' },
         })
       ).statusCode,
-    ).toBe(401);
+    ).toBe(200);
+    // Disabling login never opens the machine surface.
     expect(
       (
         await open.inject({
@@ -173,7 +191,7 @@ describe('local identity admission', () => {
     ).toBe(401);
   });
 
-  it('retains RFS bootstrap and machine access without granting machine owner authority', async () => {
+  it('retains RFS bootstrap, and machine access with the local owner rule', async () => {
     const app = host(createLocalIdentityService());
     expect((await app.inject('/api/rfs/space/skill')).statusCode).toBe(200);
     expect((await app.inject('/api/rfs/space/content')).statusCode).toBe(401);
@@ -189,9 +207,27 @@ describe('local identity admission', () => {
     expect(
       (await app.inject({ url: '/api/rfs/space/content', headers })).statusCode,
     ).toBe(200);
+    // As every local caller, the machine is the owner over loopback only.
     expect(
       (await app.inject({ url: '/api/settings', headers })).statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await app.inject({
+          url: '/api/settings',
+          remoteAddress: '192.0.2.1',
+          headers,
+        })
+      ).statusCode,
     ).toBe(403);
+    expect(
+      (
+        await app.inject({
+          url: '/api/rfs/space/content',
+          headers: { authorization: 'Bearer unrelated-proxy-token' },
+        })
+      ).statusCode,
+    ).toBe(401);
     expect(
       (
         await app.inject({

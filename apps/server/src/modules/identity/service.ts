@@ -56,9 +56,19 @@ export interface ResourceDirectory {
 export interface IdentityService {
   readonly provider: IdentityResponse['provider'];
   readonly challenge: string;
+  /**
+   * Admits callers without any credential, as local mode does without Basic
+   * Auth; the RFS surface then still requires the machine credential.
+   */
+  readonly credentialFree?: boolean;
   authenticate(
     credentials: IdentityCredentials,
   ): Promise<ResolvedIdentity | null>;
+  /**
+   * Whether the machine credential also carries owner authority. Local mode
+   * keeps its loopback rule for it; without this the machine is never an owner.
+   */
+  machineOwner?(loopback: boolean): boolean;
 }
 
 export class IdentityError extends Error {

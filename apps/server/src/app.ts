@@ -54,6 +54,7 @@ import {
   originGuardPlugin,
   resolveAllowedHostnames,
 } from './modules/security/index.js';
+import { resolveConfiguredPublicOrigin } from './modules/security/public-origin.js';
 import { createApplicationRateLimitOptions } from './modules/security/rate-limit.js';
 import { registerSpaceAccess } from './modules/security/space-access.js';
 import serviceRoutes from './modules/services/services.route.js';
@@ -138,7 +139,11 @@ app.register(multipart, {
 
 // Identity is selected once; a failed Bubble lookup never becomes local access.
 const identity = createIdentity(getDeploymentEnvironment());
-registerIdentity(app, { service: identity.service, getConnectionToken });
+registerIdentity(app, {
+  service: identity.service,
+  getConnectionToken,
+  secureOrigin: resolveConfiguredPublicOrigin()?.startsWith('https:') ?? false,
+});
 // An embedded Bubble serves its own API beside Huabu's, behind the same host,
 // origin and rate-limit guards; clients address it as `<origin>/bubble`.
 if (identity.bubble) app.register(identity.bubble, { prefix: '/bubble' });
@@ -322,10 +327,16 @@ registerOpCounterHook(app);
 // entirely — no behaviour change.
 const webDistPath = process.env.WEB_DIST_PATH;
 if (webDistPath) {
-  app.register(staticPlugin, {
-    root: webDistPath,
-    prefix: '/',
-    decorateReply: false,
+  app.register(async (shell) => {
+    // The application shell is what a browser loads to sign in.
+    shell.addHook('onRoute', (route) => {
+      route.config = { ...route.config, identity: 'shell' };
+    });
+    await shell.register(staticPlugin, {
+      root: webDistPath,
+      prefix: '/',
+      decorateReply: false,
+    });
   });
   app.setNotFoundHandler((_request, reply) => {
     void reply.sendFile('index.html', webDistPath);
