@@ -195,12 +195,10 @@ describe('useBuiltinThreadSettings', () => {
         reject = fail;
       }),
     );
-    useChatStore
-      .getState()
-      .setThreadSettings('other', {
-        modelId: 'other-model',
-        reasoningEffort: 'low',
-      });
+    useChatStore.getState().setThreadSettings('other', {
+      modelId: 'other-model',
+      reasoningEffort: 'low',
+    });
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
