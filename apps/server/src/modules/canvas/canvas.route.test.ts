@@ -1471,6 +1471,12 @@ describe('Space export/import persistence', () => {
               src: '/api/canvas/c1/artifact/asset.bin',
             },
           },
+          {
+            id: 'export-agent',
+            type: 'question',
+            position: { x: 100, y: 0 },
+            data: { threadId: 'thread-export' },
+          },
         ],
         edges: [],
       },
@@ -1547,7 +1553,7 @@ describe('Space export/import persistence', () => {
       expect(JSON.stringify(record?.state)).toContain(
         `/api/canvas/${importedId}/artifact/asset.bin`,
       );
-      const [note] = record?.state.nodes as CanvasNode[];
+      const [note, agent] = record?.state.nodes as CanvasNode[];
       expect(note.id).toMatch(/^node-/);
       expect(note.id).not.toBe('n1');
       expect(reopened.readNode('n1')).toBeNull();
@@ -1564,9 +1570,10 @@ describe('Space export/import persistence', () => {
           .readDeltaLogSince(0)
           .map((entry) => entry.version),
       ).toEqual([1]);
-      expect(await importedSpace.changes.read('thread-export')).toEqual(
-        storedChanges,
-      );
+      expect(agent.data.threadId).not.toBe('thread-export');
+      expect(
+        await importedSpace.changes.read(String(agent.data.threadId)),
+      ).toEqual(storedChanges);
       expect(await space(importedId).artifacts.read('asset.bin')).toEqual(blob);
     } finally {
       await app.close();

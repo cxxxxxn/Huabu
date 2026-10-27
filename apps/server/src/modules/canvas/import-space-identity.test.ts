@@ -1,21 +1,41 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
-import { FileTurnStore } from '@agenetes/agenetes';
+import {
+  FileThreadStore,
+  FileTurnStore,
+  mountAgenetes,
+  InMemoryEventLogStore,
+} from '@agenetes/agenetes';
+import { defineDriver } from '@agenetes/runtime';
 import { afterEach, beforeEach, expect, it } from 'vitest';
+import { z } from 'zod';
+
+import { validateInteractiveViewState } from '@huabu/shared';
 
 import { remapImportedSpace } from './import-space-identity.js';
 import { parseFrontmatter } from '../../utils/markdown-frontmatter.js';
+import { toFrontmatter } from '../../utils/markdown-frontmatter.js';
+import { buildReachbackEnv } from '../agent/acp/reachback-env.js';
 import { createChatSubmission } from '../agent/agenetes/handle.js';
 import { buildHistoryFromTurns } from '../agent/conversation/transcript/history.js';
 
 import type { CanvasFile } from './persistence-types.js';
 import type { PersistedTurn } from '@agenetes/agenetes';
 import type { ChatHistoryItem } from '@huabu/shared';
+import type { InteractiveViewDefinitionV1 } from '@huabu/shared';
 import type { CanvasNode } from '@huabu/shared/canvas-engine';
 
 let directory: string;
@@ -60,6 +80,368 @@ function record(): CanvasFile {
   };
 }
 
+it('keeps application values and provenance opaque while remapping declared references', async () => {
+  const definition: InteractiveViewDefinitionV1 = {
+    protocolVersion: 1,
+    ownerThreadId: 'thread',
+    state: {
+      schema: {
+        type: 'object',
+        properties: { id: { type: 'string', enum: ['note'] } },
+        additionalProperties: false,
+      },
+      value: { id: 'note' },
+    },
+    bindings: [
+      {
+        bindingId: 'note',
+        source: { kind: 'canvas.nodes', nodeIds: ['note'] },
+      },
+    ],
+    actions: [],
+  };
+  const original = record();
+  (original.state.nodes[1] as CanvasNode).data = {
+    interactiveView: definition,
+    custom: { id: 'note', nodeId: 'note', threadId: 'thread', source: 'agent' },
+    payload: { nodeId: 'note', source: 'agent' },
+  };
+  await mkdir(path.join(directory, 'nodes'));
+  await writeFile(
+    path.join(directory, 'nodes', 'Note.md'),
+    `${toFrontmatter({ id: 'note', type: 'note', interactiveView: definition })}\nbody`,
+  );
+  await mkdir(path.join(directory, '.history'));
+  await writeFile(
+    path.join(directory, '.history', 'delta-log.jsonl'),
+    JSON.stringify({
+      originator: { source: 'agent', threadId: 'thread' },
+      deltas: [
+        {
+          type: 'REPLACE_NODE',
+          prev: original.state.nodes[1],
+          next: original.state.nodes[1],
+        },
+      ],
+    }),
+  );
+  const imported = await remapImportedSpace(directory, original, 'target');
+  const [, note, agent] = imported.state.nodes as CanvasNode[];
+  expect(note.data).toMatchObject({
+    custom: (original.state.nodes[1] as CanvasNode).data.custom,
+    payload: (original.state.nodes[1] as CanvasNode).data.payload,
+    interactiveView: {
+      state: definition.state,
+      ownerThreadId: agent.data.threadId,
+      bindings: [{ bindingId: 'note', source: { nodeIds: [note.id] } }],
+    },
+  });
+  const view = note.data.interactiveView as InteractiveViewDefinitionV1;
+  expect(
+    validateInteractiveViewState(view.state.schema, view.state.value),
+  ).toBeNull();
+  const sidecar = parseFrontmatter(
+    await readFile(path.join(directory, 'nodes', 'Note.md'), 'utf8'),
+  );
+  expect(sidecar.meta.interactiveView).toEqual(view);
+  const delta = JSON.parse(
+    await readFile(path.join(directory, '.history', 'delta-log.jsonl'), 'utf8'),
+  );
+  expect(delta).toMatchObject({
+    originator: { source: 'agent', threadId: agent.data.threadId },
+    deltas: [
+      {
+        prev: { id: note.id, data: note.data },
+        next: { id: note.id, data: note.data },
+      },
+    ],
+  });
+});
+
+it('imports an independent deployment and rekeys durable thread records and log filenames', async () => {
+  const source = {
+    name: 'source',
+    storage: { root: path.join(directory, '.history') },
+  };
+  const threads = new FileThreadStore();
+  threads.upsert(source, 'thread', {
+    driverSchemaVersion: 1,
+    spec: {
+      kind: 'external',
+      workloadType: 'Deployment',
+      threadId: 'thread',
+      namespace: source,
+      spec: {
+        binding: { profileId: 'profile', alias: 'Agent' },
+        env: {
+          HUABU_THREAD_ID: 'thread',
+          HUABU_RFS_URL: 'http://old/api/rfs/source',
+          CUSTOM: 'note',
+        },
+      },
+    },
+    state: {
+      driverState: {
+        sessionId: 'original-session',
+        initialPreambleDelivered: true,
+      },
+      metadata: { sessionInfo: { title: 'Original', updatedAt: null } },
+    },
+    hostMetadata: { owner: { nodeId: 'agent', canvasId: 'source' } },
+  });
+  const history = path.join(directory, '.history', 'chat_v2');
+  await mkdir(history);
+  await mkdir(path.join(directory, '.history', 'chat'));
+  await writeFile(
+    path.join(history, 'thread.events.jsonl'),
+    JSON.stringify({
+      seq: 1,
+      event: { type: 'meta', data: { threadId: 'thread' } },
+    }),
+  );
+  await writeFile(
+    path.join(history, 'thread.turns.jsonl.bak'),
+    'historical backup',
+  );
+  await writeFile(
+    path.join(directory, '.history', 'chat', 'thread.changes.json'),
+    '[]',
+  );
+  const runtime = mountAgenetes({
+    drivers: {
+      external: defineDriver({
+        schemaVersion: 1,
+        workloadTypes: ['Deployment'],
+        specSchema: z.object({}).passthrough(),
+        stateSchema: z.object({}).passthrough(),
+        initialState: () => ({}),
+        create: () => ({
+          capabilities: {
+            supportedControlMessages: [],
+            turnInput: 'blocking' as const,
+          },
+          async *run() {
+            yield { type: 'text_delta' as const, data: { content: 'reply' } };
+          },
+          async control() {
+            return {
+              ok: false as const,
+              code: 'unsupported' as const,
+              error: 'Not supported',
+            };
+          },
+          close() {},
+        }),
+      }),
+    },
+    threadStore: threads,
+    turnStore: new FileTurnStore(),
+    eventLogStore: new InMemoryEventLogStore(),
+  });
+  const prior = threads.get(source, 'thread')!;
+  const originalHandle = await runtime.create(prior.spec);
+  const imported = await remapImportedSpace(directory, record(), 'target');
+  const threadId = (imported.state.nodes[2] as CanvasNode).data.threadId;
+  expect(threadId).toEqual(expect.any(String));
+  expect(threadId).not.toBe('thread');
+  const namespace = { ...source, name: 'target' };
+  const copied = threads.get(namespace, String(threadId))!;
+  expect(copied.spec).toMatchObject({
+    threadId,
+    namespace: { name: 'target' },
+    spec: {
+      env: { ...buildReachbackEnv(String(threadId), 'target'), CUSTOM: 'note' },
+    },
+  });
+  expect(copied.state.driverState).toEqual({ initialPreambleDelivered: false });
+  expect(copied.spec.spec).not.toMatchObject({
+    env: { HUABU_RFS_URL: 'http://old/api/rfs/source' },
+  });
+  expect(threads.get(namespace, 'thread')).toBeUndefined();
+  expect(await runtime.create(copied.spec)).not.toBe(originalHandle);
+  expect(await readdir(history)).toContain(`${threadId}.events.jsonl`);
+  expect(await readdir(history)).toContain(`${threadId}.turns.jsonl.bak`);
+  expect(
+    JSON.parse(
+      await readFile(path.join(history, `${threadId}.events.jsonl`), 'utf8'),
+    ).event.data.threadId,
+  ).toBe(threadId);
+  expect(await readdir(path.join(directory, '.history', 'chat'))).toEqual([
+    `${threadId}.changes.json`,
+  ]);
+  await runtime.close('thread');
+  await runtime.close(String(threadId));
+});
+
+it('migrates legacy ACP records before resetting copied native sessions', async () => {
+  const root = path.join(directory, '.history');
+  await mkdir(root);
+  await writeFile(
+    path.join(root, 'acp-sessions.json'),
+    JSON.stringify({
+      schemaVersion: 3,
+      records: {
+        thread: {
+          sessionId: 'native-original',
+          profileId: 'profile',
+          cwd: '/tmp',
+          updatedAt: 1,
+          bindingRecipe: {
+            command: 'agent',
+            cwd: '/tmp',
+            autoRestart: false,
+            alias: 'Agent',
+          },
+        },
+      },
+    }),
+  );
+  const imported = await remapImportedSpace(directory, record(), 'target');
+  const threadId = String(
+    (imported.state.nodes[2] as CanvasNode).data.threadId,
+  );
+  const stored = new FileThreadStore().get(
+    { name: 'target', storage: { root } },
+    threadId,
+  );
+  expect(stored?.state.driverState).toEqual({
+    initialPreambleDelivered: false,
+  });
+  expect(stored?.spec.threadId).toBe(threadId);
+  expect(await readdir(root)).not.toContain('acp-sessions.json');
+});
+
+it('keeps foreign thread references and opaque tool output unchanged', async () => {
+  const original = record();
+  (original.state.nodes[1] as CanvasNode).data.parentThreadId =
+    'foreign-thread';
+  const root = path.join(directory, '.history');
+  await mkdir(root);
+  const output = {
+    id: 'note',
+    nodeId: 'note',
+    source: 'agent',
+    threadId: 'thread',
+  };
+  const event = {
+    type: 'tool_call',
+    data: { title: 'application', rawInput: output, rawOutput: output },
+  };
+  await writeFile(path.join(root, 'events.jsonl'), JSON.stringify(event));
+  const opaque = JSON.stringify({
+    id: 'note',
+    nodeId: 'note',
+    threadId: 'thread',
+  });
+  await writeFile(path.join(root, 'application.json'), opaque);
+  const imported = await remapImportedSpace(directory, original, 'target');
+  expect((imported.state.nodes[1] as CanvasNode).data.parentThreadId).toBe(
+    'foreign-thread',
+  );
+  expect(
+    JSON.parse(await readFile(path.join(root, 'events.jsonl'), 'utf8')),
+  ).toEqual(event);
+  expect(await readFile(path.join(root, 'application.json'), 'utf8')).toBe(
+    opaque,
+  );
+});
+
+it.each(['jsonl', 'sqlite'])(
+  'remaps internal tool arguments and Task run references in %s without changing task IDs',
+  async (format) => {
+    const root = path.join(directory, '.history');
+    const namespace = { name: 'source', storage: { root } };
+    new FileThreadStore().upsert(namespace, 'thread', {
+      driverSchemaVersion: 1,
+      spec: {
+        kind: 'internal',
+        workloadType: 'Deployment',
+        threadId: 'thread',
+        namespace,
+        spec: { hostContext: { canvasId: 'source' }, model: { id: 'note' } },
+      },
+      state: { driverState: {} },
+    });
+    const persisted: PersistedTurn = {
+      seqStart: 1,
+      seqEnd: 2,
+      turn: {
+        request: null,
+        transcript: [
+          {
+            type: 'tool_call',
+            data: {
+              toolCallId: 'note',
+              title: 'inspect_nodes',
+              status: 'completed',
+              rawInput: { nodeIds: ['note'] },
+            },
+          },
+        ],
+      },
+    };
+    const turns = new FileTurnStore();
+    if (format === 'sqlite') {
+      turns.append(namespace, 'thread', persisted);
+      turns.close(namespace);
+    } else {
+      await mkdir(path.join(root, 'chat_v2'));
+      await writeFile(
+        path.join(root, 'chat_v2', 'thread.turns.jsonl'),
+        JSON.stringify(persisted),
+      );
+    }
+    await writeFile(
+      path.join(root, 'tasks.json'),
+      JSON.stringify({
+        version: 1,
+        tasks: [{ taskId: 'note', canvasId: 'source', anchorNodeId: 'note' }],
+        runs: [
+          {
+            runId: 'note',
+            taskId: 'note',
+            canvasIdSnapshot: 'source',
+            rootNodeId: 'agent',
+            rootThreadId: 'thread',
+          },
+        ],
+      }),
+    );
+    const imported = await remapImportedSpace(directory, record(), 'target');
+    const [, note, agent] = imported.state.nodes as CanvasNode[];
+    const threadId = String(agent.data.threadId);
+    try {
+      expect(
+        turns.list(namespace, threadId)[0].turn.transcript[0],
+      ).toMatchObject({
+        data: { toolCallId: 'note', rawInput: { nodeIds: [note.id] } },
+      });
+      const workload = new FileThreadStore().get(namespace, threadId);
+      expect(workload?.spec.spec).toEqual({
+        hostContext: { canvasId: 'target' },
+        model: { id: 'note' },
+      });
+      expect(
+        JSON.parse(await readFile(path.join(root, 'tasks.json'), 'utf8')),
+      ).toEqual({
+        version: 1,
+        tasks: [{ taskId: 'note', canvasId: 'target', anchorNodeId: note.id }],
+        runs: [
+          {
+            runId: 'note',
+            taskId: 'note',
+            canvasIdSnapshot: 'target',
+            rootNodeId: agent.id,
+            rootThreadId: threadId,
+          },
+        ],
+      });
+    } finally {
+      turns.close(namespace);
+    }
+  },
+);
+
 it('remaps topology, node frontmatter, structured history and scoped links together', async () => {
   await mkdir(path.join(directory, 'nodes'));
   await mkdir(path.join(directory, '.history'));
@@ -75,8 +457,8 @@ it('remaps topology, node frontmatter, structured history and scoped links toget
     path.join(directory, '.history', 'threads.json'),
     JSON.stringify({
       records: {
-        agent: {
-          spec: { threadId: 'agent', namespace: { name: 'source' } },
+        thread: {
+          spec: { threadId: 'thread', namespace: { name: 'source' } },
           hostMetadata: { owner: { canvasId: 'source', nodeId: 'agent' } },
         },
       },
@@ -94,7 +476,7 @@ it('remaps topology, node frontmatter, structured history and scoped links toget
     position: { x: 10, y: 20 },
   });
   expect(agent.data).toMatchObject({
-    threadId: 'thread',
+    threadId: expect.stringMatching(/^thread-/),
     selectedNodeIds: [note.id],
   });
   expect(imported.state.edges[0]).toMatchObject({
@@ -125,8 +507,8 @@ it('remaps topology, node frontmatter, structured history and scoped links toget
     ),
   ).toEqual({
     records: {
-      agent: {
-        spec: { threadId: 'agent', namespace: { name: 'target' } },
+      [String(agent.data.threadId)]: {
+        spec: { threadId: agent.data.threadId, namespace: { name: 'target' } },
         hostMetadata: { owner: { canvasId: 'target', nodeId: agent.id } },
       },
     },
@@ -134,7 +516,7 @@ it('remaps topology, node frontmatter, structured history and scoped links toget
   expect(original).toEqual(record());
 });
 
-it('updates SQLite conversation references without changing thread identity, turn order or sequence fences', async () => {
+it('rekeys SQLite conversations without changing turn order or sequence fences', async () => {
   const namespace = {
     name: 'source',
     storage: { root: path.join(directory, '.history') },
@@ -152,17 +534,34 @@ it('updates SQLite conversation references without changing thread identity, tur
             toolCallId: 'call',
             title: 'Read nodes',
             status: 'completed',
-            rawOutput: { nodeId: 'note', selectedNodeIds: ['note'] },
+            rawOutput: {
+              tool: 'inspect_nodes',
+              status: 'success',
+              data: { nodeId: 'note', selectedNodeIds: ['note'] },
+            },
           },
         },
       ],
     },
   });
   turns.close(namespace);
+  const database = new DatabaseSync(
+    path.join(namespace.storage.root, 'chat_v2', 'turns.sqlite'),
+  );
+  database
+    .prepare('UPDATE turn_generations SET generation = 7 WHERE thread_id = ?')
+    .run('thread');
+  database
+    .prepare('INSERT OR IGNORE INTO jsonl_imports (thread_id) VALUES (?)')
+    .run('thread');
+  database.close();
   try {
     const imported = await remapImportedSpace(directory, record(), 'target');
     const note = imported.state.nodes[1] as CanvasNode;
-    const history = turns.list(namespace, 'thread');
+    const history = turns.list(
+      namespace,
+      String((imported.state.nodes[2] as CanvasNode).data.threadId),
+    );
     expect(history).toHaveLength(1);
     expect(history[0]).toMatchObject({
       seqStart: 3,
@@ -173,12 +572,39 @@ it('updates SQLite conversation references without changing thread identity, tur
           {
             type: 'tool_call',
             data: {
-              rawOutput: { nodeId: note.id, selectedNodeIds: [note.id] },
+              rawOutput: {
+                tool: 'inspect_nodes',
+                status: 'success',
+                data: { nodeId: note.id, selectedNodeIds: [note.id] },
+              },
             },
           },
         ],
       },
     });
+    const importedThread = String(
+      (imported.state.nodes[2] as CanvasNode).data.threadId,
+    );
+    expect(turns.list(namespace, 'thread')).toEqual([]);
+    const reopened = new DatabaseSync(
+      path.join(namespace.storage.root, 'chat_v2', 'turns.sqlite'),
+    );
+    try {
+      expect(
+        reopened
+          .prepare(
+            'SELECT generation FROM turn_generations WHERE thread_id = ?',
+          )
+          .get(importedThread)?.generation,
+      ).toBe(7);
+      expect(
+        reopened
+          .prepare('SELECT thread_id FROM jsonl_imports WHERE thread_id = ?')
+          .get(importedThread)?.thread_id,
+      ).toBe(importedThread);
+    } finally {
+      reopened.close();
+    }
   } finally {
     turns.close(namespace);
   }
@@ -259,7 +685,10 @@ it.each(['jsonl', 'sqlite'])(
     try {
       const imported = await remapImportedSpace(directory, record(), 'target');
       const note = imported.state.nodes[1] as CanvasNode;
-      const history = turns.list(namespace, 'thread');
+      const history = turns.list(
+        namespace,
+        String((imported.state.nodes[2] as CanvasNode).data.threadId),
+      );
       const expectedSnapshots = [{ ...snapshots[0], originNodeIds: [note.id] }];
       expect(history[0].turn.transcript).toMatchObject([
         { data: { rawOutput: JSON.stringify(expectedSnapshots) } },
@@ -344,7 +773,7 @@ it.each(['jsonl', 'sqlite'])(
     try {
       const imported = await remapImportedSpace(directory, record(), 'target');
       const [frame, note, agent] = imported.state.nodes as CanvasNode[];
-      const history = turns.list(namespace, 'thread');
+      const history = turns.list(namespace, String(agent.data.threadId));
       expect(history).toHaveLength(1);
       expect(history[0]).toMatchObject({
         seqStart: 1,
@@ -414,9 +843,12 @@ it('remaps both recent-conversation pointers without changing acceptance identit
   const imported = await remapImportedSpace(directory, source, 'target');
   const [, , agent, pendingAgent] = imported.state.nodes as CanvasNode[];
   expect(JSON.parse(await readFile(pointerFile, 'utf8'))).toEqual({
-    conversation: { nodeId: agent.id, threadId: 'thread' },
+    conversation: { nodeId: agent.id, threadId: agent.data.threadId },
     pending: {
-      conversation: { nodeId: pendingAgent.id, threadId: 'pending-thread' },
+      conversation: {
+        nodeId: pendingAgent.id,
+        threadId: pendingAgent.data.threadId,
+      },
       acceptanceId,
     },
   });
