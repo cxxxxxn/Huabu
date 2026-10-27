@@ -302,10 +302,7 @@ export const SpacePreviewNode = memo(
                   }}
                 />
               </span>
-              <div
-                className="flex min-w-0 flex-1 items-start gap-1"
-                onDoubleClick={(event) => event.stopPropagation()}
-              >
+              <div className="flex min-w-0 flex-1 items-start gap-1">
                 <CardTitle
                   title={target.title}
                   selected={selected}

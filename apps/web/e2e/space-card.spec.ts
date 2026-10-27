@@ -451,7 +451,7 @@ test('Space cards show activity and rename inline without entering the target', 
   );
 
   await card.getByText('Card task', { exact: true }).click();
-  await expect(card.locator('input')).toHaveCount(0);
+  await expect(card.locator('textarea')).toHaveCount(0);
   await expect(
     card.getByRole('button', { name: 'Rename Space', exact: true }),
   ).toBeVisible();
@@ -581,7 +581,7 @@ test('Space cards show activity and rename inline without entering the target', 
     page.getByRole('menuitem', { name: /Verification/ }),
   ).toBeVisible();
   await expect(page).toHaveURL(`/canvas/${source}`);
-  await expect(card.locator('input')).toHaveCount(0);
+  await expect(card.locator('textarea')).toHaveCount(0);
   await expect(page.getByRole('menuitem')).toHaveCount(31 - visibleSessions);
   const menu = page.getByRole('menu');
   expect(
