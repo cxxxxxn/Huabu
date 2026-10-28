@@ -80,6 +80,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+  vi.useRealTimers();
 });
 async function render() {
   await act(async () => {
@@ -169,13 +170,67 @@ it('refuses a replacement owner rather than silently retargeting the tab', async
 it('revalidates a displayed conversation on focus and removes stale Chat after deletion', async () => {
   await render();
   expect(host.querySelector('[data-chat-thread="thread"]')).not.toBeNull();
-  mocks.getOwner.mockRejectedValueOnce(new Error('Source Agent was deleted'));
+  mocks.getOwner.mockRejectedValueOnce(
+    new ApiError(404, { code: 'conversation_owner_missing' }, 'Owner missing'),
+  );
   await act(async () => {
     window.dispatchEvent(new Event('focus'));
   });
   expect(host.querySelector('[data-chat-thread]')).toBeNull();
   expect(host.querySelector('[role="alert"]')?.textContent).toContain(
-    'Source Agent was deleted',
+    'remoteConversation.sourceNodeUnavailable',
+  );
+});
+
+it.each([
+  ['conversation_owner_missing', 'sourceNodeUnavailable'],
+  ['missing_node_content', 'sourceNodeUnavailable'],
+  ['canvas_not_found', 'sourceSpaceUnavailable'],
+])(
+  'explains %s on the next poll and recovers on Retry',
+  async (code, message) => {
+    vi.useFakeTimers();
+    await render();
+    mocks.getOwner.mockRejectedValueOnce(
+      new ApiError(404, { code }, 'Internal lookup details'),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4999);
+    });
+    expect(mocks.getOwner).toHaveBeenCalledTimes(1);
+    expect(
+      host
+        .querySelector('[data-chat-thread]')
+        ?.getAttribute('data-unavailable'),
+    ).toBe('false');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(mocks.getOwner).toHaveBeenCalledTimes(2);
+    expect(host.querySelector('[data-chat-thread]')).toBeNull();
+    expect(host.querySelector('[role="alert"] p')?.textContent).toBe(
+      `remoteConversation.${message}`,
+    );
+    const retry = host.querySelector<HTMLButtonElement>(
+      '[role="alert"] button',
+    );
+    assert(retry);
+    await act(async () => retry.click());
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(host.querySelector('[data-chat-thread="thread"]')).not.toBeNull();
+    expect(
+      Object.values(useRemoteConversationOwnerStore.getState().entries)[0],
+    ).not.toHaveProperty('errorCode');
+  },
+);
+
+it('does not label an unrelated lookup failure as a deleted source', async () => {
+  mocks.getOwner.mockRejectedValueOnce(
+    new ApiError(404, {}, 'Lookup route unavailable'),
+  );
+  await render();
+  expect(host.querySelector('[role="alert"] p')?.textContent).toBe(
+    'Lookup route unavailable',
   );
 });
 

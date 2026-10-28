@@ -1,5 +1,7 @@
 {
   "remoteConversation": {
+    "sourceNodeUnavailable": "来源 Agent 节点已删除或不可用，无法继续操作此对话。",
+    "sourceSpaceUnavailable": "来源 Space 已删除或不可用，无法继续操作此对话。",
     "openSpace": "进入 Space",
     "loading": "正在加载对话…",
     "placeholder": "输入消息…",

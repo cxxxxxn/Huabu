@@ -28,6 +28,7 @@ import {
   rebuildTurnMessages,
   renderInternalAgentInputs,
 } from '../agent/conversation/prompt/build-prompt.js';
+import { renderInkRecognition } from '../agent/conversation/prompt/ink-ocr.js';
 import { renderNodes } from '../agent/conversation/prompt/node-element.js';
 import { buildHistoryFromTurns } from '../agent/conversation/transcript/history.js';
 
@@ -190,6 +191,99 @@ it.each(['jsonl', 'sqlite'])(
     if (user.role !== 'user') throw new Error('Expected user message');
     expect(user.attachments).toHaveLength(1);
     expect(user.attachments?.[0].originNodeId).toBe(nodes[0].id);
+  },
+);
+
+it.each(['jsonl', 'sqlite'])(
+  'rebases attachment content links in captured and rebuilt history in %s',
+  async (format) => {
+    const input = envelope();
+    delete input.user.inputKind;
+    input.focus = {
+      selection: {
+        refs: [],
+        selectedIds: [],
+        imageAttachments: [],
+        snapshotAttachments: [],
+      },
+    };
+    const content = [
+      'Keep node-note and thread-original as prose.',
+      '![chart](/api/canvas/source/artifact/chart.png)',
+      '[Note](/canvas/source?node=node-note)',
+      '[Other](/canvas/other?node=node-note)',
+      '[External](https://example.com/chart.png)',
+    ].join('\n');
+    input.user.text = content;
+    input.user.attachments[0] = {
+      ...input.user.attachments[0],
+      content,
+      label: 'node-note',
+      filename: 'node-note.md',
+    };
+    const rendered = await renderInternalAgentInputs(input, {
+      canvasId: 'source',
+    });
+    const { nodes, turn } = await importTurn(format, {
+      request: createChatSubmission(input, rendered),
+      transcript: [],
+    });
+    const imported = chatEnvelopeSchema.parse(turn.request?.content);
+    const expected = content
+      .replace('/api/canvas/source/artifact/', '/api/canvas/target/artifact/')
+      .replace(
+        '/canvas/source?node=node-note',
+        `/canvas/target?node=${nodes[0].id}`,
+      );
+    expect(imported.user.attachments[0]).toEqual({
+      ...input.user.attachments[0],
+      content: expected,
+      originNodeId: nodes[0].id,
+    });
+    expect(imported.user.text).toBe(content);
+    for (const request of [turn.request, createChatSubmission(imported)]) {
+      const replay = await rebuildTurnMessages(
+        { ...turn, request },
+        { canvasId: 'target' },
+      );
+      expect(JSON.stringify(replay)).toContain(
+        JSON.stringify(expected).slice(1, -1),
+      );
+    }
+  },
+);
+
+it.each(['jsonl', 'sqlite'])(
+  'rebases captured OCR origins without changing transcription in %s',
+  async (format) => {
+    const input = envelope();
+    const recognition = {
+      provider: 'azure-vision' as const,
+      apiVersion: '2024-02-01',
+      originNodeIds: ['node-ink', 'node-note', 'node-outside'],
+      lines: [{ text: 'Keep node-ink & node-note unchanged', confidence: 0.9 }],
+    };
+    input.focus.selection.inkRecognition = recognition;
+    const ocr = renderInkRecognition(recognition);
+    const { nodes, turn } = await importTurn(format, {
+      request: createChatSubmission(input, [{ type: 'text', text: ocr }]),
+      transcript: [],
+    });
+    const mapped = {
+      ...recognition,
+      originNodeIds: [nodes[1].id, nodes[0].id, 'node-outside'],
+    };
+    expect(
+      chatEnvelopeSchema.parse(turn.request?.content).focus.selection
+        .inkRecognition,
+    ).toEqual(mapped);
+    expect(turn.request?.rendered).toEqual([
+      { type: 'text', text: renderInkRecognition(mapped) },
+    ]);
+    const replay = await rebuildTurnMessages(turn, { canvasId: 'target' });
+    expect(JSON.stringify(replay)).toContain(
+      JSON.stringify(renderInkRecognition(mapped)).slice(1, -1),
+    );
   },
 );
 
@@ -458,11 +552,17 @@ it.each(['jsonl', 'sqlite'])(
     const input = envelope();
     const screenshot = 'data:image/png;base64,AAAA';
     input.user.text = 'Keep node-note unchanged';
+    input.focus.selection.inkRecognition = {
+      provider: 'azure-vision',
+      apiVersion: '2024-02-01',
+      originNodeIds: ['node-ink', 'node-note'],
+      lines: [{ text: 'Keep node-ink unchanged' }],
+    };
     input.focus.selection.snapshotAttachments = [
       {
         type: 'image',
         source: 'selection',
-        originNodeIds: ['node-ink'],
+        originNodeIds: ['node-ink', 'node-note'],
         url: screenshot,
       },
     ];
@@ -507,7 +607,8 @@ it.each(['jsonl', 'sqlite'])(
     const json = JSON.stringify(turn.request?.rendered);
     expect(json).toContain(`nodeId\\":\\"${nodes[1].id}`);
     expect(json).toContain(`targetNodeId\\":\\"${nodes[0].id}`);
-    expect(json).toContain(`origin=\\"${nodes[1].id}\\"`);
+    expect(json).toContain(`origin=\\"${nodes[1].id}, ${nodes[0].id}\\"`);
+    expect(json).toContain(`origin=\\"${nodes[1].id} ${nodes[0].id}\\"`);
     expect(json).toContain('Keep node-note unchanged');
     expect(json).toContain('/do node-note');
     expect(json).toContain('"data":"AAAA"');

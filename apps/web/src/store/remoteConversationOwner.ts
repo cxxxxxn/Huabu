@@ -19,6 +19,7 @@ export const conversationOwnerKey = (
 interface OwnerEntry {
   owner?: AgentConversationOwnerResponse;
   error?: string;
+  errorCode?: string;
 }
 
 export const useRemoteConversationOwnerStore = create<{
@@ -68,6 +69,7 @@ export function refreshConversationOwner(
               ? { owner: state.entries[key]?.owner }
               : {}),
             error: error instanceof Error ? error.message : String(error),
+            ...(error instanceof ApiError ? { errorCode: error.code } : {}),
           },
         },
       }));

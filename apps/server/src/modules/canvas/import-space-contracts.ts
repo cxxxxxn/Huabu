@@ -76,7 +76,7 @@ const groundingFields = {
 const attachmentFields = {
   type: null,
   source: null,
-  content: null,
+  content: 'link',
   label: null,
   filename: null,
   originNodeId: 'nodeId',
@@ -293,7 +293,7 @@ export function rewriteImportedInputs(
   const xmlReference = (value: string) => xmlIds.get(value) ?? value;
   const markup = (raw: string): string =>
     links(raw).replace(
-      /<(node|edge|attachment)\b[^>]*>/g,
+      /<(node|edge|attachment|ink_ocr)\b[^>]*>/g,
       (tag, kind: string) =>
         tag.replace(
           /\b(id|from|to|source|target|origin)="([^"]*)"/g,
@@ -305,9 +305,10 @@ export function rewriteImportedInputs(
                   ? ['from', 'to', 'source', 'target'].includes(key)
                   : key === 'origin';
             if (!isReference) return attribute;
+            const separator = kind === 'ink_ocr' ? ' ' : ', ';
             const mapped =
               key === 'origin'
-                ? value.split(', ').map(xmlReference).join(', ')
+                ? value.split(separator).map(xmlReference).join(separator)
                 : xmlReference(value);
             return `${key}="${mapped}"`;
           },

@@ -93,6 +93,13 @@ export function SpaceConversationPreview({
   const owner = entry?.owner;
   const spaceTitle =
     owner?.spaceTitle?.trim() || t('spacePreview.untitledSpace');
+  const errorMessage =
+    entry?.errorCode === 'conversation_owner_missing' ||
+    entry?.errorCode === 'missing_node_content'
+      ? t('remoteConversation.sourceNodeUnavailable')
+      : entry?.errorCode === 'canvas_not_found'
+        ? t('remoteConversation.sourceSpaceUnavailable')
+        : entry?.error;
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex min-w-0 px-3 py-1">
@@ -129,7 +136,7 @@ export function SpaceConversationPreview({
           role="alert"
           className="text-danger flex flex-col items-start gap-2 p-3 text-sm"
         >
-          <p>{entry.error}</p>
+          <p>{errorMessage}</p>
           <Button variant="outline" size="sm" onClick={() => void refresh()}>
             {t('remoteConversation.retry')}
           </Button>
