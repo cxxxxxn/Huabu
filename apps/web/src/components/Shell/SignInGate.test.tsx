@@ -13,6 +13,8 @@ import { useIdentityStore } from '../../store/identityStore';
 vi.mock('../../pages/WorkspaceLoadingScreen', () => ({
   WorkspaceLoadingScreen: () => null,
 }));
+const unsaved = vi.hoisted(() => vi.fn(() => false));
+vi.mock('../../store/canvasStore', () => ({ hasUnsavedCanvasEdits: unsaved }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, values?: Record<string, string>) =>
@@ -132,6 +134,28 @@ describe('SignInGate', () => {
     for (let i = 0; i < 5; i++) await act(async () => {});
     expect(container.textContent).toContain('auth.noAccessTitle');
     expect(container.textContent).toContain('Carol');
+  });
+
+  it('warns that signing in again loses edits a lapsed session could not save', async () => {
+    routes['GET /api/identity'] = () => json(MEMBER);
+    await mount();
+    expect(container.textContent).toBe('app');
+
+    routes['GET /api/identity'] = () => json({}, 401);
+    routes['GET /bubble/v1/auth/authenticators'] = () =>
+      json({ authenticators: [ENTRA] });
+    const lapse = async (hasUnsaved: boolean) => {
+      unsaved.mockReturnValue(hasUnsaved);
+      await act(async () => {
+        window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT));
+      });
+      for (let i = 0; i < 5; i++) await act(async () => {});
+    };
+    await lapse(true);
+    expect(container.textContent).toContain('auth.signInTitle');
+    expect(container.textContent).toContain('auth.signInUnsaved');
+    await lapse(false);
+    expect(container.textContent).not.toContain('auth.signInUnsaved');
   });
 
   it('completes a provider redirect by handing the token to the Server', async () => {

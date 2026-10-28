@@ -30,6 +30,8 @@ type GateState =
       kind: 'signIn';
       authenticators: InteractiveAuthenticator[];
       error?: string;
+      /** The session lapsed with edits the Server never received. */
+      unsavedEdits?: boolean;
       /** The API is on another origin, where the session cookie never goes. */
       crossOrigin?: boolean;
     }
@@ -69,12 +71,16 @@ export function SignInGate({ children }: { children: ReactNode }) {
   // The provider's redirect is consumed once per mount, however often the
   // effect runs, so no check starts before its session does.
   const callback = useRef<Promise<string | undefined>>(undefined);
+  // Once the app has run, a lapsed session can strand its unsaved edits.
+  const appStarted = useRef(false);
 
   const check = useCallback(
     async (loginError?: string) => {
       const run = ++latestCheck.current;
       const settle = (next: GateState) => {
-        if (run === latestCheck.current) setState(next);
+        if (run !== latestCheck.current) return;
+        if (next.kind === 'ready') appStarted.current = true;
+        setState(next);
       };
       let identity: IdentityResponse | null;
       try {
@@ -108,11 +114,21 @@ export function SignInGate({ children }: { children: ReactNode }) {
         settle({ kind: 'ready' });
         return;
       }
-      settle(
-        sameOriginApi()
-          ? { kind: 'signIn', authenticators, error: loginError }
-          : { kind: 'signIn', authenticators: [], crossOrigin: true },
-      );
+      if (!sameOriginApi()) {
+        settle({ kind: 'signIn', authenticators: [], crossOrigin: true });
+        return;
+      }
+      // The provider's redirect leaves the page, and the expired session
+      // cannot save on the way out, so say what would be lost.
+      const unsavedEdits =
+        appStarted.current &&
+        (await import('../../store/canvasStore')).hasUnsavedCanvasEdits();
+      settle({
+        kind: 'signIn',
+        authenticators,
+        error: loginError,
+        unsavedEdits,
+      });
     },
     [setIdentity],
   );
@@ -234,6 +250,12 @@ export function SignInScreen({
             aria-live="assertive"
           >
             {t('auth.signOutFailed')}
+          </p>
+        )}
+
+        {state.kind === 'signIn' && state.unsavedEdits && (
+          <p className="text-danger-fg mt-3 text-center text-xs" role="alert">
+            {t('auth.signInUnsaved')}
           </p>
         )}
 

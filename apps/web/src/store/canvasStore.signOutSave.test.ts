@@ -19,7 +19,11 @@ vi.mock('../api/canvas', async (actual) => ({
 }));
 vi.mock('@/components/Common/Toast', () => ({ toast: vi.fn() }));
 
-import useCanvasStore, { savedBeforeSignOut } from './canvasStore';
+import useCanvasStore, {
+  hasUnsavedCanvasEdits,
+  savedBeforeSignOut,
+} from './canvasStore';
+import { pageLifecycle } from '../utils/pageLifecycle';
 
 import type * as apiModule from '../api';
 import type * as canvasApiModule from '../api/canvas';
@@ -66,10 +70,63 @@ describe('savedBeforeSignOut', () => {
     expect(api.putNodeContent).toHaveBeenCalled();
   });
 
+  it('stops a recording and awaits an upload before the last saves', async () => {
+    api.putNodeContent.mockImplementation(async () => ({ revision: 'r2' }));
+    const settle = vi.fn();
+    const unregister = pageLifecycle.register('audio:signout', { settle });
+    let finishUpload!: () => void;
+    let uploaded = false;
+    void pageLifecycle.run(
+      'importing',
+      () =>
+        new Promise<void>((resolve) => {
+          finishUpload = () => {
+            // The upload's node arrives only when it finishes.
+            state().updateNodeData(note.id, { content: 'Uploaded text' });
+            uploaded = true;
+            resolve();
+          };
+        }),
+    );
+    try {
+      const saved = savedBeforeSignOut();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(settle).toHaveBeenCalled();
+      expect(api.putNodeContent).not.toHaveBeenCalled();
+      finishUpload();
+      expect(await saved).toBe(true);
+      expect(uploaded).toBe(true);
+      expect(api.putNodeContent).toHaveBeenLastCalledWith(
+        'signout-canvas',
+        note.id,
+        expect.objectContaining({ content: 'Uploaded text' }),
+        undefined,
+      );
+    } finally {
+      unregister();
+    }
+  });
+
   it('confirms once the content save landed', async () => {
     api.putNodeContent.mockImplementation(async () => ({ revision: 'r2' }));
     state().updateNodeData(note.id, { content: 'Typed just before sign-out' });
     expect(await savedBeforeSignOut()).toBe(true);
     expect(api.putNodeContent).toHaveBeenCalled();
+  });
+});
+
+describe('hasUnsavedCanvasEdits', () => {
+  it('counts a queued, then a failed, content edit until one lands', async () => {
+    expect(hasUnsavedCanvasEdits()).toBe(false);
+    api.putNodeContent.mockRejectedValue(new Error('401 IDENTITY_REQUIRED'));
+    state().updateNodeData(note.id, { content: 'Typed as the session lapsed' });
+    expect(hasUnsavedCanvasEdits()).toBe(true);
+    await savedBeforeSignOut();
+    expect(hasUnsavedCanvasEdits()).toBe(true);
+
+    api.putNodeContent.mockImplementation(async () => ({ revision: 'r3' }));
+    state().updateNodeData(note.id, { content: 'Typed once signed in again' });
+    expect(await savedBeforeSignOut()).toBe(true);
+    expect(hasUnsavedCanvasEdits()).toBe(false);
   });
 });

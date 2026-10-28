@@ -24,6 +24,7 @@ import { useIdentityStore } from '../../../store/identityStore';
 import { useSettingsUiStore } from '../../../store/settingsUiStore';
 import { useShortcutsUiStore } from '../../../store/shortcutsUiStore';
 import { useWorkspaceStore } from '../../../store/workspaceStore';
+import { setDesktopInputFrozen } from '../../../utils/desktopInput';
 import { formatShortcut } from '../../../utils/platform';
 import { Button } from '../../Common/Button';
 import { cn } from '../../Common/cn';
@@ -91,14 +92,24 @@ export const AppMenu: React.FC<AppMenuProps> = ({
 
   // Ending the session first would leave queued Canvas saves without a
   // credential, so sign-out waits for them and stays if any did not land.
+  // Input stays frozen throughout, as for a desktop close, so no edit can
+  // start after the last save.
   const signOutKeepingEdits = async () => {
-    if (!(await savedBeforeSignOut())) {
-      toast(t('auth.signOutUnsaved'), { tone: 'danger' });
-      return;
+    setDesktopInputFrozen(true);
+    if (document.activeElement instanceof HTMLElement)
+      document.activeElement.blur();
+    let failure: 'auth.signOutUnsaved' | 'auth.signOutFailed';
+    try {
+      if (!(await savedBeforeSignOut())) failure = 'auth.signOutUnsaved';
+      else {
+        await signOut();
+        return;
+      }
+    } catch {
+      failure = 'auth.signOutFailed';
     }
-    await signOut().catch(() =>
-      toast(t('auth.signOutFailed'), { tone: 'danger' }),
-    );
+    setDesktopInputFrozen(false);
+    toast(t(failure), { tone: 'danger' });
   };
   const runAndClose = (fn: () => void) => () => {
     setIsOpen(false);

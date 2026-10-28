@@ -8,6 +8,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AppMenu } from './AppMenu';
 import { useIdentityStore } from '../../../store/identityStore';
+import {
+  isDesktopInputFrozen,
+  setDesktopInputFrozen,
+} from '../../../utils/desktopInput';
 
 import type * as DropdownMenuExports from '../../Common/DropdownMenu';
 import type { IdentityResponse } from '@huabu/shared';
@@ -226,8 +230,17 @@ describe('AppMenu', () => {
       Array.from(
         container!.querySelectorAll<HTMLElement>('[role="menuitem"]'),
       ).find((item) => item.textContent?.includes('auth.signOutAs'));
-    signOutMocks.saved.mockResolvedValueOnce(false);
+    let settleSave!: (saved: boolean) => void;
+    signOutMocks.saved.mockReturnValueOnce(
+      new Promise((resolve) => (settleSave = resolve)),
+    );
     await act(async () => signOutItem()?.click());
+    // No edit can start while the last saves run.
+    expect(isDesktopInputFrozen()).toBe(true);
+    expect(document.body.inert).toBe(true);
+    await act(async () => settleSave(false));
+    expect(isDesktopInputFrozen()).toBe(false);
+    expect(document.body.inert).toBe(false);
     expect(signOutMocks.signOut).not.toHaveBeenCalled();
     expect(signOutMocks.toast).toHaveBeenCalledWith('auth.signOutUnsaved', {
       tone: 'danger',
@@ -240,5 +253,13 @@ describe('AppMenu', () => {
     expect(signOutMocks.toast).toHaveBeenLastCalledWith('auth.signOutFailed', {
       tone: 'danger',
     });
+    expect(isDesktopInputFrozen()).toBe(false);
+
+    // A successful sign-out navigates away, so input stays frozen.
+    signOutMocks.saved.mockResolvedValueOnce(true);
+    signOutMocks.signOut.mockResolvedValueOnce();
+    await act(async () => signOutItem()?.click());
+    expect(isDesktopInputFrozen()).toBe(true);
+    setDesktopInputFrozen(false);
   });
 });

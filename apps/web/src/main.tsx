@@ -40,8 +40,9 @@ for (const el of [document.documentElement, document.body, rootElement]) {
 }
 
 const tabs = getElectronBridge()?.tabs;
-if (tabs && tabs.context.role !== 'shell') {
-  // Install before React mounts any window-level shortcut listeners.
+if (tabs?.context.role !== 'shell') {
+  // Install before React mounts any window-level shortcut listeners. It
+  // blocks input only while frozen: a desktop close or a sign-out.
   const removeInputGuard = installDesktopInputGuard();
   import.meta.hot?.dispose(removeInputGuard);
 }

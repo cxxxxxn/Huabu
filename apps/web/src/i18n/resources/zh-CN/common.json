@@ -636,6 +636,7 @@
     "signOutAs": "退出登录（{{name}}）",
     "deniedIntro": "该账户无法使用 {{appName}}。请退出登录后使用其他账户。",
     "signOutFailed": "无法退出登录。请检查网络连接后重试。",
+    "signInUnsaved": "部分更改尚未保存。重新登录会离开此页面，这些更改将会丢失。",
     "signOutUnsaved": "部分更改尚未保存，因此你仍处于登录状态。请等待保存完成或重试后再退出登录。"
   },
   "workspace": {

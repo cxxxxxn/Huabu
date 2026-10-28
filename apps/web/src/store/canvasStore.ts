@@ -1099,18 +1099,37 @@ export async function drainPendingSaves(): Promise<void> {
  * failed then would be lost.
  */
 export async function savedBeforeSignOut(): Promise<boolean> {
-  const { canvasId } = useCanvasStore.getState();
   try {
-    // The strict path an agent submission uses: structure and every node's
-    // content, failing on any retained structure or content failure.
-    if (canvasId) await saveCanvasForSubmission(canvasId);
-    else await drainPendingSaves();
+    // The desktop close path: stop recordings, await imports and uploads,
+    // then save structure and every node's content strictly, failing on any
+    // retained structure or content failure.
+    await pageLifecycle.prepare(new AbortController().signal);
+    const { canvasId } = useCanvasStore.getState();
     if (canvasId) await canvasEvents.flush(canvasId);
+    else await drainPendingSaves();
     await preprocessQueue.flushAll();
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether the open Canvas holds an edit the Server has not acknowledged:
+ * queued, in flight or failed. Leaving the page now would lose it.
+ */
+export function hasUnsavedCanvasEdits(): boolean {
+  const { canvasId, isSaving, pendingSave, versionConflict } =
+    useCanvasStore.getState();
+  if (!canvasId) return false;
+  return (
+    isSaving ||
+    pendingSave ||
+    versionConflict ||
+    structureScheduler.hasPending() ||
+    structureSaveErrors.has(canvasId) ||
+    nodeContentQueue.hasUnsavedContent(canvasId)
+  );
 }
 
 export class CanvasSubmissionSaveError extends Error {

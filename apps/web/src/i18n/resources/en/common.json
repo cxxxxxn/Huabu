@@ -636,6 +636,7 @@
     "signOutAs": "Sign out ({{name}})",
     "deniedIntro": "This account cannot use {{appName}}. Sign out to use another account.",
     "signOutFailed": "Could not sign out. Check your connection and try again.",
+    "signInUnsaved": "Some changes haven't been saved. Signing in again leaves this page, and they will be lost.",
     "signOutUnsaved": "Some changes haven't been saved yet, so you are still signed in. Wait for them to save or retry, then sign out again."
   },
   "workspace": {
