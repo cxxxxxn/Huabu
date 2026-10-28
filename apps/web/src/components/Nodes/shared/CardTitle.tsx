@@ -4,7 +4,8 @@
 import { useEffect, useRef } from 'react';
 
 import { Button } from '@/components/Common/Button';
-import { TextInput } from '@/components/Common/TextInput';
+import { cn } from '@/components/Common/cn';
+import { TextArea } from '@/components/Common/TextArea';
 
 export interface CardTitleEditor {
   active: boolean;
@@ -31,8 +32,10 @@ export function CardTitle({
   clamp?: boolean;
   editor?: CardTitleEditor;
 }) {
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const textRef = useRef<HTMLSpanElement>(null);
   const selectedOnPointerDown = useRef(false);
+  const selectedBeforeDoubleClick = useRef(false);
   const active = editor?.active ?? false;
   useEffect(() => {
     if (!active) return;
@@ -41,6 +44,7 @@ export function CardTitle({
   }, [active]);
   const text = (
     <span
+      ref={textRef}
       className={clamp ? 'line-clamp-2 min-w-0 wrap-anywhere' : 'min-w-0'}
       title={title}
     >
@@ -49,23 +53,51 @@ export function CardTitle({
   );
   return (
     <div
-      className="max-w-full min-w-0"
+      className={cn('relative max-w-full min-w-0', active && 'flex-1')}
       onPointerDownCapture={() => {
         selectedOnPointerDown.current = !!selected;
       }}
-      onDoubleClick={(event) => event.stopPropagation()}
+      onClickCapture={(event) => {
+        // Selection from the first click must not turn that same double-click into a rename.
+        if (event.detail === 1)
+          selectedBeforeDoubleClick.current = selectedOnPointerDown.current;
+      }}
+      onDoubleClick={(event) => {
+        if (active) {
+          event.stopPropagation();
+          return;
+        }
+        const text = textRef.current;
+        if (!editor || !selectedBeforeDoubleClick.current || !text) return;
+        const range = document.createRange();
+        range.selectNodeContents(text);
+        const onText = [...range.getClientRects()].some(
+          (rect) =>
+            event.clientX >= rect.left &&
+            event.clientX <= rect.right &&
+            event.clientY >= rect.top &&
+            event.clientY <= rect.bottom,
+        );
+        if (!onText) return;
+        event.preventDefault();
+        event.stopPropagation();
+        editor.onStart();
+      }}
     >
-      {editor?.active ? (
-        <TextInput
+      {editor?.active && (
+        <TextArea
           ref={inputRef}
+          rows={1}
           value={editor.draft}
           readOnly={editor.saving}
           maxLength={editor.maxLength}
           aria-label={renameLabel}
           aria-invalid={!!editor.error}
-          className="nodrag nopan w-full min-w-0 p-0"
+          className="nodrag nopan nowheel focus:border-info-light aria-invalid:focus:border-danger absolute inset-0 block h-full min-h-0 w-full min-w-0 resize-none overflow-x-hidden overflow-y-auto p-0 wrap-anywhere focus:ring-0"
           style={{ font: 'inherit', lineHeight: 'inherit' }}
-          onChange={(event) => editor.onChange(event.target.value)}
+          onChange={(event) =>
+            editor.onChange(event.target.value.replace(/[\r\n]/g, ''))
+          }
           onBlur={editor.onCommit}
           onKeyDown={(event) => {
             event.stopPropagation();
@@ -83,10 +115,17 @@ export function CardTitle({
             }
           }}
         />
-      ) : selected && editor ? (
+      )}
+      {editor ? (
         <Button
           variant="ghost"
-          className="nodrag nopan text-fg-default h-auto min-w-0 justify-start p-0 text-left"
+          className={cn(
+            'text-fg-default h-auto min-w-0 justify-start p-0 text-left',
+            active && 'invisible',
+            selected
+              ? 'nodrag nopan'
+              : 'cursor-inherit enabled:hover:bg-transparent',
+          )}
           tooltipWrapperClassName="min-w-0 max-w-full"
           style={{
             font: 'inherit',
@@ -95,9 +134,10 @@ export function CardTitle({
           }}
           title={renameLabel}
           aria-label={renameLabel}
+          aria-hidden={active || undefined}
+          tabIndex={selected && !active ? 0 : -1}
           onClick={(event) => {
-            if (selectedOnPointerDown.current || event.detail === 0)
-              editor.onStart();
+            if (selected && event.detail === 0) editor.onStart();
           }}
         >
           {text}

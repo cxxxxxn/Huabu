@@ -1,4 +1,13 @@
 {
+  "remoteConversation": {
+    "sourceNodeUnavailable": "The source Agent node has been deleted or is unavailable. You can no longer interact with this conversation.",
+    "sourceSpaceUnavailable": "The source Space has been deleted or is unavailable. You can no longer interact with this conversation.",
+    "openSpace": "Open Space",
+    "loading": "Loading conversation…",
+    "placeholder": "Message…",
+    "retry": "Retry",
+    "canvasAction": "Open the source Space to use canvas actions"
+  },
   "desktopTabs": {
     "label": "Open Spaces",
     "newTab": "New tab",
@@ -1036,6 +1045,8 @@
     "failedSwitchMode": "Failed to switch mode",
     "failedSwitchModeWithMessage": "Failed to switch mode: {{message}}",
     "failedSwitchModel": "Failed to switch model",
+    "settingsUnavailable": "Conversation settings are temporarily unavailable. Please try again.",
+    "settingsUpdatePending": "A settings update is already in progress.",
     "failedSwitchModelWithMessage": "Failed to switch model: {{message}}",
     "failedUpdateOption": "Failed to update option",
     "failedUpdateOptionWithMessage": "Failed to update option: {{message}}",

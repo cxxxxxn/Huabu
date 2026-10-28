@@ -31,6 +31,12 @@ import useCanvasStore, {
   settleNodePreprocess,
 } from './canvasStore';
 import { CanvasConflictError } from '../api/canvas';
+import {
+  openPreviewNode,
+  openSpaceConversation,
+} from './previewWorkspace/actions';
+import { createEmptyWorkspace } from './previewWorkspace/model';
+import { usePreviewWorkspaceStore } from './previewWorkspace/store';
 
 import type * as apiModule from '../api';
 import type * as canvasApiModule from '../api/canvas';
@@ -62,6 +68,7 @@ const note: Node = {
 let version: number;
 let topology: Node[];
 let body: string | undefined;
+let serverLabel: string;
 let tombstone: boolean;
 let structureGate: ReturnType<typeof deferred> | undefined;
 let deleteGate: ReturnType<typeof deferred> | undefined;
@@ -80,6 +87,7 @@ beforeEach(() => {
   version = 1;
   topology = [note];
   body = note.data.content as string;
+  serverLabel = 'Restore note';
   tombstone = false;
   calls = [];
   canvasHistoryManager.activate('restore-canvas', true);
@@ -152,7 +160,7 @@ beforeEach(() => {
       calls.push('content:committed');
       return {
         nodeId: note.id,
-        label: 'Restore note',
+        label: serverLabel,
         rev: nodeRevisionOf({ content: body }),
       };
     },
@@ -170,7 +178,7 @@ beforeEach(() => {
               ...n,
               data: {
                 ...n.data,
-                label: 'Restore note',
+                label: serverLabel,
                 content: body ?? '',
                 contentMissing: body === undefined,
               },
@@ -207,6 +215,37 @@ async function tick() {
 }
 
 describe('undo/redo persistence ordering', () => {
+  it('preprocesses the edited Note and applies its derived title after opening a Space conversation', async () => {
+    topology = [{ ...note, data: { ...note.data, labelSource: 'auto' } }];
+    await state().loadCanvas('restore-canvas');
+    usePreviewWorkspaceStore.setState({
+      canvasId: 'restore-canvas',
+      workspace: createEmptyWorkspace(),
+    });
+    const tabId = openPreviewNode(note.id, { transient: false });
+    state().updateNodeData(note.id, { content: '# Updated heading' });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(api.preprocessNode).not.toHaveBeenCalled();
+    api.preprocessNode.mockImplementation(async () => {
+      serverLabel = 'Updated heading';
+      return { success: true, suggestedLabel: serverLabel };
+    });
+    openSpaceConversation('child-canvas', 'agent', 'thread');
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(api.preprocessNode).toHaveBeenCalledExactlyOnceWith(
+      'restore-canvas',
+      note.id,
+      expect.objectContaining({
+        snapshot: expect.objectContaining({ content: '# Updated heading' }),
+      }),
+    );
+    expect(state().nodes[0].data.label).toBe('Updated heading');
+    expect(body).toBe('# Updated heading');
+    expect(
+      usePreviewWorkspaceStore.getState().workspace.tabs[tabId],
+    ).toBeDefined();
+  });
+
   it('persists grouped root exits with explicit null parents through undo and redo', async () => {
     const frame: Node = {
       id: 'node-source-frame',

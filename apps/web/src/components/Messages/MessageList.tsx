@@ -34,6 +34,7 @@ import type { MessageListPreferredPosition } from './messageListScroll';
 import type { ChatMessage } from '../../store/chatTypes';
 
 interface MessageListProps {
+  onLatestVisibleChange?: (visible: boolean) => void;
   messages: ChatMessage[];
   recentTurnCount?: number;
   activationId?: number;
@@ -72,6 +73,7 @@ interface MessageListProps {
 }
 
 export const MessageList = memo(function MessageList({
+  onLatestVisibleChange,
   messages: cachedMessages,
   recentTurnCount,
   activationId,
@@ -156,10 +158,11 @@ export const MessageList = memo(function MessageList({
     const container = containerRef.current;
     if (!container || !canScroll()) return;
     const atBottom = isMessageListNearBottom(container);
+    onLatestVisibleChange?.(atBottom);
     setIsAwayFromBottom(!atBottom);
     if (atBottom) setHasNewMessage(false);
     lastScrollTopRef.current = container.scrollTop;
-  }, [canScroll]);
+  }, [canScroll, onLatestVisibleChange]);
 
   const finishPrependAnchoring = useCallback(() => {
     prependAnchorRef.current = null;

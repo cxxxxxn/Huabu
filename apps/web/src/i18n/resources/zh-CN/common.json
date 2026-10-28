@@ -1,4 +1,13 @@
 {
+  "remoteConversation": {
+    "sourceNodeUnavailable": "来源 Agent 节点已删除或不可用，无法继续操作此对话。",
+    "sourceSpaceUnavailable": "来源 Space 已删除或不可用，无法继续操作此对话。",
+    "openSpace": "进入 Space",
+    "loading": "正在加载对话…",
+    "placeholder": "输入消息…",
+    "retry": "重试",
+    "canvasAction": "请进入原 Space 使用画布操作"
+  },
   "desktopTabs": {
     "label": "已打开的 Space",
     "newTab": "新标签页",
@@ -1036,6 +1045,8 @@
     "failedSwitchMode": "切换模式失败",
     "failedSwitchModeWithMessage": "切换模式失败：{{message}}",
     "failedSwitchModel": "切换模型失败",
+    "settingsUnavailable": "暂时无法修改对话配置，请稍后重试。",
+    "settingsUpdatePending": "配置正在更新，请稍候。",
     "failedSwitchModelWithMessage": "切换模型失败：{{message}}",
     "failedUpdateOption": "更新选项失败",
     "failedUpdateOptionWithMessage": "更新选项失败：{{message}}",

@@ -139,7 +139,11 @@ export const ChatContextSources = memo(function ChatContextSources({
   onActionComplete?: () => void;
 }) {
   const { t } = useTranslation();
-  const { threadId, canvasId, conversationView } = useChatSession();
+  const {
+    threadId,
+    ownerCanvasId: canvasId,
+    conversationView,
+  } = useChatSession();
   const nodes = useCanvasStore((s) => s.nodes);
   const activeCanvasId = useCanvasStore((s) => s.canvasId);
   const getAgentChatContext = useCanvasStore((s) => s.getAgentChatContext);
@@ -155,7 +159,9 @@ export const ChatContextSources = memo(function ChatContextSources({
   const setExcludeCanvasSelection = useChatStore(
     (s) => s.setExcludeCanvasSelection,
   );
-  const selectionAttachment = useChatStore((s) => s.selectionAttachment);
+  const selectionAttachment = useChatStore((s) =>
+    activeCanvasId === canvasId ? s.selectionAttachment : null,
+  );
   const addPendingAttachment = useChatStore((s) => s.addPendingAttachment);
   const removePendingAttachment = useChatStore(
     (s) => s.removePendingAttachment,

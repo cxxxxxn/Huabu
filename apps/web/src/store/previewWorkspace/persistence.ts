@@ -75,6 +75,22 @@ function removeRaw(key: string): void {
 function parseTarget(value: unknown, canvasId: string): PreviewTarget | null {
   if (!value || typeof value !== 'object') return null;
   const candidate = value as Record<string, unknown>;
+  if (
+    candidate.kind === 'conversation' &&
+    typeof candidate.canvasId === 'string' &&
+    candidate.canvasId.length > 0 &&
+    typeof candidate.nodeId === 'string' &&
+    candidate.nodeId.length > 0 &&
+    typeof candidate.threadId === 'string' &&
+    candidate.threadId.length > 0
+  ) {
+    return {
+      kind: 'conversation',
+      canvasId: candidate.canvasId,
+      nodeId: candidate.nodeId,
+      threadId: candidate.threadId,
+    };
+  }
   if (candidate.canvasId !== canvasId) return null;
 
   if (
