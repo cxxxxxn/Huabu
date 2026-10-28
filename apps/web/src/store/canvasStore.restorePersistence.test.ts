@@ -923,4 +923,52 @@ describe('undo/redo persistence ordering', () => {
     expect(state().nodes).toEqual([]);
     expect(state().pendingContentNodeIds()).toEqual([]);
   });
+
+  it('does not release a restored body when an issued structure retry finishes during discard', async () => {
+    await deleted();
+    state().undo();
+    api.putCanvas.mockRejectedValueOnce(new Error('structure unavailable'));
+    await expect(drainPendingSaves()).rejects.toThrow('Restored node content');
+    const gate = (structureGate = deferred());
+    const retry = state().saveCanvas();
+    await tick();
+    expect(api.putCanvas).toHaveBeenCalledTimes(2);
+    const discarding = discardPendingSaves('restore-canvas');
+    await tick();
+    expect(state().pendingContentNodeIds()).toContain(note.id);
+    gate.resolve();
+    await Promise.all([retry, discarding]);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(api.putNodeContent).not.toHaveBeenCalled();
+    expect(body).toBeUndefined();
+    expect(state().canvasId).toBe('');
+    await state().loadCanvas('restore-canvas');
+    expect(state().nodes[0].data.contentMissing).toBe(true);
+    expect(state().pendingContentNodeIds()).toEqual([]);
+  });
+
+  it('retains the held body and restores save admission when discard fails', async () => {
+    await deleted();
+    state().undo();
+    const gate = (structureGate = deferred());
+    const saving = state().saveCanvas();
+    await tick();
+    const waitForDeletes = vi
+      .spyOn(canvasHistoryManager, 'waitForDeletes')
+      .mockRejectedValueOnce(new Error('delete settlement failed'));
+    const discarding = expect(
+      discardPendingSaves('restore-canvas'),
+    ).rejects.toThrow('delete settlement failed');
+    gate.resolve();
+    await Promise.all([saving, discarding]);
+    waitForDeletes.mockRestore();
+    expect(api.putNodeContent).not.toHaveBeenCalled();
+    expect(state().canvasId).toBe('restore-canvas');
+    expect(state().isLoading).toBe(false);
+    expect(state().pendingContentNodeIds()).toContain(note.id);
+    await state().saveCanvas();
+    await drainPendingSaves();
+    expect(api.putNodeContent).toHaveBeenCalledOnce();
+    expect(body).toBe(note.data.content);
+  });
 });

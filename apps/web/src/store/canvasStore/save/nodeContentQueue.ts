@@ -151,7 +151,8 @@ export type NodeContentQueue = {
   flushAllForSubmission(canvasId: string): Promise<void>;
   /** Requeue retained non-conflict failures once for a new save attempt. */
   retryFailedSaves(canvasId: string): void;
-  cancelPending(): void;
+  /** Stop new writes and restore releases until discard settles; returns resume. */
+  suspendCanvas(canvasId: string): () => void;
   /** Forget explicitly discarded edits after issued writes have settled. */
   discardCanvas(canvasId: string): void;
 
@@ -223,6 +224,7 @@ export function createNodeContentQueue(opts: {
   onRestoredContentPersisted?: (canvasId: string, nodeId: string) => void;
 }): NodeContentQueue {
   const debouncer = createPerKeyDebouncer<string>(opts.delayMs);
+  const suspendedCanvases = new Set<string>();
   const inflight = new Map<string, Promise<void>>();
   const restores = new Map<string, { canvasId: string; token: object }>();
   const restoredContent = new Map<string, string>();
@@ -404,7 +406,11 @@ export function createNodeContentQueue(opts: {
     nodeId: string,
     kOpts?: { keepalive?: boolean },
   ): Promise<void> {
-    if (opts.getState().canvasId !== canvasId) return;
+    if (
+      opts.getState().canvasId !== canvasId ||
+      suspendedCanvases.has(canvasId)
+    )
+      return;
     const generation = generations.get(nodeId);
     await opts.waitForCreation?.(canvasId, nodeId);
     if (
@@ -413,6 +419,7 @@ export function createNodeContentQueue(opts: {
     )
       return;
     while (true) {
+      if (suspendedCanvases.has(canvasId)) return;
       const requested = new Map(pendingFields.get(nodeId));
       const body = buildRequest(nodeId, new Set(requested.keys()));
       if (!body) return;
@@ -498,7 +505,8 @@ export function createNodeContentQueue(opts: {
         });
       }
       if (pendingFields.get(nodeId)?.size) schedule(canvasId, nodeId);
-      if (completedRestore) opts.onRestoredContentPersisted?.(canvasId, nodeId);
+      if (completedRestore && !suspendedCanvases.has(canvasId))
+        opts.onRestoredContentPersisted?.(canvasId, nodeId);
       return;
     }
   }
@@ -916,7 +924,7 @@ export function createNodeContentQueue(opts: {
    * if the user has since navigated away.
    */
   function schedule(canvasId: string, nodeId: string): void {
-    if (!canvasId || !nodeId) return;
+    if (!canvasId || !nodeId || suspendedCanvases.has(canvasId)) return;
     debouncer.schedule(nodeId, () => {
       // Conflicts are surfaced via `tryRename`'s own await path; other
       // failures are handled (toast + optional label-revert) by
@@ -957,7 +965,11 @@ export function createNodeContentQueue(opts: {
     },
 
     acknowledgeRestores(canvasId, tokens) {
-      if (opts.getState().canvasId !== canvasId) return;
+      if (
+        opts.getState().canvasId !== canvasId ||
+        suspendedCanvases.has(canvasId)
+      )
+        return;
       for (const [id, token] of tokens) {
         const entry = restores.get(id);
         if (entry?.canvasId !== canvasId || entry.token !== token) continue;
@@ -1126,8 +1138,12 @@ export function createNodeContentQueue(opts: {
       for (const id of ids) this.forgetNode(id);
     },
 
-    cancelPending() {
-      debouncer.cancelAll();
+    suspendCanvas(canvasId) {
+      suspendedCanvases.add(canvasId);
+      if (opts.getState().canvasId === canvasId) debouncer.cancelAll();
+      return () => {
+        suspendedCanvases.delete(canvasId);
+      };
     },
 
     flushAllKeepalive() {

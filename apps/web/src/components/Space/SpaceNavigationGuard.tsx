@@ -8,14 +8,21 @@ import { useBlocker } from 'react-router-dom';
 import { Button } from '@/components/Common/Button';
 import { Loading } from '@/components/Common/Loading';
 import { Modal } from '@/components/Common/Modal';
+import { toast } from '@/components/Common/Toast';
+import {
+  getElectronBridge,
+  requireDesktopTabSuccess,
+} from '@/hooks/useElectron';
 import useCanvasStore, {
   discardPendingSaves,
   drainPendingSaves,
 } from '@/store/canvasStore';
+import { desktopNavigation } from '@/utils/desktopNavigation';
 
 /** Keep mounted in the router root so the blocker survives route changes. */
 export function SpaceNavigationGuard() {
   const { t } = useTranslation();
+  const tabs = getElectronBridge()?.tabs;
   const stayRef = useRef<HTMLButtonElement>(null);
   const discarding = useRef(false);
   const [isDraining, setIsDraining] = useState(false);
@@ -24,11 +31,26 @@ export function SpaceNavigationGuard() {
   const [discardError, setDiscardError] = useState(false);
   const blocker = useBlocker(
     ({ currentLocation, nextLocation }) =>
-      currentLocation.pathname.startsWith('/canvas/') &&
-      currentLocation.pathname !== nextLocation.pathname,
+      desktopNavigation(tabs?.context, nextLocation) !== null ||
+      (currentLocation.pathname.startsWith('/canvas/') &&
+        currentLocation.pathname !== nextLocation.pathname),
   );
   useEffect(() => {
     if (blocker.state !== 'blocked') return;
+    const target = desktopNavigation(tabs?.context, blocker.location);
+    if (tabs && target) {
+      void tabs
+        .open(target)
+        .then(requireDesktopTabSuccess)
+        .catch((error: unknown) => {
+          console.error('[desktop-tabs] Could not open Space:', error);
+          toast(error instanceof Error ? error.message : String(error), {
+            tone: 'danger',
+          });
+        })
+        .finally(() => blocker.reset?.());
+      return;
+    }
     let cancelled = false;
     const canvasId = useCanvasStore.getState().canvasId;
     setIsDraining(false);
@@ -55,7 +77,7 @@ export function SpaceNavigationGuard() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [blocker]);
+  }, [blocker, tabs]);
 
   const stay = () => {
     if (discarding.current) return;

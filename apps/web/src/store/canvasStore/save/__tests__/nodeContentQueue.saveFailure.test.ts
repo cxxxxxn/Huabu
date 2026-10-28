@@ -69,6 +69,78 @@ beforeEach(() => {
 });
 
 describe('nodeContentQueue — save-failure surfacing', () => {
+  it('keeps failure records while suspended and permits retry after resuming', async () => {
+    const node = noteNode('v1');
+    const { queue } = makeQueue(node);
+    putMock.mockRejectedValue(new Error('offline'));
+    await expect(queue.flushNow('c1', node.id)).rejects.toThrow('offline');
+    const resume = queue.suspendCanvas('c1');
+    putMock.mockResolvedValue({ nodeId: node.id, label: 'Note', rev: 'saved' });
+    queue.retryFailedSaves('c1');
+    await queue.flushNow('c1', node.id);
+    await expect(queue.flushAllForSubmission('c1')).rejects.toThrow(
+      'Content saves failed',
+    );
+    expect(putMock).toHaveBeenCalledOnce();
+    resume();
+    queue.retryFailedSaves('c1');
+    await queue.flushAllForSubmission('c1');
+    expect(putMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not issue a queued PUT after its creation dependency settles during suspension', async () => {
+    const node = noteNode('v1');
+    const { state } = makeQueue(node);
+    let resolve!: () => void;
+    const creation = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const waitForCreation = vi.fn(() => creation);
+    const queue = createNodeContentQueue({
+      delayMs: 0,
+      getState: () => state,
+      waitForCreation,
+    });
+    const saving = queue.flushNow('c1', node.id);
+    await tick();
+    expect(waitForCreation).toHaveBeenCalledOnce();
+    const resume = queue.suspendCanvas('c1');
+    resolve();
+    await saving;
+    expect(putMock).not.toHaveBeenCalled();
+    resume();
+    putMock.mockResolvedValue({ nodeId: node.id, label: 'Note', rev: 'saved' });
+    await queue.flushNow('c1', node.id);
+    expect(putMock).toHaveBeenCalledOnce();
+  });
+
+  it('does not start a rebased retry after an issued PUT settles during suspension', async () => {
+    const node = noteNode('v1');
+    const { queue } = makeQueue(node);
+    let reject!: (error: Error) => void;
+    putMock.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, fail) => {
+          reject = fail;
+        }),
+    );
+    const saving = queue.flushNow('c1', node.id);
+    await tick();
+    expect(putMock).toHaveBeenCalledOnce();
+    queue.seedBaselines([noteNode('server revision')]);
+    const resume = queue.suspendCanvas('c1');
+    reject(
+      new CanvasConflictError({
+        code: 'NODE_CONTENT_CONFLICT',
+        message: 'revision advanced',
+        currentRev: 'server',
+      }),
+    );
+    await saving;
+    expect(putMock).toHaveBeenCalledOnce();
+    resume();
+  });
+
   it.each([
     new Error('offline'),
     new NodeDuplicateFilesError({

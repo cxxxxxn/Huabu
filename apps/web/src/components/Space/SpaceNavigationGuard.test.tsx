@@ -6,10 +6,34 @@ import { createRoot, type Root } from 'react-dom/client';
 import { createMemoryRouter, Outlet, RouterProvider } from 'react-router-dom';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
+import { toast } from '@/components/Common/Toast';
 import { discardPendingSaves, drainPendingSaves } from '@/store/canvasStore';
 
 import { SpaceNavigationGuard } from './SpaceNavigationGuard';
 
+import type * as Electron from '@/hooks/useElectron';
+import type {
+  DesktopTabContext,
+  DesktopTabsApi,
+} from '@huabu/shared/desktop-tabs';
+
+const desktop = vi.hoisted(() => {
+  const context: DesktopTabContext = {
+    role: 'space',
+    canvasId: 'A',
+    workspaceId: 'workspace',
+  };
+  return {
+    enabled: false,
+    tabs: { context, open: vi.fn<DesktopTabsApi['open']>() },
+  };
+});
+vi.mock('@/hooks/useElectron', async (importActual) => ({
+  ...(await importActual<typeof Electron>()),
+  getElectronBridge: () =>
+    desktop.enabled ? { tabs: desktop.tabs } : undefined,
+}));
+vi.mock('@/components/Common/Toast', () => ({ toast: vi.fn() }));
 vi.mock('@/store/canvasStore', () => ({
   default: { getState: () => ({ canvasId: 'A' }) },
   drainPendingSaves: vi.fn(),
@@ -27,6 +51,10 @@ let router: ReturnType<typeof createMemoryRouter>;
 
 beforeEach(async () => {
   vi.resetAllMocks();
+  desktop.enabled = false;
+  desktop.tabs.context.role = 'space';
+  desktop.tabs.context.canvasId = 'A';
+  desktop.tabs.open.mockResolvedValue({ ok: true });
   vi.mocked(drainPendingSaves).mockRejectedValue(new Error('disk unavailable'));
   vi.mocked(discardPendingSaves).mockResolvedValue(undefined);
   host = document.createElement('div');
@@ -136,4 +164,55 @@ it('does not block hash or search changes within the same Space', async () => {
   await navigate('/canvas/A?node=n1#note');
   expect(drainPendingSaves).not.toHaveBeenCalled();
   expect(document.querySelector('[role="dialog"]')).toBeNull();
+});
+
+async function enableDesktop() {
+  desktop.enabled = true;
+  // A local location update renders the retained guard with its desktop context.
+  await navigate('/canvas/A?desktop');
+}
+
+it('opens cross-Space desktop navigation without draining or replacing the retained Space', async () => {
+  await enableDesktop();
+  const targetState = { focusNodeId: 'n1' };
+  await act(async () =>
+    router.navigate('/canvas/B?node=n1#note', { state: targetState }),
+  );
+  expect(desktop.tabs.open).toHaveBeenCalledExactlyOnceWith({
+    canvasId: 'B',
+    search: '?node=n1',
+    hash: '#note',
+    state: targetState,
+  });
+  expect(router.state.location.pathname).toBe('/canvas/A');
+  expect(drainPendingSaves).not.toHaveBeenCalled();
+  expect(discardPendingSaves).not.toHaveBeenCalled();
+});
+
+it.each(['/spaces', '/setup'])(
+  'activates desktop Home for %s without discarding',
+  async (path) => {
+    await enableDesktop();
+    await navigate(path);
+    expect(desktop.tabs.open).toHaveBeenCalledExactlyOnceWith({
+      canvasId: null,
+      homePath: path,
+    });
+    expect(router.state.location.pathname).toBe('/canvas/A');
+    expect(drainPendingSaves).not.toHaveBeenCalled();
+  },
+);
+
+it('surfaces rejected desktop navigation and permits another attempt', async () => {
+  await enableDesktop();
+  desktop.tabs.open.mockResolvedValueOnce({
+    ok: false,
+    error: 'Could not open Tab',
+  });
+  await navigate();
+  expect(toast).toHaveBeenCalledWith('Could not open Tab', { tone: 'danger' });
+  expect(router.state.location.pathname).toBe('/canvas/A');
+  await navigate();
+  expect(desktop.tabs.open).toHaveBeenCalledTimes(2);
+  expect(drainPendingSaves).not.toHaveBeenCalled();
 });
