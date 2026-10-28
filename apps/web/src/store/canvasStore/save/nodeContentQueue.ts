@@ -149,6 +149,8 @@ export type NodeContentQueue = {
    */
   flushAll(): Promise<void>;
   flushAllForSubmission(canvasId: string): Promise<void>;
+  /** Requeue retained non-conflict failures once for a new save attempt. */
+  retryFailedSaves(canvasId: string): void;
   cancelPending(): void;
   /** Forget explicitly discarded edits after issued writes have settled. */
   discardCanvas(canvasId: string): void;
@@ -1050,6 +1052,25 @@ export function createNodeContentQueue(opts: {
       return serializedFlush(canvasId, nodeId, source);
     },
 
+    retryFailedSaves(canvasId) {
+      const state = opts.getState();
+      if (state.canvasId !== canvasId || state.isLoading) return;
+      const nodeIds = new Set(state.nodes.map((node) => node.id));
+      const pendingIds = new Set(debouncer.pendingKeys());
+      for (const [nodeId, failure] of failures) {
+        if (
+          failure.canvasId === canvasId &&
+          nodeIds.has(nodeId) &&
+          !(failure.error instanceof CanvasConflictError) &&
+          !(failure.error instanceof NodeDuplicateFilesError) &&
+          !inflight.has(nodeId) &&
+          !pendingIds.has(nodeId)
+        ) {
+          schedule(canvasId, nodeId);
+        }
+      }
+    },
+
     async flushAll() {
       const canvasId = opts.getState().canvasId;
       const pendingIds = debouncer.cancelAll();
@@ -1151,6 +1172,8 @@ export function createNodeContentQueue(opts: {
         baselineGeneration.set(node.id, {});
         failures.delete(node.id);
         dismissFailureToast(node.id);
+        saveErrorToasted.delete(node.id);
+        duplicateToasted.delete(node.id);
         // A fresh authoritative baseline means any prior conflict for this
         // node is resolved — drop the toast guard and unfreeze it so a
         // later divergence alerts again and writes resume.

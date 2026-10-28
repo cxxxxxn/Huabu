@@ -53,6 +53,8 @@ interface MessageListProps {
    * (which means the agent is actively producing a response).
    */
   isHistoryLoading?: boolean;
+  /** Successful hydration, independent of whether the loading indicator is shown. */
+  isHistoryReady?: boolean;
   /** Hide action buttons on AI messages (e.g. in operate mode). */
   hideAIActions?: boolean;
   /** Called when the user clicks retry on an interrupted status message. */
@@ -87,6 +89,7 @@ export const MessageList = memo(function MessageList({
   threadId,
   isLoading,
   isHistoryLoading,
+  isHistoryReady = true,
   hideAIActions,
   onRetry,
   hasOlderHistory,
@@ -181,9 +184,10 @@ export const MessageList = memo(function MessageList({
       !!container &&
       isActive &&
       !isHistoryLoading &&
+      isHistoryReady &&
       container.closest('[data-preview-active="false"]') === null
     );
-  }, [isActive, isHistoryLoading]);
+  }, [isActive, isHistoryLoading, isHistoryReady]);
 
   const dismissReadingReturn = useCallback(() => {
     setReturnState((state) =>
@@ -1029,7 +1033,10 @@ export const MessageList = memo(function MessageList({
         </div>
       </div>
 
-      {isActive && !isHistoryLoading && recentTurnCount !== undefined ? (
+      {isActive &&
+      isHistoryReady &&
+      !isHistoryLoading &&
+      recentTurnCount !== undefined ? (
         returnError ? (
           <div
             role="status"

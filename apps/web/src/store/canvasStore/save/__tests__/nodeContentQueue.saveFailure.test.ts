@@ -14,7 +14,11 @@
 
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
-import { CanvasConflictError, putNodeContent } from '@/api/canvas';
+import {
+  CanvasConflictError,
+  NodeDuplicateFilesError,
+  putNodeContent,
+} from '@/api/canvas';
 import { dismissToast, toast } from '@/components/Common/Toast';
 
 import { createNodeContentQueue } from '../nodeContentQueue';
@@ -65,6 +69,89 @@ beforeEach(() => {
 });
 
 describe('nodeContentQueue — save-failure surfacing', () => {
+  it.each([
+    new Error('offline'),
+    new NodeDuplicateFilesError({
+      message: 'duplicate files',
+      duplicateFiles: ['a.md', 'b.md'],
+    }),
+  ])(
+    're-alerts after an authoritative baseline retires the previous failure: %s',
+    async (failure) => {
+      const node = noteNode('v1');
+      const { queue } = makeQueue(node);
+      toastMock.mockReturnValue('failed-save');
+      queue.seedBaselines([node]);
+      putMock.mockRejectedValue(failure);
+      await expect(
+        queue.flushNow('c1', node.id, { source: 'auto' }),
+      ).rejects.toBe(failure);
+      expect(toastMock).toHaveBeenCalledOnce();
+      queue.seedBaselines([node]);
+      expect(dismissToast).toHaveBeenCalledWith('failed-save');
+      await expect(
+        queue.flushNow('c1', node.id, { source: 'auto' }),
+      ).rejects.toBe(failure);
+      expect(toastMock).toHaveBeenCalledTimes(2);
+      if (!(failure instanceof NodeDuplicateFilesError)) {
+        expect(toastMock.mock.calls.at(-1)?.[1].action.onClick).toBeTypeOf(
+          'function',
+        );
+      }
+      queue.discardCanvas('c1');
+    },
+  );
+
+  it('retries retained failures without retrying new failures in the same drain', async () => {
+    const node = noteNode('v1');
+    const { queue } = makeQueue(node);
+    queue.seedBaselines([node]);
+    putMock.mockRejectedValue(new Error('offline'));
+    queue.scheduleChanges('c1', [node], [noteNode('v2')]);
+    await queue.flushAll();
+    queue.retryFailedSaves('c1');
+    await expect(queue.flushAllForSubmission('c1')).rejects.toThrow(
+      'Content saves failed',
+    );
+    expect(putMock).toHaveBeenCalledTimes(2);
+    putMock.mockResolvedValue({ nodeId: node.id, label: 'Note', rev: 'saved' });
+    queue.retryFailedSaves('c1');
+    await expect(queue.flushAllForSubmission('c1')).resolves.toBeUndefined();
+    expect(putMock).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(['offscreen', 'loading', 'conflict', 'duplicate'] as const)(
+    'does not retry content against an unsafe state: %s',
+    async (kind) => {
+      const node = noteNode('v1');
+      const { queue, state } = makeQueue(node);
+      putMock.mockRejectedValue(
+        kind === 'conflict'
+          ? new CanvasConflictError({
+              code: 'NODE_CONTENT_CONFLICT',
+              message: 'conflict',
+              currentRev: 'new',
+            })
+          : kind === 'duplicate'
+            ? new NodeDuplicateFilesError({ message: 'duplicate' })
+            : new Error('offline'),
+      );
+      queue.scheduleChanges('c1', [], [node]);
+      await queue.flushAll();
+      if (kind === 'offscreen') state.canvasId = 'other';
+      if (kind === 'loading') {
+        state.isLoading = true;
+        state.nodes = [];
+      }
+      queue.retryFailedSaves('c1');
+      await expect(queue.flushAllForSubmission('c1')).rejects.toThrow(
+        'Content saves failed',
+      );
+      expect(putMock).toHaveBeenCalledOnce();
+      queue.discardCanvas('c1');
+    },
+  );
+
   it('reports retained failures after a best-effort flush', async () => {
     const node = noteNode('v1');
     const { queue } = makeQueue(node);

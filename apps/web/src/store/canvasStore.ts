@@ -1074,6 +1074,22 @@ export async function drainPendingSaves(
   canvasId = useCanvasStore.getState().canvasId,
 ): Promise<void> {
   const isActive = () => useCanvasStore.getState().canvasId === canvasId;
+  const initial = useCanvasStore.getState();
+  if (isActive() && !initial.isLoading) {
+    const failure = structureSaveErrors.get(canvasId);
+    // Retry only failures retained before this drain, never loop on a new failure.
+    if (
+      failure &&
+      !(failure instanceof CanvasConflictError) &&
+      !initial.versionConflict &&
+      !initial.isSaving &&
+      !initial.pendingSave &&
+      !structureScheduler.hasPending()
+    ) {
+      structureScheduler.schedule();
+    }
+    nodeContentQueue.retryFailedSaves(canvasId);
+  }
   do {
     if (isActive()) await structureScheduler.flushAsync();
     await waitForStructureSave(canvasId);
@@ -2549,25 +2565,9 @@ const useCanvasStore = create<RFState>()(
       const currentId = get().canvasId;
       if (canvasId === currentId) return;
 
-      // Flip into the loading state *before* awaiting anything so the
-      // shell shows the loading state on the very next render instead of
-      // briefly painting the previous canvas while the structure save
-      // flush resolves. `loadCanvas` below will set `isLoading: true`
-      // again (idempotent) once it starts the actual fetch.
-      set({
-        isLoading: true,
-        canvasNotFound: false,
-      });
-      // Retain the outgoing conflict gate until its drain succeeds.
-      // loadCanvas clears it when the new authoritative state is requested.
-
-      // Flush any pending save for the current canvas before switching
-      try {
-        await drainPendingSaves();
-      } catch (error) {
-        set({ isLoading: false });
-        throw error;
-      }
+      // Keep the outgoing Space authoritative and editable until saving succeeds.
+      await drainPendingSaves();
+      set({ isLoading: true, canvasNotFound: false });
 
       // Cancel all pending preprocessing timers
       preprocessQueue.cancelAll();

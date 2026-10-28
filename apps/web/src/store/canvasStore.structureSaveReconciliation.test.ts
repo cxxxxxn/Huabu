@@ -14,6 +14,7 @@ vi.mock('../api', async (importOriginal) => ({
 
 import useCanvasStore, {
   CanvasSubmissionSaveError,
+  drainPendingSaves,
   saveCanvasForSubmission,
 } from './canvasStore';
 import { CanvasConflictError } from '../api/canvas';
@@ -52,6 +53,40 @@ afterEach(() => {
 });
 
 describe('canvasStore structure-save reconciliation', () => {
+  it('retries a retained transient failure once per drain and succeeds after recovery', async () => {
+    useCanvasStore.getState()._setStateNoAutosave({ isLoading: false });
+    putCanvas.mockRejectedValue(new Error('offline'));
+    await useCanvasStore.getState().saveCanvas();
+    await expect(drainPendingSaves()).rejects.toThrow('offline');
+    expect(putCanvas).toHaveBeenCalledTimes(2);
+    putCanvas.mockResolvedValue({ canvasId: 'canvas-race', version: 11 });
+    await expect(drainPendingSaves()).resolves.toBeUndefined();
+    expect(putCanvas).toHaveBeenCalledTimes(3);
+    await drainPendingSaves();
+    expect(putCanvas).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not retry retained failures against nodes from an incomplete return load', async () => {
+    putCanvas.mockRejectedValue(new Error('offline'));
+    await useCanvasStore.getState().saveCanvas();
+    await expect(drainPendingSaves()).rejects.toThrow('offline');
+    expect(putCanvas).toHaveBeenCalledOnce();
+  });
+
+  it('does not automatically retry a retained conflict', async () => {
+    useCanvasStore.getState()._setStateNoAutosave({ isLoading: false });
+    putCanvas.mockRejectedValue(
+      new CanvasConflictError({
+        code: 'CANVAS_VERSION_CONFLICT',
+        message: 'conflict',
+        serverVersion: 12,
+      }),
+    );
+    await useCanvasStore.getState().saveCanvas();
+    await expect(drainPendingSaves()).rejects.toThrow('conflict');
+    expect(putCanvas).toHaveBeenCalledOnce();
+  });
+
   it('does not let a delayed success lower an SSE-advanced version', async () => {
     let acknowledge:
       | ((value: { canvasId: string; version: number }) => void)

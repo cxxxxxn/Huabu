@@ -696,6 +696,7 @@ describe('undo/redo persistence ordering', () => {
     gate.reject(new Error('content write failed'));
     await tick();
     expect(state().pendingContentNodeIds()).toContain(note.id);
+    api.putNodeContent.mockRejectedValueOnce(new Error('still offline'));
     await expect(drainPendingSaves()).rejects.toThrow('Restored node content');
     expect(state().nodes[0].data.content).toBe(note.data.content);
     vi.mocked(toast).mock.calls.at(-1)?.[1]?.action?.onClick();
@@ -830,9 +831,9 @@ describe('undo/redo persistence ordering', () => {
     expect(state().canUndo).toBe(false);
   });
 
-  it('blocks an ordinary structure failure and clears it only on explicit discard', async () => {
+  it('blocks a persistent structure failure until explicit discard', async () => {
     await state().loadCanvas('restore-canvas');
-    api.putCanvas.mockRejectedValueOnce(new Error('structure unavailable'));
+    api.putCanvas.mockRejectedValue(new Error('structure unavailable'));
     useCanvasStore.setState({
       nodes: [{ ...state().nodes[0], position: { x: 100, y: 100 } }],
     });
@@ -851,6 +852,40 @@ describe('undo/redo persistence ordering', () => {
     await state().switchCanvas('other');
     expect(state().canvasId).toBe('other');
   });
+
+  it.each(['structure', 'content'])(
+    'retries a retained %s failure when switching again',
+    async (kind) => {
+      await state().loadCanvas('restore-canvas');
+      if (kind === 'structure')
+        api.putCanvas.mockRejectedValueOnce(new Error('offline'));
+      else api.putNodeContent.mockRejectedValueOnce(new Error('offline'));
+      useCanvasStore.setState({
+        nodes: [
+          {
+            ...state().nodes[0],
+            ...(kind === 'structure'
+              ? { position: { x: 300, y: 300 } }
+              : {
+                  data: { ...state().nodes[0].data, content: 'Recovered edit' },
+                }),
+          },
+        ],
+      });
+      await expect(state().switchCanvas('other')).rejects.toThrow();
+      expect(state().canvasId).toBe('restore-canvas');
+      expect(state().isLoading).toBe(false);
+      await state().switchCanvas('other');
+      expect(state().canvasId).toBe('other');
+      if (kind === 'structure') {
+        expect(api.putCanvas).toHaveBeenCalledTimes(2);
+        expect(topology[0].position).toEqual({ x: 300, y: 300 });
+      } else {
+        expect(api.putNodeContent).toHaveBeenCalledTimes(2);
+        expect(body).toBe('Recovered edit');
+      }
+    },
+  );
 
   it('explicit discard releases a failed resurrection without resurrecting its body', async () => {
     await deleted();

@@ -1085,6 +1085,7 @@ export const ChatPanel = ({
             threadId={threadId}
             isLoading={isLoading}
             isHistoryLoading={!isHistoryLoaded && !historyError}
+            isHistoryReady={isHistoryLoaded}
             hasOlderHistory={historyPage.hasOlderHistory}
             olderTurnBatchSize={recentTurnCount}
             isLoadingOlderHistory={historyPage.isLoadingOlderHistory}

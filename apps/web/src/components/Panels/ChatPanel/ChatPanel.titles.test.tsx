@@ -129,8 +129,20 @@ vi.mock('@/hooks/useBuiltinThreadSettings', () => ({
   }),
 }));
 vi.mock('@/components/Messages/MessageList', () => ({
-  MessageList: ({ submissionNonce }: { submissionNonce?: number }) => (
-    <div data-message-list-submission={submissionNonce} />
+  MessageList: ({
+    submissionNonce,
+    isHistoryReady,
+    isHistoryLoading,
+  }: {
+    submissionNonce?: number;
+    isHistoryReady?: boolean;
+    isHistoryLoading?: boolean;
+  }) => (
+    <div
+      data-message-list-submission={submissionNonce}
+      data-history-ready={isHistoryReady}
+      data-history-loading={isHistoryLoading}
+    />
   ),
 }));
 vi.mock('./ChangeReviewCard', () => ({ ChangeReviewCard: () => null }));
@@ -628,6 +640,25 @@ describe('rendered conversation titles', () => {
         );
     });
     expect(agentApi.streamMessage).not.toHaveBeenCalled();
+  });
+
+  it('keeps scroll readiness false after history fails until retry succeeds', async () => {
+    useChatStore.getState().setHistoryLoaded('thread', false);
+    await renderPanel();
+    const list = () => container.querySelector('[data-history-ready]');
+    expect(list()?.getAttribute('data-history-loading')).toBe('true');
+    expect(list()?.getAttribute('data-history-ready')).toBe('false');
+    await act(async () =>
+      useChatStore.getState().setHistoryError('thread', 'offline'),
+    );
+    expect(list()?.getAttribute('data-history-loading')).toBe('false');
+    expect(list()?.getAttribute('data-history-ready')).toBe('false');
+    await act(async () => {
+      useChatStore.getState().setHistoryError('thread', null);
+      useChatStore.getState().setHistoryLoaded('thread', true);
+    });
+    expect(list()?.getAttribute('data-history-ready')).toBe('true');
+    expect(list()?.getAttribute('data-history-loading')).toBe('false');
   });
   it.each(['connected', 'connecting', 'failed'] as const)(
     'moves the %s capability status to the tab without losing failure recovery',

@@ -691,6 +691,58 @@ describe('MessageList bottom navigation', () => {
     },
   );
 
+  it.each([false, true])(
+    'preserves the saved window and viewport through failed hydration (interrupted=%s)',
+    (interrupted) => {
+      const viewKey = `failed-hydration-${interrupted}`;
+      const unmount = () => {
+        act(() => root?.unmount());
+        root = undefined;
+        container?.remove();
+        container = undefined;
+      };
+      vi.spyOn(
+        HTMLElement.prototype,
+        'getBoundingClientRect',
+      ).mockImplementation(function (this: HTMLElement) {
+        const id = this.dataset.chatMessageId;
+        return new DOMRect(0, id ? (id === 'u4' ? 400 : 0) - top : 0, 300, 200);
+      });
+      const view = (ready: boolean, loading = false) => (
+        <MessageList
+          messages={ready ? history(10) : []}
+          isLoading={false}
+          recentTurnCount={3}
+          viewKey={viewKey}
+          isHistoryReady={ready}
+          isHistoryLoading={loading}
+        />
+      );
+      mount(view(true));
+      act(() => earlier()?.click());
+      scrollTo(410);
+      const saved = readChatViewport(viewKey);
+      unmount();
+      top = 0;
+      mount(view(false, true));
+      act(() => root?.render(view(false)));
+      resize();
+      expect(top).toBe(0);
+      expect(readChatViewport(viewKey)).toEqual(saved);
+      if (interrupted) {
+        unmount();
+        mount(view(false, true));
+      } else {
+        act(() => root?.render(view(false, true)));
+      }
+      act(() => root?.render(view(true)));
+      expect(messageIds()[0]).toBe('u4');
+      expect(top).toBe(410);
+      expect(readChatViewport(viewKey)?.atBottom).toBe(false);
+      forgetMessageListScrollPosition(viewKey);
+    },
+  );
+
   it.each([
     'before-frame',
     'after-frame',
