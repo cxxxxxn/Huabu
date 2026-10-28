@@ -1094,6 +1094,46 @@ export async function drainPendingSaves(): Promise<void> {
   }
 }
 
+/**
+ * Drain every save queue for the current Canvas before the session ends,
+ * and report whether everything reached the Server. Signing out removes the
+ * credential the unload flush would need, so whatever is still queued or
+ * failed then would be lost.
+ */
+export async function savedBeforeSignOut(): Promise<boolean> {
+  try {
+    // The desktop close path: stop recordings, await imports and uploads,
+    // then save structure and every node's content strictly, failing on any
+    // retained structure or content failure.
+    await pageLifecycle.prepare(new AbortController().signal);
+    const { canvasId } = useCanvasStore.getState();
+    if (canvasId) await canvasEvents.flush(canvasId);
+    else await drainPendingSaves();
+    await preprocessQueue.flushAll();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the open Canvas holds an edit the Server has not acknowledged:
+ * queued, in flight or failed. Leaving the page now would lose it.
+ */
+export function hasUnsavedCanvasEdits(): boolean {
+  const { canvasId, isSaving, pendingSave, versionConflict } =
+    useCanvasStore.getState();
+  if (!canvasId) return false;
+  return (
+    isSaving ||
+    pendingSave ||
+    versionConflict ||
+    structureScheduler.hasPending() ||
+    structureSaveErrors.has(canvasId) ||
+    nodeContentQueue.hasUnsavedContent(canvasId)
+  );
+}
+
 export class CanvasSubmissionSaveError extends Error {
   readonly code = 'canvas_save_failed';
 

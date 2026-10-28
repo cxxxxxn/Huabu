@@ -7,6 +7,7 @@ import ReactDOM from 'react-dom/client';
 import './index.css';
 import './i18n';
 
+import { SignInGate } from './components/Shell/SignInGate';
 import { APP_NAME } from './config/app';
 import { getElectronBridge } from './hooks/useElectron';
 import { installDesktopInputGuard } from './utils/desktopInput';
@@ -39,8 +40,9 @@ for (const el of [document.documentElement, document.body, rootElement]) {
 }
 
 const tabs = getElectronBridge()?.tabs;
-if (tabs && tabs.context.role !== 'shell') {
-  // Install before React mounts any window-level shortcut listeners.
+if (tabs?.context.role !== 'shell') {
+  // Install before React mounts any window-level shortcut listeners. It
+  // blocks input only while frozen: a desktop close or a sign-out.
   const removeInputGuard = installDesktopInputGuard();
   import.meta.hot?.dispose(removeInputGuard);
 }
@@ -54,9 +56,11 @@ root.render(
         <DesktopTabShell />
       </Suspense>
     ) : (
-      <Suspense fallback={null}>
-        <App />
-      </Suspense>
+      <SignInGate>
+        <Suspense fallback={null}>
+          <App />
+        </Suspense>
+      </SignInGate>
     )}
   </React.StrictMode>,
 );

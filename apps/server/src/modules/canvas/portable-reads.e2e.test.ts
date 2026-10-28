@@ -37,6 +37,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { autoHeightKey } from '@huabu/shared/canvas-engine';
 
 import canvasRoutes from './canvas.route.js';
+import { registerLocalTestIdentity } from '../../test-support/local-identity.js';
 import { refreshCanvasDirIndex } from '../storage/backends/disk/canvas-dirs.js';
 import {
   createSpace,
@@ -84,6 +85,7 @@ function freshWorkspace(): string {
 
 async function buildApp(): Promise<FastifyInstance> {
   const instance = fastify();
+  registerLocalTestIdentity(instance);
   await instance.register(multipart);
   await instance.register(canvasRoutes, { prefix: '/canvas' });
   await instance.ready();

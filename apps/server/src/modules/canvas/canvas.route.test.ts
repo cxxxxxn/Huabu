@@ -44,6 +44,7 @@ vi.mock(
 
 import canvasRoutes from './canvas.route.js';
 import { withCanvasMutex } from './write-coordinator.js';
+import { registerLocalTestIdentity } from '../../test-support/local-identity.js';
 import { withSpaceDirHandlesReleased } from '../storage/backends/disk/space-dir-handles.js';
 import { createCanvas, deleteCanvas } from '../storage/compatibility/canvas.js';
 import {
@@ -71,6 +72,7 @@ let tmp: string;
 
 async function buildApp() {
   const app = fastify();
+  registerLocalTestIdentity(app);
   await app.register(multipart);
   await app.register(canvasRoutes, { prefix: '/canvas' });
   await app.ready();

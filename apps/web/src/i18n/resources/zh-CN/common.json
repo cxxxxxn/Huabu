@@ -631,6 +631,23 @@
       "inlineCode": "行内代码"
     }
   },
+  "auth": {
+    "signInTitle": "登录 {{appName}}",
+    "signInIntro": "使用你的组织账户打开你的 Space。",
+    "continueWith": "使用 {{provider}} 继续",
+    "signingIn": "正在登录…",
+    "signInFailed": "登录失败：{{message}}",
+    "noSignInMethods": "此服务器尚未配置浏览器登录。请联系管理员添加带有客户端 ID 的 Auth0 或 Entra ID 登录方式。",
+    "crossOriginUnsupported": "浏览器登录要求 Web 应用与服务器位于同一来源。此构建指向其他来源的服务器（VITE_API_BASE）；请从同一来源提供两者后再登录。",
+    "noAccessTitle": "暂无访问权限",
+    "noAccessIntro": "你已以 {{name}} 的身份登录，但该账户尚不能使用 {{appName}}。请联系管理员授予访问权限。",
+    "signOut": "退出登录",
+    "signOutAs": "退出登录（{{name}}）",
+    "deniedIntro": "该账户无法使用 {{appName}}。请退出登录后使用其他账户。",
+    "signOutFailed": "无法退出登录。请检查网络连接后重试。",
+    "signInUnsaved": "部分更改尚未保存。重新登录会离开此页面，这些更改将会丢失。",
+    "signOutUnsaved": "部分更改尚未保存，因此你仍处于登录状态。请等待保存完成或重试后再退出登录。"
+  },
   "workspace": {
     "switcher": "切换工作区",
     "open": "打开工作区…",

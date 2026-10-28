@@ -133,6 +133,11 @@ export async function setSpaceParent(
   canvasId: string,
   input: SpaceParentBody,
   entryPosition?: CreateChildSpaceBody['position'],
+  /**
+   * Runs under the hierarchy lock once a detachment to the root is valid and
+   * real, before it is committed; a failure leaves the Space where it was.
+   */
+  beforeDetach?: () => Promise<void>,
 ): Promise<SpaceHierarchyResponse> {
   return withSpaceHierarchyLock(async () => {
     const repository = getStructuredStore().spaces();
@@ -162,6 +167,7 @@ export async function setSpaceParent(
         parentSpaceId: input.parentSpaceId,
         parentEntryNodeId: current.parentEntryNodeId ?? null,
       };
+    if (input.parentSpaceId === null) await beforeDetach?.();
 
     return withCanvasMutexes(
       [canvasId, ...(input.parentSpaceId ? [input.parentSpaceId] : [])],

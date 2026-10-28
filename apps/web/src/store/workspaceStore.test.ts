@@ -7,6 +7,7 @@ import {
   resolveFolderPickerSupported,
   useWorkspaceStore,
 } from './workspaceStore';
+import { ApiError } from '../api/_client';
 import { listCanvases } from '../api/canvas';
 
 import type { WorkspaceDescriptor, WorkspaceInfo } from '../api/workspace';
@@ -596,6 +597,31 @@ describe('workspaceStore registry persistence', () => {
       isSyncing: false,
       error: null,
       recentWorkspaces: [],
+    });
+  });
+
+  it('uses the active pathless Workspace when the registry is refused to a member', async () => {
+    apiState.info = {
+      ...unconfiguredInfo(),
+      configured: true,
+      workspaceId: FIRST_ID,
+      name: 'First',
+      // A free-mode disk Server reports what an owner could do.
+      capabilities: { canChangeWorkspace: true, nativePicker: true },
+    };
+    apiMocks.listWorkspaces.mockRejectedValueOnce(
+      new ApiError(403, {}, 'Forbidden'),
+    );
+
+    await expect(useWorkspaceStore.getState().init()).resolves.toBe(true);
+
+    expect(apiMocks.activateWorkspace).not.toHaveBeenCalled();
+    expect(useWorkspaceStore.getState()).toMatchObject({
+      workspaceId: FIRST_ID,
+      isReady: true,
+      isSyncing: false,
+      error: null,
+      capabilities: { canChangeWorkspace: false, nativePicker: false },
     });
   });
 

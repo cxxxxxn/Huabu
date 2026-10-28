@@ -41,27 +41,26 @@ import canvasRoutes from './modules/canvas/canvas.route.js';
 import { resetExternalNoteSessions } from './modules/canvas/external-watcher.js';
 import externalNoteRoutes from './modules/canvas/external.route.js';
 import syncRoutes from './modules/canvas/sync.route.js';
+import { createIdentity, registerIdentity } from './modules/identity/index.js';
 import integrationsRoutes from './modules/integrations/integrations.route.js';
 import interactiveViewRoutes from './modules/interactive-view/interactive-view.route.js';
-import { isPublicRfsSkillBootstrapRequest } from './modules/remote_fs/public-skill.js';
 import rfsRoutes from './modules/remote_fs/rfs.route.js';
 import canaryRedeployRoutes from './modules/security/canary-redeploy.route.js';
 import { createCorsOptions } from './modules/security/cors.js';
 import deploymentRoutes from './modules/security/deployment.route.js';
 import {
   hostGuardPlugin,
-  markBasicAuthenticated,
   originGuardPlugin,
   resolveAllowedHostnames,
 } from './modules/security/index.js';
+import { resolveConfiguredPublicOrigin } from './modules/security/public-origin.js';
 import { createApplicationRateLimitOptions } from './modules/security/rate-limit.js';
+import { registerSpaceAccess } from './modules/security/space-access.js';
 import serviceRoutes from './modules/services/services.route.js';
 import { closeStorage } from './modules/storage/index.js';
 import webRoutes from './modules/web/web.route.js';
-import {
-  initWorkspaceFromEnv,
-  isWorkspaceConfigured,
-} from './modules/workspace.js';
+import { registerWorkspaceRequiredGuard } from './modules/workspace-required.js';
+import { initWorkspaceFromEnv } from './modules/workspace.js';
 import workspaceRoutes from './modules/workspace.route.js';
 import workspacesRoutes from './modules/workspaces.route.js';
 import { preloadSkills } from './prompt/index.js';
@@ -113,9 +112,9 @@ const allowedHostnames = resolveAllowedHostnames();
 app.register(cors, createCorsOptions(allowedHostnames));
 
 // ── Network security guards ──────────────────────────────────────────
-// Registered before basic-auth so misaddressed requests fail fast with
+// Registered before identity admission so misaddressed requests fail fast with
 // a clear 403 instead of an auth challenge. Order matters:
-//   hostGuard → originGuard → basic-auth → workspace guard → routes.
+//   hostGuard → originGuard → identity → workspace guard → Space access → routes.
 app.register(hostGuardPlugin);
 app.register(originGuardPlugin);
 
@@ -135,84 +134,16 @@ app.register(multipart, {
   },
 });
 
-// ── HTTP Auth gate ───────────────────────────────────────────────────
-// Two auth mechanisms coexist:
-//
-// 1. Basic Auth (browser/Vite): when HUABU_BASIC_AUTH_USER and
-//    HUABU_BASIC_AUTH_PASS are set, requests with matching Basic creds
-//    are accepted.
-//
-// 2. Bearer token (RFS): requests with
-//    `Authorization: Bearer <AGENTLET_TOKEN>` are accepted. This allows
-//    external agents to call the RFS / canvas-agent APIs without knowing
-//    the Basic Auth credentials.
-//
-// CORS preflight (OPTIONS) always passes through unauthenticated.
-
-const deploymentEnvironment = getDeploymentEnvironment();
-const basicAuthUser = deploymentEnvironment.HUABU_BASIC_AUTH_USER;
-const basicAuthPass = deploymentEnvironment.HUABU_BASIC_AUTH_PASS;
-if (basicAuthUser && basicAuthPass) {
-  const expectedBasic =
-    'Basic ' +
-    Buffer.from(`${basicAuthUser}:${basicAuthPass}`, 'utf8').toString('base64');
-  app.addHook('onRequest', async (request, reply) => {
-    if (request.method === 'OPTIONS') return;
-    const authHeader = request.headers.authorization || '';
-    if (
-      isPublicRfsSkillBootstrapRequest({
-        method: request.method,
-        url: request.url,
-        authorization: authHeader || undefined,
-      })
-    ) {
-      return;
-    }
-
-    // Basic Auth (browser / Vite proxy)
-    if (authHeader === expectedBasic) {
-      markBasicAuthenticated(request);
-      return;
-    }
-
-    // Bearer token (agentlet RFS)
-    if (authHeader.startsWith('Bearer ')) {
-      const daemonToken = getConnectionToken();
-      if (daemonToken && authHeader.slice(7) === daemonToken) return;
-    }
-
-    reply
-      .header('WWW-Authenticate', 'Basic realm="Huabu"')
-      .status(401)
-      .send({ message: 'Authentication required' });
-  });
-  app.log.info('HTTP Auth enabled (Basic + Bearer)');
-} else {
-  // No Basic Auth configured — still gate Bearer-only RFS routes
-  app.addHook('onRequest', async (request, reply) => {
-    if (request.method === 'OPTIONS') return;
-    const authHeader = request.headers.authorization || '';
-    if (
-      isPublicRfsSkillBootstrapRequest({
-        method: request.method,
-        url: request.url,
-        authorization: authHeader || undefined,
-      })
-    ) {
-      return;
-    }
-    // Without Basic Auth, all routes are open EXCEPT the Bearer-only
-    // RFS routes, which always require a valid Bearer token.
-    if (!request.url.startsWith('/api/rfs/')) {
-      return;
-    }
-    if (authHeader.startsWith('Bearer ')) {
-      const daemonToken = getConnectionToken();
-      if (daemonToken && authHeader.slice(7) === daemonToken) return;
-    }
-    reply.status(401).send({ message: 'Authentication required' });
-  });
-}
+// Identity is selected once; a failed Bubble lookup never becomes local access.
+const identity = createIdentity(getDeploymentEnvironment());
+registerIdentity(app, {
+  service: identity.service,
+  getConnectionToken,
+  secureOrigin: resolveConfiguredPublicOrigin()?.startsWith('https:') ?? false,
+});
+// An embedded Bubble serves its own API beside Huabu's, behind the same host,
+// origin and rate-limit guards; clients address it as `<origin>/bubble`.
+if (identity.bubble) app.register(identity.bubble, { prefix: '/bubble' });
 
 // Register @fastify/static to enable `reply.sendFile()`.
 // Actual artifact serving uses a dynamic root resolved at request time
@@ -225,29 +156,10 @@ app.register(staticPlugin, {
 
 // Guard: reject requests to non-workspace routes when workspace is not yet configured.
 // The workspace routes themselves are always allowed so the client can set the path.
-app.addHook('preHandler', async (request, reply) => {
-  const url = request.url;
-  const publicSkillBootstrap = isPublicRfsSkillBootstrapRequest({
-    method: request.method,
-    url,
-    authorization: request.headers.authorization,
-  });
-  if (
-    !isWorkspaceConfigured() &&
-    url.startsWith('/api') &&
-    !publicSkillBootstrap &&
-    !url.startsWith('/api/workspace') &&
-    !url.startsWith('/api/deployment') &&
-    !url.startsWith('/api/llm') &&
-    !url.startsWith('/api/integrations') &&
-    !url.startsWith('/api/services')
-  ) {
-    return reply.status(503).send({
-      message:
-        'Workspace has not been configured yet. Please set a workspace path first.',
-    });
-  }
-});
+registerWorkspaceRequiredGuard(app);
+
+// Every Space a request names is authorized before its route runs.
+registerSpaceAccess(app);
 
 app.register(agentRoutes, { prefix: '/api/agent' });
 app.register(agentChangeReviewConfigRoutes, {
@@ -389,10 +301,16 @@ registerOpCounterHook(app);
 // entirely — no behaviour change.
 const webDistPath = process.env.WEB_DIST_PATH;
 if (webDistPath) {
-  app.register(staticPlugin, {
-    root: webDistPath,
-    prefix: '/',
-    decorateReply: false,
+  app.register(async (shell) => {
+    // The application shell is what a browser loads to sign in.
+    shell.addHook('onRoute', (route) => {
+      route.config = { ...route.config, identity: 'shell' };
+    });
+    await shell.register(staticPlugin, {
+      root: webDistPath,
+      prefix: '/',
+      decorateReply: false,
+    });
   });
   app.setNotFoundHandler((_request, reply) => {
     void reply.sendFile('index.html', webDistPath);
