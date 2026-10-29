@@ -3,13 +3,22 @@
 
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { listCanvases } from '@/api/canvas';
 import useCanvasStore from '@/store/canvasStore';
 import { useWorkspaceStore } from '@/store/workspaceStore';
 
-import { CanvasMenu } from './CanvasMenu';
+import { CanvasMenu as CanvasMenuComponent } from './CanvasMenu';
+
+function CanvasMenu() {
+  return (
+    <MemoryRouter>
+      <CanvasMenuComponent />
+    </MemoryRouter>
+  );
+}
 
 vi.mock('@/api/canvas', async (importOriginal) => ({
   ...(await importOriginal()),

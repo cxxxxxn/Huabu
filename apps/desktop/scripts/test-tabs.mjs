@@ -654,9 +654,9 @@ try {
   const createdCard = home
     .locator(`a[href="/canvas/${createdTab.canvasId}"]`)
     .locator('..');
-  await createdCard.hover();
-  await createdCard
-    .getByRole('button', { name: deletionLabels.remove, exact: true })
+  await createdCard.locator('button[aria-haspopup="menu"]').click();
+  await home
+    .getByRole('menuitem', { name: deletionLabels.remove, exact: true })
     .click();
   await home
     .getByText(deletionLabels.blocked, { exact: true })
@@ -960,9 +960,9 @@ try {
     assert.equal(note.content, `# Settled ${side} on outer close`);
     assert.equal(note.label, `Settled ${side} on outer close`);
   }
-  await createdCard.hover();
-  await createdCard
-    .getByRole('button', { name: deletionLabels.remove, exact: true })
+  await createdCard.locator('button[aria-haspopup="menu"]').click();
+  await home
+    .getByRole('menuitem', { name: deletionLabels.remove, exact: true })
     .click();
   const deleteDialog = home.getByRole('dialog');
   await deleteDialog.waitFor({ state: 'visible' });
