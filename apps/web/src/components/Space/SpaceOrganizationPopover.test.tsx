@@ -13,6 +13,7 @@ import { useWorkspaceStore } from '@/store/workspaceStore';
 import { pageLifecycle } from '@/utils/pageLifecycle';
 
 import { SpaceOrganizationPopover } from './SpaceOrganizationPopover';
+import { useSpaceParentMove } from './useSpaceParentMove';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -36,6 +37,7 @@ vi.mock('@/store/workspaceStore', async () => {
   return {
     useWorkspaceStore: create(() => ({
       workspaceId: 'workspace',
+      isReady: true,
       isSyncing: false,
       worldCanvasId: 'world',
       spaceTitles: {},
@@ -62,6 +64,7 @@ beforeEach(() => {
   });
   useWorkspaceStore.setState({
     workspaceId: 'workspace',
+    isReady: true,
     isSyncing: false,
     spaceTitlesStatus: 'ready',
     spaceTitlesError: null,
@@ -147,6 +150,120 @@ function deferParentRequest() {
 }
 
 describe('SpaceOrganizationPopover', () => {
+  it('does not present a destination with missing title or ancestry metadata', async () => {
+    useWorkspaceStore.setState({
+      spaceTitles: { source: 'Source', target: 'Target' },
+      spaceSummaries: {
+        source: {},
+        target: { parentSpaceId: 'root' },
+        root: {},
+      },
+    });
+    await renderDialog();
+    expect(document.querySelector('button[aria-label="Target"]')).toBeNull();
+    await act(async () =>
+      useWorkspaceStore.setState((state) => ({
+        spaceTitles: { ...state.spaceTitles, root: 'Root' },
+      })),
+    );
+    expect(button('Target').disabled).toBe(false);
+  });
+
+  it.each([
+    'idle',
+    'loading',
+    'error',
+    'missing-title',
+    'missing-parent-title',
+  ] as const)(
+    'refuses direct promotion with %s metadata and allows it after loading',
+    async (status) => {
+      useWorkspaceStore.setState({
+        spaceTitlesStatus:
+          status === 'missing-title' || status === 'missing-parent-title'
+            ? 'ready'
+            : status,
+        spaceTitles:
+          status === 'missing-title'
+            ? { old: 'Old parent' }
+            : status === 'missing-parent-title'
+              ? { source: 'Source' }
+              : {},
+        spaceSummaries: { source: { parentSpaceId: 'old' }, old: {} },
+      });
+      let action!: ReturnType<typeof useSpaceParentMove>;
+      function Harness() {
+        action = useSpaceParentMove();
+        return null;
+      }
+      await act(async () => root.render(<Harness />));
+      expect(action.canMove('source')).toBe(false);
+      await act(async () => {
+        await action.move('source', null, 'old');
+      });
+      expect(setSpaceParent).not.toHaveBeenCalled();
+      expect(drainPendingSaves).not.toHaveBeenCalled();
+      expect(toast).toHaveBeenCalledWith('spacePreview.targetsUnavailable', {
+        tone: 'danger',
+      });
+      await act(async () =>
+        useWorkspaceStore.setState({
+          spaceTitlesStatus: 'ready',
+          spaceTitles: { source: 'Loaded source', old: 'Old parent' },
+        }),
+      );
+      expect(action.canMove('source')).toBe(true);
+      await act(async () => {
+        await action.move('source', null, 'old');
+      });
+      expect(setSpaceParent).toHaveBeenCalledExactlyOnceWith('source', {
+        parentSpaceId: null,
+        expectedParentSpaceId: 'old',
+      });
+      expect(toast).toHaveBeenLastCalledWith(
+        mocks.translate('spaceHierarchy.moved', {
+          name: 'Loaded source',
+          destination: 'spaceHierarchy.topLevel',
+        }),
+        { tone: 'success' },
+      );
+    },
+  );
+
+  it('distinguishes a loaded untitled Space from an absent title record', async () => {
+    useWorkspaceStore.setState((state) => ({
+      spaceTitles: { ...state.spaceTitles, source: null },
+    }));
+    await renderDialog();
+    await chooseTarget();
+    expect(setSpaceParent).toHaveBeenCalledOnce();
+    expect(toast).toHaveBeenLastCalledWith(
+      mocks.translate('spaceHierarchy.moved', {
+        name: 'canvasList.untitled',
+        destination: 'Root / Target',
+      }),
+      { tone: 'success' },
+    );
+  });
+
+  it('rechecks readiness after draining saves before sending a parent request', async () => {
+    const saves = deferred();
+    vi.mocked(drainPendingSaves).mockReturnValueOnce(saves.promise);
+    await renderDialog();
+    await chooseTarget();
+    await act(async () => {
+      useWorkspaceStore.setState({
+        spaceTitlesStatus: 'loading',
+        spaceTitles: {},
+      });
+      saves.resolve();
+    });
+    expect(setSpaceParent).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith('spacePreview.targetsUnavailable', {
+      tone: 'danger',
+    });
+  });
+
   it('moves the explicit source on destination selection without a confirmation dialog', async () => {
     await renderDialog();
     expect(button('Target').disabled).toBe(false);

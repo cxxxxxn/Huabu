@@ -43,6 +43,11 @@ const environment = vi.hoisted(() => ({
   canChangeWorkspace: false,
   pickerSupported: false,
   syncing: false,
+  metadataStatus: 'ready' as 'idle' | 'loading' | 'ready' | 'error',
+  titles: { 'space-1': 'Space One', parent: 'Parent' } as Record<
+    string,
+    string | null
+  >,
   workspaceId: 'workspace-1',
   error: null as string | null,
   otherPath: '/tmp/other-workspace',
@@ -174,8 +179,11 @@ vi.mock('../store/workspaceStore', () => {
     workspacePath: '/tmp/test-workspace',
     workspaceId: environment.workspaceId,
     isSyncing: environment.syncing,
-    spaceTitles: { 'space-1': 'Space One' },
-    spaceSummaries: {},
+    isReady: true,
+    worldCanvasId: null,
+    spaceTitlesStatus: environment.metadataStatus,
+    spaceTitles: environment.titles,
+    spaceSummaries: { 'space-1': {}, parent: {} },
     error: environment.error,
     recentWorkspaces: [
       {
@@ -219,6 +227,8 @@ beforeEach(() => {
   environment.canChangeWorkspace = false;
   environment.pickerSupported = false;
   environment.syncing = false;
+  environment.metadataStatus = 'ready';
+  environment.titles = { 'space-1': 'Space One', parent: 'Parent' };
   environment.workspaceId = 'workspace-1';
   environment.error = null;
   environment.otherPath = '/tmp/other-workspace';
@@ -324,6 +334,43 @@ function mainMarkup() {
 }
 
 describe('CanvasListPage navigation', () => {
+  it.each(['idle', 'loading', 'error', 'missing-title'] as const)(
+    'disables both movement actions with %s metadata even when the Home card is named',
+    async (status) => {
+      localStorage.setItem('huabu.spaces.showAll', 'true');
+      environment.metadataStatus =
+        status === 'missing-title' ? 'ready' : status;
+      if (status === 'missing-title') environment.titles = {};
+      vi.mocked(listCanvases).mockResolvedValueOnce({
+        canvases: [
+          {
+            canvasId: 'space-1',
+            title: 'Space One',
+            nodeCount: 2,
+            updatedAt: 0,
+            createdAt: 0,
+            parentSpaceId: 'parent',
+          },
+        ],
+      });
+      await renderPage();
+      const menu = await openSpaceMenu();
+      for (const label of [
+        'spaceHierarchy.move',
+        'spaceHierarchy.moveToTopLevel',
+      ]) {
+        const action = [
+          ...menu.querySelectorAll<HTMLButtonElement>('button'),
+        ].find((button) => button.textContent === label);
+        expect(action?.disabled).toBe(true);
+        await act(async () => action?.click());
+      }
+      expect(environment.refreshTitles).toHaveBeenCalled();
+      expect(setSpaceParent).not.toHaveBeenCalled();
+      expect(container.querySelector('[data-moving-space]')).toBeNull();
+    },
+  );
+
   it('promotes a child directly from its Home menu without opening the picker', async () => {
     localStorage.setItem('huabu.spaces.showAll', 'true');
     vi.mocked(listCanvases).mockResolvedValueOnce({

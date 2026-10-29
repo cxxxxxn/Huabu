@@ -36,7 +36,7 @@ export const CanvasMenu: React.FC = () => {
   const parentSpaceId = useWorkspaceStore(
     (s) => s.spaceSummaries[canvasId]?.parentSpaceId,
   );
-  const { move, busy } = useSpaceParentMove();
+  const { move, busy, canMove } = useSpaceParentMove();
   const undo = useCanvasStore((s) => s.undo);
   const redo = useCanvasStore((s) => s.redo);
   const canUndo = useCanvasStore((s) => s.canUndo);
@@ -150,7 +150,11 @@ export const CanvasMenu: React.FC = () => {
       <div className="group-hover:border-edge-default h-7 shrink-0 border-l border-transparent transition-colors">
         <DropdownMenu
           open={isOpen}
-          onOpenChange={setIsOpen}
+          onOpenChange={(open) => {
+            setIsOpen(open);
+            if (open && !isWorld && !canMove(canvasId))
+              void useWorkspaceStore.getState().refreshSpaceTitles();
+          }}
           trigger={
             <Button
               ref={menuRef}
@@ -196,7 +200,7 @@ export const CanvasMenu: React.FC = () => {
           {!isWorld && (
             <>
               <DropdownMenuItem
-                disabled={busy}
+                disabled={busy || !canMove(canvasId)}
                 onClick={() => {
                   setIsOpen(false);
                   window.dispatchEvent(
@@ -210,7 +214,7 @@ export const CanvasMenu: React.FC = () => {
               </DropdownMenuItem>
               {parentSpaceId && (
                 <DropdownMenuItem
-                  disabled={busy}
+                  disabled={busy || !canMove(canvasId)}
                   onClick={() => {
                     setIsOpen(false);
                     void move(canvasId, null, parentSpaceId);

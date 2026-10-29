@@ -21,27 +21,26 @@ export function SpaceOrganizationPopover({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
-  const { move, busy, error } = useSpaceParentMove();
+  const { move, busy, error, canMove } = useSpaceParentMove();
   const liveWorkspaceId = useWorkspaceStore((state) => state.workspaceId);
   const [workspaceId] = useState(liveWorkspaceId);
   const titles = useWorkspaceStore((state) => state.spaceTitles);
   const summaries = useWorkspaceStore((state) => state.spaceSummaries);
-  const worldId = useWorkspaceStore((state) => state.worldCanvasId);
   const metadataStatus = useWorkspaceStore((state) => state.spaceTitlesStatus);
   const metadataError = useWorkspaceStore((state) => state.spaceTitlesError);
   const refresh = useWorkspaceStore((state) => state.refreshSpaceTitles);
   const summary = summaries[canvasId];
   const expectedParent = summary?.parentSpaceId ?? null;
-  const missingSummary = metadataStatus === 'ready' && !summary;
+  const missingMetadata = metadataStatus === 'ready' && !canMove(canvasId);
   const feedback =
     error ||
     metadataError ||
-    (missingSummary ? t('spacePreview.missingTarget') : null);
+    (missingMetadata ? t('spacePreview.missingTarget') : null);
   const name = titles[canvasId] || t('canvasList.untitled');
   const options = Object.keys(titles)
     .filter(
       (id) =>
-        id !== worldId && !spaceAncestorIds(id, summaries).includes(canvasId),
+        canMove(id) && !spaceAncestorIds(id, summaries).includes(canvasId),
     )
     .map((id) => ({
       value: id,
@@ -55,7 +54,7 @@ export function SpaceOrganizationPopover({
       disabledReason:
         id === expectedParent ? t('spaceHierarchy.currentLocation') : undefined,
     }));
-  const ready = metadataStatus === 'ready' && !!summary && canvasId !== worldId;
+  const ready = canMove(canvasId);
 
   useEffect(() => {
     void refresh();
@@ -90,19 +89,19 @@ export function SpaceOrganizationPopover({
       currentSpaceId={expectedParent ?? undefined}
       selectedValue={expectedParent ?? undefined}
       options={options}
-      loading={!ready && !metadataError && !missingSummary}
-      loadError={!!metadataError || missingSummary}
+      loading={!ready && !metadataError && !missingMetadata}
+      loadError={!!metadataError || missingMetadata}
       submitting={busy}
       onSubmit={(parent) => void submit(parent)}
       footer={
-        error || metadataError || missingSummary ? (
+        error || metadataError || missingMetadata ? (
           <>
             {error && (
               <p role="alert" className="text-danger-fg">
                 {error}
               </p>
             )}
-            {(metadataError || missingSummary) && (
+            {(metadataError || missingMetadata) && (
               <Button
                 variant="ghost"
                 disabled={busy}

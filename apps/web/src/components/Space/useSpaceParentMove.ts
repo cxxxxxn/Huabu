@@ -11,8 +11,38 @@ import { useWorkspaceStore } from '@/store/workspaceStore';
 import { pageLifecycle } from '@/utils/pageLifecycle';
 import { spaceAncestorIds } from '@/utils/spaceHierarchy';
 
+function hasMoveMetadata(
+  state: Pick<
+    ReturnType<typeof useWorkspaceStore.getState>,
+    'spaceTitles' | 'spaceSummaries' | 'worldCanvasId'
+  >,
+  canvasId: string,
+) {
+  return (
+    !!canvasId &&
+    canvasId !== state.worldCanvasId &&
+    spaceAncestorIds(canvasId, state.spaceSummaries).every(
+      (id) =>
+        Object.hasOwn(state.spaceTitles, id) && !!state.spaceSummaries[id],
+    )
+  );
+}
+
+function isMetadataReady(state: ReturnType<typeof useWorkspaceStore.getState>) {
+  return (
+    state.isReady && !state.isSyncing && state.spaceTitlesStatus === 'ready'
+  );
+}
+
 export function useSpaceParentMove() {
   const { t } = useTranslation();
+  const ready = useWorkspaceStore(isMetadataReady);
+  const spaceTitles = useWorkspaceStore((state) => state.spaceTitles);
+  const spaceSummaries = useWorkspaceStore((state) => state.spaceSummaries);
+  const worldCanvasId = useWorkspaceStore((state) => state.worldCanvasId);
+  const canMove = (canvasId: string) =>
+    ready &&
+    hasMoveMetadata({ spaceTitles, spaceSummaries, worldCanvasId }, canvasId);
   const active = useRef(false);
   const submitting = useRef(false);
   const [busy, setBusy] = useState(false);
@@ -59,8 +89,19 @@ export function useSpaceParentMove() {
     setError(null);
     try {
       const moved = await pageLifecycle.run('updating', async () => {
+        const requireMetadata = () => {
+          const current = useWorkspaceStore.getState();
+          if (
+            !isMetadataReady(current) ||
+            !hasMoveMetadata(current, canvasId) ||
+            (parentSpaceId !== null && !hasMoveMetadata(current, parentSpaceId))
+          )
+            throw new Error(t('spacePreview.targetsUnavailable'));
+        };
+        requireMetadata();
         await drainPendingSaves();
         if (!isCurrent()) return false;
+        requireMetadata();
         try {
           await setSpaceParent(canvasId, {
             parentSpaceId,
@@ -93,5 +134,5 @@ export function useSpaceParentMove() {
       if (active.current) setBusy(false);
     }
   };
-  return { move, busy, error };
+  return { move, busy, error, canMove };
 }

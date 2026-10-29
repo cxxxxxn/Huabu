@@ -53,7 +53,7 @@ import type { DesktopTabsSnapshot } from '@huabu/shared/desktop-tabs';
  */
 export default function CanvasListPage() {
   const { t, i18n } = useTranslation();
-  const { move, busy: moving } = useSpaceParentMove();
+  const { move, busy: moving, canMove } = useSpaceParentMove();
   const [canvases, setCanvases] = useState<CanvasSummary[]>([]);
   const [listedWorkspaceId, setListedWorkspaceId] = useState<string | null>(
     null,
@@ -560,9 +560,11 @@ export default function CanvasListPage() {
                   </Link>
                   <DropdownMenu
                     open={menuSpaceId === canvas.canvasId}
-                    onOpenChange={(open) =>
-                      setMenuSpaceId(open ? canvas.canvasId : null)
-                    }
+                    onOpenChange={(open) => {
+                      setMenuSpaceId(open ? canvas.canvasId : null);
+                      if (open && !canMove(canvas.canvasId))
+                        void useWorkspaceStore.getState().refreshSpaceTitles();
+                    }}
                     triggerWrapperClassName="absolute top-3 right-3"
                     align="bottom-right"
                     trigger={
@@ -582,7 +584,7 @@ export default function CanvasListPage() {
                   >
                     <DropdownMenuItem
                       icon={<FolderInput />}
-                      disabled={moving}
+                      disabled={moving || !canMove(canvas.canvasId)}
                       onClick={() => {
                         setMenuSpaceId(null);
                         setMovingSpace({
@@ -596,7 +598,7 @@ export default function CanvasListPage() {
                     {canvas.parentSpaceId && (
                       <DropdownMenuItem
                         icon={<FolderUp />}
-                        disabled={moving}
+                        disabled={moving || !canMove(canvas.canvasId)}
                         onClick={() => {
                           setMenuSpaceId(null);
                           void move(
