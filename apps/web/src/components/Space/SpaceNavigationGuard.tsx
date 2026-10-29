@@ -117,9 +117,10 @@ export function SpaceNavigationGuard() {
   return (
     <>
       {isDraining && (
-        // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- The native modal owns focus and must isolate saving from app shortcuts.
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-redundant-roles -- Capture-phase shortcut guards require an explicit dialog role; bubbling is also isolated.
         <dialog
           ref={savingDialog}
+          role="dialog"
           aria-label={t('app.savingCanvas')}
           className="bg-surface fixed inset-0 m-0 h-full max-h-none w-full max-w-none border-0 p-0"
           onCancel={(event) => event.preventDefault()}

@@ -131,6 +131,7 @@ it.each(['success', 'failure'] as const)(
     await act(async () => vi.advanceTimersByTimeAsync(2));
     const dialog = host.querySelector('dialog');
     expect(dialog?.open).toBe(true);
+    expect(dialog?.getAttribute('role')).toBe('dialog');
     expect(dialog?.getAttribute('aria-label')).toBe('app.savingCanvas');
     expect(dialog?.classList.contains('fixed')).toBe(true);
     expect(dialog?.querySelector('[data-loading-spinner]')).not.toBeNull();

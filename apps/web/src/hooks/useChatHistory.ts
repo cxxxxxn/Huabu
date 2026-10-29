@@ -683,20 +683,28 @@ export function useChatHistory(
 
   const loadHistoryPage = useCallback(
     (page: ChatHistoryPage) => {
+      const thread = useChatStore.getState().threadsById[threadId];
       if (
         !ownerCanvasId ||
         page.loaded ||
-        !useChatStore
-          .getState()
-          .threadsById[threadId]?.historyPages?.includes(page) ||
+        !thread?.historyPages?.includes(page) ||
         pendingPages.current.has(page) ||
         pageFailure?.threadId === threadId
       )
         return;
+      const revision = thread.historyRevision;
+      const isCurrentPage = () => {
+        const current = useChatStore.getState().threadsById[threadId];
+        return (
+          current?.historyRevision === revision &&
+          current?.historyPages?.includes(page)
+        );
+      };
       pendingPages.current.add(page);
       void agentApi
         .fetchHistoryPage(threadId, ownerCanvasId, page.limit, page.before)
         .then((response) => {
+          if (!isCurrentPage()) return;
           const messages = historyTurnsToMessages(response.turns);
           const ids = new Set(messages.map((message) => message.id));
           if (page.messageIds.some((id) => !ids.has(id))) {
@@ -708,6 +716,7 @@ export function useChatHistory(
           useChatStore.getState().refillHistoryPage(threadId, page, messages);
         })
         .catch((error: unknown) => {
+          if (!isCurrentPage()) return;
           if (error instanceof ApiError && error.status === 409)
             staleCursor.current = threadId;
           console.warn('[useChatHistory] page refill failed', error);

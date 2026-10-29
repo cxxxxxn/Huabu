@@ -386,6 +386,167 @@ describe('bounded history refill and completion', () => {
     ).toHaveLength(1);
   });
 
+  it.each(['failure', 'stale failure', 'mismatched success'] as const)(
+    'ignores obsolete refill %s after successful reload and permits new refills',
+    async (outcome) => {
+      const first = seedPages();
+      const second = {
+        ...first,
+        before: 'second-old',
+        messageIds: ['second:0'],
+      };
+      useChatStore
+        .getState()
+        .setHistoryPages(THREAD_ID, [
+          first,
+          second,
+          { limit: 3, messageIds: ['latest:1'], loaded: true },
+        ]);
+      let rejectLate!: (error: Error) => void;
+      let resolveLate!: (response: unknown) => void;
+      apiMocks.fetchHistoryPage
+        .mockRejectedValueOnce(
+          new ApiError(409, { message: 'History changed' }, 'History changed'),
+        )
+        .mockReturnValueOnce(
+          new Promise((resolve, reject) => {
+            resolveLate = resolve;
+            rejectLate = reject;
+          }),
+        );
+      await renderHarness();
+      await act(async () => {
+        latestHistory.loadHistoryPage(first);
+        latestHistory.loadHistoryPage(second);
+      });
+      apiMocks.fetchHistoryPage.mockResolvedValue({
+        threadId: THREAD_ID,
+        turns: [
+          {
+            id: 'replacement',
+            messages: [
+              {
+                role: 'assistant',
+                parts: [{ kind: 'text', text: 'Fresh history' }],
+              },
+            ],
+          },
+        ],
+        hasMore: false,
+      });
+      await act(async () => latestHistory.retryHistoryPage());
+      expect(latestHistory.historyPageError).toBeUndefined();
+      await act(async () => {
+        if (outcome === 'failure') rejectLate(new Error('Old request failed'));
+        else if (outcome === 'stale failure')
+          rejectLate(
+            new ApiError(409, { message: 'Old cursor' }, 'Old cursor'),
+          );
+        else resolveLate({ threadId: THREAD_ID, turns: [], hasMore: false });
+      });
+      expect(latestHistory.historyPageError).toBeUndefined();
+      expect(
+        useChatStore.getState().threadsById[THREAD_ID]?.messages[0]?.id,
+      ).toBe('replacement:0');
+      apiMocks.fetchHistoryPage.mockClear();
+      await act(async () => latestHistory.retryHistoryPage());
+      expect(apiMocks.fetchHistoryPage).not.toHaveBeenCalled();
+      const newPage = {
+        before: 'fresh-older',
+        limit: 3,
+        messageIds: ['fresh:0'],
+        loaded: false,
+      };
+      useChatStore
+        .getState()
+        .setHistoryPages(THREAD_ID, [
+          newPage,
+          { limit: 3, messageIds: ['replacement:0'], loaded: true },
+        ]);
+      apiMocks.fetchHistoryPage.mockResolvedValue({
+        threadId: THREAD_ID,
+        turns: [
+          {
+            id: 'fresh',
+            messages: [
+              {
+                role: 'assistant',
+                parts: [{ kind: 'text', text: 'Older answer' }],
+              },
+            ],
+          },
+        ],
+        hasMore: false,
+      });
+      await act(async () => latestHistory.loadHistoryPage(newPage));
+      expect(apiMocks.fetchHistoryPage).toHaveBeenCalledOnce();
+      expect(
+        useChatStore
+          .getState()
+          .threadsById[THREAD_ID]?.messages.map((message) => message.id),
+      ).toEqual(['fresh:0', 'replacement:0']);
+    },
+  );
+
+  it.each(['failure', 'success'] as const)(
+    'ignores refill %s when revision changes even if the page object is retained',
+    async (outcome) => {
+      const page = seedPages();
+      let resolveLate!: (response: unknown) => void;
+      let rejectLate!: (error: Error) => void;
+      apiMocks.fetchHistoryPage.mockReturnValue(
+        new Promise((resolve, reject) => {
+          resolveLate = resolve;
+          rejectLate = reject;
+        }),
+      );
+      await renderHarness();
+      act(() => latestHistory.loadHistoryPage(page));
+      useChatStore.setState((state) => {
+        const thread = state.threadsById[THREAD_ID];
+        if (!thread) throw new Error('Missing thread');
+        return {
+          threadsById: {
+            ...state.threadsById,
+            [THREAD_ID]: {
+              ...thread,
+              historyRevision: (thread.historyRevision ?? 0) + 1,
+            },
+          },
+        };
+      });
+      await act(async () => {
+        if (outcome === 'failure') rejectLate(new Error('Obsolete request'));
+        else
+          resolveLate({
+            threadId: THREAD_ID,
+            turns: [
+              {
+                id: 'old',
+                messages: [
+                  { role: 'user', content: 'Old question' },
+                  {
+                    role: 'assistant',
+                    parts: [{ kind: 'text', text: 'Old answer' }],
+                  },
+                ],
+              },
+            ],
+            hasMore: false,
+          });
+      });
+      expect(latestHistory.historyPageError).toBeUndefined();
+      expect(
+        useChatStore
+          .getState()
+          .threadsById[THREAD_ID]?.messages.map((message) => message.id),
+      ).toEqual(['latest:1']);
+      expect(
+        useChatStore.getState().threadsById[THREAD_ID]?.historyPages?.[0],
+      ).toBe(page);
+    },
+  );
+
   it('does not drop a completed local tail before the server has persisted it', async () => {
     seedPages();
     useChatStore.getState().addMessage(THREAD_ID, {

@@ -209,6 +209,8 @@ On desktop, the same guard first diverts cross-Space/Home navigation through `De
 
 An in-app navigation drain lasting over 150ms displays Common `Loading` inside a full-viewport native modal dialog, outside the page's flex layout. The underlying Canvas and chat geometry stay unchanged; native modal inertness blocks pointer and keyboard interaction with the editor and its portals while saving. Escape does not dismiss the saving state. Settlement closes the dialog before proceeding or showing the existing unsaved-changes decision.
 
+The saving dialog explicitly carries `role="dialog"` for the shared Canvas interaction guard. This excludes its keyboard events from window-capture shortcuts such as Delete and Undo, which run before the dialog's bubbling handler.
+
 ## Undo interaction
 
 Editable broadcast batches take **one** undo snapshot (via `applyDeltasFromAgent`). Trusted Agent Node projection batches and FSM-only replacements do not create ordinary undo entries. The server's first-submitted-content effect rebases matching empty Question content in existing snapshots, so undoing an earlier drag cannot erase that submitted intent.
