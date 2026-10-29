@@ -625,7 +625,12 @@ describe('manual virtual chat', () => {
         .querySelector('[data-assistant]')
         ?.getAttribute('data-streaming'),
     ).toBe('false');
-    expect(container.querySelector('[data-thinking]')).not.toBeNull();
+    const thinking = container.querySelector('[data-thinking]');
+    expect(thinking).not.toBeNull();
+    expect(thinking?.parentElement?.className).toBe('ml-1 px-4 py-2');
+    expect(thinking?.parentElement?.parentElement?.className).toBe('px-3');
+    render({ isLoading: true });
+    expect(container.querySelector('[data-thinking]')).toBeNull();
   });
 
   it('preserves end status and disables comments in inactive panels', () => {

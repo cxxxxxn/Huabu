@@ -60,6 +60,8 @@ Chat history hydration requests complete display turns from the existing paginat
 
 Viewport resizing, including multiline composer growth and draft clearing, preserves the bottom when the reader was already there without enabling persistent output following. This keeps send-time bottom eligibility intact. When reading older messages, the same resize preserves the reading anchor instead. Releasing or cancelling a held viewport pointer, including window blur, rechecks any deferred automatic fill without restoring output following.
 
+Before the current assistant message exists, the waiting Thinking indicator retains the message-row gutter and the assistant text inset, aligning with both assistant text and its in-message streaming indicator.
+
 The virtualized list reports latest-end visibility to the terminal-result acknowledgement gate only after hydration and positioning settle and the tail body is rendered. Hidden views, seek placeholders and history-reading positions do not acknowledge results. Owner-scoped hydration also tracks the terminal invocation token, preserving cross-Space read-intent and acknowledgement semantics.
 
 The return-to-bottom control appears more than 160px from the bottom and stays visible until within 50px, avoiding flicker near a single threshold. It remains stationary and available during scrolling. The default control is a compact down-arrow button with a localized accessible label and tooltip; new output adds the localized New message label beside the arrow. Clicking either presentation resumes following.

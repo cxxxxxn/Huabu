@@ -1176,8 +1176,10 @@ function VirtualMessageList({
           />
         ) : null}
         {isLoading && !streamingAssistantId ? (
-          <div className="px-3 py-2">
-            <ThinkingIndicator />
+          <div className="px-3">
+            <div className="ml-1 px-4 py-2">
+              <ThinkingIndicator />
+            </div>
           </div>
         ) : null}
         {isHistoryLoading && !ids.length ? (
