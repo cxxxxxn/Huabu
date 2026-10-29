@@ -52,10 +52,13 @@ test.beforeEach(async ({ page }) => {
           listeners.forEach((listener) => listener(state));
           return { ok: true };
         },
-        activate: async () => ({
-          ok: false,
-          error: 'Dragging must not activate a Tab',
-        }),
+        activate: async (target) => {
+          if (typeof target === 'string' || target.focus !== 'shell')
+            return { ok: false, error: 'Dragging must not activate a Tab' };
+          state = { ...state, activeId: target.id };
+          listeners.forEach((listener) => listener(state));
+          return { ok: true };
+        },
         close: async () => ({ ok: true }),
         reload: async () => ({ ok: true }),
         open: async () => ({ ok: true }),
@@ -147,3 +150,42 @@ test('Escape and window blur cancel the pointer gesture without changing order',
     await expect(page.getByRole('alert')).toHaveCount(0);
   }
 });
+
+for (const rejected of [false, true]) {
+  test(`keyboard focus survives ${rejected ? 'rejected' : 'acknowledged'} moves and supports subsequent shortcuts`, async ({
+    page,
+  }) => {
+    if (rejected) {
+      await page.evaluate(() => {
+        const tabs = window.electronBridge?.tabs;
+        if (!tabs) throw new Error('Missing Tab bridge');
+        const command = tabs.command;
+        tabs.command = async () => {
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          tabs.command = command;
+          return { ok: false, error: 'Move rejected' };
+        };
+      });
+    }
+    const a = page.getByRole('tab', { name: 'A', exact: true });
+    await a.focus();
+    await page.keyboard.press('Alt+Shift+ArrowRight');
+    await expect(a).toBeEnabled();
+    await expect(page.getByRole('tab').nth(rejected ? 1 : 2)).toHaveText('A');
+    if (rejected)
+      await expect(page.getByRole('alert')).toHaveText('Move rejected');
+    await expect(a).toBeFocused();
+    await page.keyboard.press('Alt+Shift+ArrowRight');
+    await expect(page.getByRole('tab').nth(rejected ? 2 : 3)).toHaveText('A');
+    await expect(a).toBeEnabled();
+    await expect(a).toBeFocused();
+    await page.keyboard.press('ArrowLeft');
+    const previous = page.getByRole('tab', {
+      name: rejected ? 'B' : 'C',
+      exact: true,
+    });
+    await expect(previous).toBeFocused();
+    await expect(previous).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('alert')).toHaveCount(0);
+  });
+}

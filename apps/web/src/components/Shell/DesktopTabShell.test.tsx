@@ -341,6 +341,68 @@ describe('DesktopTabShell minimal Tab presentation', () => {
     );
   });
 
+  it.each([true, false])(
+    'keeps keyboard focus and blocks pending actions when move success is %s',
+    async (ok) => {
+      let finish!: (
+        result: { ok: true } | { ok: false; error: string },
+      ) => void;
+      mocks.command.mockReturnValueOnce(
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+      );
+      await prepareDrag();
+      const space = button('Space A');
+      space.focus();
+      const key = async (reorder: boolean) =>
+        act(async () =>
+          space.dispatchEvent(
+            new KeyboardEvent('keydown', {
+              key: 'ArrowRight',
+              altKey: reorder,
+              shiftKey: reorder,
+              bubbles: true,
+            }),
+          ),
+        );
+      await key(true);
+      expect(space.disabled).toBe(false);
+      expect(space.getAttribute('aria-disabled')).toBe('true');
+      expect(button('navigation.home').getAttribute('aria-disabled')).toBe(
+        'true',
+      );
+      expect(document.activeElement).toBe(space);
+      await key(true);
+      await key(false);
+      await act(async () => {
+        space.click();
+        button('navigation.home').click();
+        button('desktopTabs.closeTab').click();
+      });
+      expect(mocks.command).toHaveBeenCalledTimes(1);
+      expect(mocks.activate).not.toHaveBeenCalled();
+      expect(mocks.close).not.toHaveBeenCalled();
+      await act(async () => {
+        if (ok) {
+          snapshot = {
+            ...snapshot,
+            tabs: [snapshot.tabs[0], snapshot.tabs[2], snapshot.tabs[1]],
+          };
+          mocks.onState.mock.calls[0][0](snapshot);
+        }
+        finish(ok ? { ok: true } : { ok: false, error: 'Move failed' });
+      });
+      expect(document.activeElement).toBe(space);
+      expect(space.getAttribute('aria-disabled')).toBe('false');
+      await key(false);
+      expect(mocks.activate).toHaveBeenCalledWith({
+        id: ok ? 'home' : 'space-b',
+        focus: 'shell',
+      });
+    },
+  );
+
   async function prepareDrag() {
     snapshot.tabs.push({
       ...snapshot.tabs[1],
@@ -495,11 +557,19 @@ describe('DesktopTabShell minimal Tab presentation', () => {
     await act(async () =>
       mocks.onState.mock.calls[0][0]({ ...snapshot, busy: true }),
     );
+    await act(async () => {
+      button('Space A').click();
+      button('navigation.home').click();
+      button('Space A').dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }),
+      );
+    });
     await startDrag();
     expect(
       document.querySelector('[data-testid="desktop-tab-drag-overlay"]'),
     ).toBeNull();
     expect(mocks.command).not.toHaveBeenCalled();
+    expect(mocks.activate).not.toHaveBeenCalled();
   });
 
   it('renders the blank Tab as a closable named Tab, not another Home icon', async () => {

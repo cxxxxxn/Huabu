@@ -96,14 +96,16 @@ function DesktopTabItem({
         variant="ghost"
         size={tab.id === 'home' ? 'md' : 'sm'}
         iconOnly={tab.id === 'home'}
-        disabled={disabled}
+        aria-disabled={disabled}
         className={cn(
-          'h-full touch-none rounded-none enabled:hover:bg-transparent',
+          'h-full touch-none rounded-none enabled:hover:bg-transparent aria-disabled:cursor-not-allowed aria-disabled:opacity-50',
           tab.id === 'home'
             ? 'w-10'
             : 'max-w-48 gap-1.5 px-3 text-[13px] leading-5 font-normal',
         )}
-        onClick={onActivate}
+        onClick={() => {
+          if (!disabled) onActivate();
+        }}
         onKeyDown={onKeyDown}
       >
         {tab.id === 'home' ? (
@@ -276,6 +278,7 @@ export default function DesktopTabShell() {
     )
       return;
     event.preventDefault();
+    if (snapshot.busy || pendingMove) return;
     const count = snapshot.tabs.length;
     if (
       event.altKey &&
