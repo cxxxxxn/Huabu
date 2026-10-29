@@ -654,9 +654,9 @@ try {
   const createdCard = home
     .locator(`a[href="/canvas/${createdTab.canvasId}"]`)
     .locator('..');
-  await createdCard.hover();
-  await createdCard
-    .getByRole('button', { name: deletionLabels.remove, exact: true })
+  await createdCard.locator('button[aria-haspopup="menu"]').click();
+  await home
+    .getByRole('menuitem', { name: deletionLabels.remove, exact: true })
     .click();
   await home
     .getByText(deletionLabels.blocked, { exact: true })
@@ -960,9 +960,9 @@ try {
     assert.equal(note.content, `# Settled ${side} on outer close`);
     assert.equal(note.label, `Settled ${side} on outer close`);
   }
-  await createdCard.hover();
-  await createdCard
-    .getByRole('button', { name: deletionLabels.remove, exact: true })
+  await createdCard.locator('button[aria-haspopup="menu"]').click();
+  await home
+    .getByRole('menuitem', { name: deletionLabels.remove, exact: true })
     .click();
   const deleteDialog = home.getByRole('dialog');
   await deleteDialog.waitFor({ state: 'visible' });
@@ -1743,6 +1743,17 @@ try {
       });
     }
   });
+  await electron.evaluate(({ dialog }) => {
+    const original = dialog.showMessageBox;
+    globalThis.tabsSmokeRestoreDiscardDialog = () => {
+      dialog.showMessageBox = original;
+    };
+    globalThis.tabsSmokeDiscardPrompts = [];
+    dialog.showMessageBox = async (_win, options) => {
+      globalThis.tabsSmokeDiscardPrompts.push(options);
+      return { response: 0, checkboxChecked: false };
+    };
+  });
   let titleClose;
   try {
     await b.evaluate(async () => {
@@ -1796,12 +1807,36 @@ try {
       false,
       'A title failure must keep its renderer available for explicit retry',
     );
-    assert.equal(await b.evaluate(() => document.body.inert), false);
+    await b.waitForFunction(() => !document.body.inert);
     assert.equal(
       (await shell.evaluate((id) => window.electronBridge.tabs.reload(id), bId))
         .ok,
       false,
       'Reload must also reject the unresolved title failure',
+    );
+    assert.deepEqual(
+      await electron.evaluate(() =>
+        globalThis.tabsSmokeDiscardPrompts.map(
+          ({ buttons, defaultId, cancelId }) => ({
+            buttons,
+            defaultId,
+            cancelId,
+          }),
+        ),
+      ),
+      [
+        {
+          buttons: ['Cancel', 'Close without saving'],
+          defaultId: 0,
+          cancelId: 0,
+        },
+        {
+          buttons: ['Cancel', 'Reload without saving'],
+          defaultId: 0,
+          cancelId: 0,
+        },
+      ],
+      'Close and reload must offer explicit discard with Cancel as the default',
     );
     await shell.getByRole('tab', { name: 'Tabs smoke B', exact: true }).click();
     const retryTitleLabel = await b.evaluate(async () => {
@@ -1951,6 +1986,13 @@ try {
     assert.equal(refused.ok, false);
     assert.match(refused.error, /Draft quota exceeded/);
     assert.equal(b.isClosed(), false);
+    assert.match(
+      await electron.evaluate(
+        () => globalThis.tabsSmokeDiscardPrompts.at(-1).detail,
+      ),
+      /Draft quota exceeded/,
+      'The discard warning must explain the local persistence failure',
+    );
     await b.evaluate(() => globalThis.tabsSmokeRestoreTitleStorage());
     const retryLabel = await b.evaluate(async () => {
       const { i18n } = await import('/src/i18n/index.ts');
@@ -2011,6 +2053,11 @@ try {
     'An unresolved save conflict must keep the Tab open',
   );
   assert.equal(a.isClosed(), false);
+  await electron.evaluate(() => {
+    globalThis.tabsSmokeRestoreDiscardDialog();
+    delete globalThis.tabsSmokeRestoreDiscardDialog;
+    delete globalThis.tabsSmokeDiscardPrompts;
+  });
   await b.evaluate(async () => {
     const { default: canvas, saveCanvasForSubmission } =
       await import('/src/store/canvasStore.ts');

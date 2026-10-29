@@ -418,14 +418,14 @@ describe('NodeToolbar', () => {
     expect(button('Source')?.disabled).toBe(true);
     expect(button('Own child')?.disabled).toBe(false);
     expect(button('World')).toBeNull();
-    expect(button('Nested')).toBeNull();
+    expect(button('Nested')).not.toBeNull();
     await act(async () =>
       button('Folder')
         ?.closest('li')
         ?.querySelector<HTMLButtonElement>('button[aria-expanded]')
         ?.click(),
     );
-    expect(button('Nested')).not.toBeNull();
+    expect(button('Nested')).toBeNull();
     expect(addNodes).not.toHaveBeenCalled();
     const search = document.querySelector<HTMLInputElement>(
       'input[name="space-destination-search"]',

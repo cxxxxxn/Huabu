@@ -142,7 +142,6 @@ export default function CanvasPage() {
   const consumedDeepLinkActivationRef = useRef<string | null>(null);
   const setPendingNodeType = useToolStore((s) => s.setPendingNodeType);
   const isShortcutsOpen = useShortcutsUiStore((s) => s.isOpen);
-  const openShortcuts = useShortcutsUiStore((s) => s.open);
   // Cmd+F / Ctrl+F → focus the canvas-wide search input in the
   // left layer panel (or, when focus is inside the expanded
   // preview, the in-preview find bar).
@@ -446,7 +445,7 @@ export default function CanvasPage() {
     <>
       <SpaceActions />
       <MainLayout
-        header={<CanvasHeader onOpenShortcuts={openShortcuts} />}
+        header={<CanvasHeader />}
         leftPanel={<CanvasLayerPanel />}
         rightPanel={<PreviewWorkspacePanel />}
       >

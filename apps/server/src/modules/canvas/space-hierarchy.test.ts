@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invertDelta } from '@huabu/shared/canvas-engine';
 
 import { applyDeltasOnServer, executeOnServer } from './canvas-executor.js';
+import * as canvasExecutor from './canvas-executor.js';
 import * as canvasSync from './canvas-sync.js';
 import canvasRoutes from './canvas.route.js';
 import {
@@ -295,6 +296,51 @@ describe('Mixed selection Space migration', () => {
 });
 
 describe('Space ownership', () => {
+  it('retains the old formal entry when parent persistence fails', async () => {
+    const child = await createChildSpace('root', 'Child');
+    await storage.createSpace('destination', 'Destination');
+    const repository = storage.getStructuredStore().spaces();
+    vi.spyOn(
+      Object.getPrototypeOf(repository) as typeof repository,
+      'setParent',
+    ).mockRejectedValueOnce(new Error('Disk full'));
+    await expect(
+      setSpaceParent(child.canvasId, {
+        parentSpaceId: 'destination',
+        expectedParentSpaceId: 'root',
+      }),
+    ).rejects.toThrow('Disk full');
+    expect((await storage.space('root').read())?.state.nodes).toContainEqual(
+      expect.objectContaining({ id: child.parentEntryNodeId }),
+    );
+    expect((await storage.space(child.canvasId).read())?.parentSpaceId).toBe(
+      'root',
+    );
+  });
+
+  it('reports cleanup failure explicitly after promotion without deleting any contents', async () => {
+    const child = await createChildSpace('root', 'Child');
+    vi.spyOn(
+      canvasExecutor,
+      'executeOnServerAlreadyLocked',
+    ).mockRejectedValueOnce(new Error('Disk full'));
+    await expect(
+      setSpaceParent(child.canvasId, {
+        parentSpaceId: null,
+        expectedParentSpaceId: 'root',
+      }),
+    ).rejects.toMatchObject({
+      code: 'SPACE_ENTRY_REMOVE_FAILED',
+      status: 500,
+    });
+    expect(
+      (await storage.space(child.canvasId).read())?.parentSpaceId,
+    ).toBeNull();
+    expect((await storage.space('root').read())?.state.nodes).toContainEqual(
+      expect.objectContaining({ id: child.parentEntryNodeId }),
+    );
+  });
+
   it.each(['success', 'refused', 'failed', 'failed-after-commit'])(
     'publishes the retained entry only after parent persistence settles (%s)',
     async (outcome) => {
@@ -605,7 +651,7 @@ describe('Space ownership', () => {
       await app.close();
     }
   });
-  it('creates arbitrary nesting, retains old links on reparent and rejects cycles', async () => {
+  it('creates arbitrary nesting, removes the old entry on promotion and rejects cycles', async () => {
     const child = await createChildSpace('root', 'Child');
     const grandchild = await createChildSpace(child.canvasId, 'Grandchild');
     expect(await list()).toContainEqual(expect.objectContaining(child));
@@ -619,12 +665,67 @@ describe('Space ownership', () => {
       parentSpaceId: null,
       expectedParentSpaceId: 'root',
     });
-    expect((await storage.space('root').read())?.state.nodes).toContainEqual(
+    expect(
+      (await storage.space('root').read())?.state.nodes,
+    ).not.toContainEqual(
       expect.objectContaining({ id: child.parentEntryNodeId }),
     );
     expect(
       (await storage.space(child.canvasId).read())?.parentSpaceId,
     ).toBeNull();
+    expect(
+      (await storage.space(grandchild.canvasId).read())?.parentSpaceId,
+    ).toBe(child.canvasId);
+  });
+
+  it('reparents by removing only the previous formal entry, keeping manual shortcuts and contents', async () => {
+    const child = await createChildSpace('root', 'Child');
+    await storage.createSpace('destination', 'Destination');
+    await executeOnServer({
+      canvasId: 'root',
+      commands: [
+        {
+          type: 'CREATE_NODES',
+          nodes: [
+            {
+              id: 'node-manual-shortcut',
+              nodeType: 'spacePreview',
+              data: { targetCanvasId: child.canvasId },
+              position: { x: 400, y: 0 },
+            },
+          ],
+        },
+      ],
+      originator: { source: 'system' },
+    });
+    const before = await storage.space(child.canvasId).read();
+    const moved = await setSpaceParent(child.canvasId, {
+      parentSpaceId: 'destination',
+      expectedParentSpaceId: 'root',
+    });
+    const oldNodes = (await storage.space('root').read())?.state.nodes;
+    expect(oldNodes).not.toContainEqual(
+      expect.objectContaining({ id: child.parentEntryNodeId }),
+    );
+    expect(oldNodes).toContainEqual(
+      expect.objectContaining({ id: 'node-manual-shortcut' }),
+    );
+    expect(
+      (await storage.space('destination').read())?.state.nodes,
+    ).toContainEqual(expect.objectContaining({ id: moved.parentEntryNodeId }));
+    expect((await storage.space(child.canvasId).read())?.state).toEqual(
+      before?.state,
+    );
+    await setSpaceParent(child.canvasId, {
+      parentSpaceId: null,
+      expectedParentSpaceId: 'destination',
+    });
+    expect(
+      (await storage.space('destination').read())?.state.nodes,
+    ).toHaveLength(0);
+    expect((await storage.space('root').read())?.state.nodes).toContainEqual(
+      expect.objectContaining({ id: 'node-manual-shortcut' }),
+    );
   });
 
   it('serializes opposing reparent requests and rejects missing or World parents', async () => {
