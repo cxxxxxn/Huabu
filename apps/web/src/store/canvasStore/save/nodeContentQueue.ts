@@ -149,7 +149,7 @@ export type NodeContentQueue = {
    */
   flushAll(): Promise<void>;
   flushAllForSubmission(canvasId: string): Promise<void>;
-  /** Requeue retained non-conflict failures once for a new save attempt. */
+  /** Requeue retained transient or label-collision failures once per save attempt. */
   retryFailedSaves(canvasId: string): void;
   /** Stop new writes and restore releases until discard settles; returns resume. */
   suspendCanvas(canvasId: string): () => void;
@@ -1073,7 +1073,8 @@ export function createNodeContentQueue(opts: {
         if (
           failure.canvasId === canvasId &&
           nodeIds.has(nodeId) &&
-          !(failure.error instanceof CanvasConflictError) &&
+          (!(failure.error instanceof CanvasConflictError) ||
+            failure.error.code === 'NODE_LABEL_CONFLICT') &&
           !(failure.error instanceof NodeDuplicateFilesError) &&
           !inflight.has(nodeId) &&
           !pendingIds.has(nodeId)

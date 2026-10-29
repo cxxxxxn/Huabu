@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useBlocker } from 'react-router-dom';
 
@@ -24,11 +24,18 @@ export function SpaceNavigationGuard() {
   const { t } = useTranslation();
   const tabs = getElectronBridge()?.tabs;
   const stayRef = useRef<HTMLButtonElement>(null);
+  const savingDialog = useRef<HTMLDialogElement>(null);
   const discarding = useRef(false);
   const [isDraining, setIsDraining] = useState(false);
   const [isDiscarding, setIsDiscarding] = useState(false);
   const [failedCanvasId, setFailedCanvasId] = useState<string | null>(null);
   const [discardError, setDiscardError] = useState(false);
+  useLayoutEffect(() => {
+    if (!isDraining) return;
+    const dialog = savingDialog.current;
+    dialog?.showModal();
+    return () => dialog?.close();
+  }, [isDraining]);
   const blocker = useBlocker(
     ({ currentLocation, nextLocation }) =>
       desktopNavigation(tabs?.context, nextLocation) !== null ||
@@ -110,13 +117,22 @@ export function SpaceNavigationGuard() {
   return (
     <>
       {isDraining && (
-        <Loading
-          variant="spinner"
-          layout="block"
-          size="md"
-          message={t('app.savingCanvas')}
-          indicatorClassName="text-fg-subtle"
-        />
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- The native modal owns focus and must isolate saving from app shortcuts.
+        <dialog
+          ref={savingDialog}
+          aria-label={t('app.savingCanvas')}
+          className="bg-surface fixed inset-0 m-0 h-full max-h-none w-full max-w-none border-0 p-0"
+          onCancel={(event) => event.preventDefault()}
+          onKeyDown={(event) => event.stopPropagation()}
+        >
+          <Loading
+            variant="spinner"
+            layout="overlay"
+            size="md"
+            message={t('app.savingCanvas')}
+            indicatorClassName="text-fg-subtle"
+          />
+        </dialog>
       )}
       <Modal
         isOpen={failedCanvasId !== null && blocker.state === 'blocked'}

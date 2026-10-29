@@ -10,7 +10,7 @@
  * would pass the negative case for the wrong reason.
  */
 
-import { act } from 'react';
+import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -236,6 +236,76 @@ describe('bounded history refill and completion', () => {
     ]);
     return page;
   }
+
+  it('pauses every visible page refill after failures until explicit Retry', async () => {
+    const first = seedPages();
+    const second = {
+      ...first,
+      before: 'another-page',
+      messageIds: ['other:0', 'other:1'],
+    };
+    const pages = [first, second];
+    useChatStore
+      .getState()
+      .setHistoryPages(THREAD_ID, [
+        ...pages,
+        { limit: 3, messageIds: ['latest:1'], loaded: true },
+      ]);
+    // Bound a regression's retry loop so the test fails instead of hanging.
+    apiMocks.fetchHistoryPage.mockImplementation(() =>
+      apiMocks.fetchHistoryPage.mock.calls.length <= 8
+        ? Promise.reject(new Error('offline'))
+        : new Promise(() => {}),
+    );
+    function VisiblePages() {
+      const history = useChatHistory(SESSION, noopSetIsLoading);
+      latestHistory = history;
+      useEffect(() => {
+        pages.forEach(history.loadHistoryPage);
+      }, [history.loadHistoryPage]);
+      return null;
+    }
+    container = document.createElement('div');
+    root = createRoot(container);
+    await act(async () => root?.render(<VisiblePages />));
+    expect(apiMocks.fetchHistoryPage).toHaveBeenCalledTimes(2);
+    expect(latestHistory.historyPageError).toBe('offline');
+    await act(async () => pages.forEach(latestHistory.loadHistoryPage));
+    expect(apiMocks.fetchHistoryPage).toHaveBeenCalledTimes(2);
+    expect(
+      useChatStore.getState().threadsById[THREAD_ID]?.messages,
+    ).toHaveLength(1);
+
+    await act(async () => latestHistory.retryHistoryPage());
+    expect(apiMocks.fetchHistoryPage).toHaveBeenCalledTimes(4);
+    expect(latestHistory.historyPageError).toBe('offline');
+    apiMocks.fetchHistoryPage.mockImplementation(
+      async (_threadId, _canvasId, _limit, before) => ({
+        threadId: THREAD_ID,
+        turns: [
+          {
+            id: before === 'older-page' ? 'old' : 'other',
+            messages: [
+              { role: 'user', content: 'Old question' },
+              {
+                role: 'assistant',
+                parts: [{ kind: 'text', text: 'Old answer' }],
+              },
+            ],
+          },
+        ],
+        hasMore: false,
+      }),
+    );
+    await act(async () => latestHistory.retryHistoryPage());
+    expect(apiMocks.fetchHistoryPage).toHaveBeenCalledTimes(6);
+    expect(latestHistory.historyPageError).toBeUndefined();
+    expect(
+      useChatStore
+        .getState()
+        .threadsById[THREAD_ID]?.messages.map((message) => message.id),
+    ).toEqual(['old:0', 'old:1', 'other:0', 'other:1', 'latest:1']);
+  });
 
   it('deduplicates page refills and reuses the original page size and cursor', async () => {
     const page = seedPages();

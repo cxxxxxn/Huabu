@@ -434,7 +434,6 @@ export function useChatHistory(
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [pageFailure, setPageFailure] = useState<{
     threadId: string;
-    page: ChatHistoryPage;
     message: string;
   }>();
   const isHistoryLoaded = useChatStore((state) =>
@@ -691,7 +690,7 @@ export function useChatHistory(
           .getState()
           .threadsById[threadId]?.historyPages?.includes(page) ||
         pendingPages.current.has(page) ||
-        (pageFailure?.threadId === threadId && pageFailure.page === page)
+        pageFailure?.threadId === threadId
       )
         return;
       pendingPages.current.add(page);
@@ -714,7 +713,6 @@ export function useChatHistory(
           console.warn('[useChatHistory] page refill failed', error);
           setPageFailure({
             threadId,
-            page,
             message:
               error instanceof Error
                 ? error.message

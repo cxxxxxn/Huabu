@@ -39,7 +39,7 @@ vi.mock('@/store/canvasStore', () => ({
   drainPendingSaves: vi.fn(),
   discardPendingSaves: vi.fn(),
 }));
-vi.mock('@/components/Common/Loading', () => ({ Loading: () => null }));
+vi.mock('lottie-react', () => ({ default: () => null }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
@@ -57,6 +57,16 @@ beforeEach(async () => {
   desktop.tabs.open.mockResolvedValue({ ok: true });
   vi.mocked(drainPendingSaves).mockRejectedValue(new Error('disk unavailable'));
   vi.mocked(discardPendingSaves).mockResolvedValue(undefined);
+  vi.spyOn(HTMLDialogElement.prototype, 'showModal').mockImplementation(
+    function (this: HTMLDialogElement) {
+      this.open = true;
+    },
+  );
+  vi.spyOn(HTMLDialogElement.prototype, 'close').mockImplementation(function (
+    this: HTMLDialogElement,
+  ) {
+    this.open = false;
+  });
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
@@ -87,6 +97,8 @@ afterEach(() => {
   act(() => root.unmount());
   router.dispose();
   host.remove();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 async function navigate(path = '/canvas/B') {
@@ -100,6 +112,47 @@ async function click(label: string) {
   if (!button) throw new Error(`Missing ${label}`);
   await act(async () => button.click());
 }
+
+it.each(['success', 'failure'] as const)(
+  'shows a native saving overlay without allowing dismissal, then handles %s',
+  async (outcome) => {
+    vi.useFakeTimers();
+    let resolveSave!: () => void;
+    let rejectSave!: (error: Error) => void;
+    vi.mocked(drainPendingSaves).mockReturnValue(
+      new Promise<void>((resolve, reject) => {
+        resolveSave = resolve;
+        rejectSave = reject;
+      }),
+    );
+    await navigate();
+    await act(async () => vi.advanceTimersByTimeAsync(149));
+    expect(host.querySelector('dialog')).toBeNull();
+    await act(async () => vi.advanceTimersByTimeAsync(2));
+    const dialog = host.querySelector('dialog');
+    expect(dialog?.open).toBe(true);
+    expect(dialog?.getAttribute('aria-label')).toBe('app.savingCanvas');
+    expect(dialog?.classList.contains('fixed')).toBe(true);
+    expect(dialog?.querySelector('[data-loading-spinner]')).not.toBeNull();
+    expect(HTMLDialogElement.prototype.showModal).toHaveBeenCalledOnce();
+    const cancel = new Event('cancel', { cancelable: true });
+    act(() => dialog?.dispatchEvent(cancel));
+    expect(cancel.defaultPrevented).toBe(true);
+    expect(router.state.location.pathname).toBe('/canvas/A');
+    await act(async () => {
+      if (outcome === 'success') resolveSave();
+      else rejectSave(new Error('disk unavailable'));
+    });
+    expect(HTMLDialogElement.prototype.close).toHaveBeenCalledOnce();
+    expect(host.querySelector('dialog')).toBeNull();
+    expect(router.state.location.pathname).toBe(
+      outcome === 'success' ? '/canvas/B' : '/canvas/A',
+    );
+    expect(document.querySelector('[role="dialog"]') !== null).toBe(
+      outcome === 'failure',
+    );
+  },
+);
 
 it('keeps the original route until the user decides, and defaults focus to staying', async () => {
   await navigate();
