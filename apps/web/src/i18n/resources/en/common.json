@@ -387,8 +387,8 @@
     "inputMode_pen": "Pen",
     "inputMode_finger": "Finger",
     "automaticResolved": "Auto ({{mode}})",
-    "recentChatTurns": "Recent chat turns",
-    "recentChatTurnsDescription": "Older chat history is collapsed and can be expanded anytime.",
+    "recentChatTurns": "Chat history page size",
+    "recentChatTurnsDescription": "Number of complete turns fetched per page. Older history loads automatically as you scroll.",
     "externalAgentIdleTimeout": "Agent idle pause time",
     "externalAgentIdleTimeoutDescription": "Pause the Agent after this idle time; resume when used again.",
     "externalAgentIdleTimeoutSaved": "External agent idle timeout updated",
@@ -1176,6 +1176,7 @@
     "partialStrokeCount_other": "{{count}} strokes"
   },
   "messages": {
+    "listLabel": "Conversation messages",
     "generationInterrupted": "Generation interrupted",
     "somethingWentWrong": "Something went wrong",
     "inkRequest": "Ink request",

@@ -387,8 +387,8 @@
     "inputMode_pen": "手写笔",
     "inputMode_finger": "手指",
     "automaticResolved": "自动（{{mode}}）",
-    "recentChatTurns": "近期聊天轮次",
-    "recentChatTurnsDescription": "较早的聊天记录折叠显示，可随时展开。",
+    "recentChatTurns": "聊天历史分页大小",
+    "recentChatTurnsDescription": "每页获取的完整对话轮次数。向上滚动时自动加载更早的记录。",
     "externalAgentIdleTimeout": "Agent 空闲暂停时间",
     "externalAgentIdleTimeoutDescription": "Agent 空闲超过此时间后暂停，下次使用时恢复。",
     "externalAgentIdleTimeoutSaved": "已更新外部 Agent 空闲超时",
@@ -1176,6 +1176,7 @@
     "partialStrokeCount_other": "{{count}} 笔"
   },
   "messages": {
+    "listLabel": "对话消息",
     "generationInterrupted": "生成已中断",
     "somethingWentWrong": "出了点问题",
     "inkRequest": "笔迹请求",

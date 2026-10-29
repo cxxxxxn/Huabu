@@ -33,7 +33,6 @@ import { useInternalSlashCommands } from '@/hooks/useInternalSlashCommands';
 import { useAcpProfilesStore } from '@/store/acpProfilesStore';
 import { useAcpThreadChangesStore } from '@/store/acpThreadChangesStore';
 import useCanvasStore from '@/store/canvasStore';
-import { useChatPreferencesStore } from '@/store/chatPreferencesStore';
 import {
   selectThreadBinding,
   selectThreadHistoryLoaded,
@@ -288,8 +287,8 @@ export const ChatPanel = ({
   const messages = useChatStore((state) =>
     selectThreadMessages(state, threadId),
   );
-  const completedTurnId = useChatStore(
-    (state) => state.threadsById[threadId]?.completedTurnId,
+  const historyPages = useChatStore(
+    (state) => state.threadsById[threadId]?.historyPages,
   );
   const pendingPermission = useMemo(
     () => findPendingPermissionRequest(messages),
@@ -303,9 +302,6 @@ export const ChatPanel = ({
   );
   const historyPage = useChatStore(
     useShallow((state) => selectThreadHistoryPageState(state, threadId)),
-  );
-  const recentTurnCount = useChatPreferencesStore(
-    (state) => state.recentTurnCount,
   );
   const addNode = useCanvasStore((state) => state.addNode);
   const llmConfig = useLLMStore((state) => state.config);
@@ -744,12 +740,10 @@ export const ChatPanel = ({
     onRenameRequestHandled,
   ]);
 
-  const [submissionNonce, setSubmissionNonce] = useState(0);
   const handleSubmit = useCallback(
     async (e: React.FormEvent, agentMode: AgentMode, draft: string) => {
       e.preventDefault();
       if (!selectThreadHistoryLoaded(useChatStore.getState(), threadId)) return;
-      setSubmissionNonce((nonce) => nonce + 1);
       // Strip leading `/<id>` tokens that match a known slash command
       // and forward them as `invokedSkills`. Skill invocation is gated
       // to **internal + operate mode** only:
@@ -1078,16 +1072,17 @@ export const ChatPanel = ({
           )}
           <MessageList
             messages={messages}
-            recentTurnCount={recentTurnCount}
+            historyPages={historyPages}
+            onLoadHistoryPage={historyWindow?.loadHistoryPage}
+            onVisibleMessagesChange={historyWindow?.updateHistoryViewport}
+            historyPageError={historyWindow?.historyPageError}
+            onRetryHistoryPage={historyWindow?.retryHistoryPage}
             activationId={activationId}
-            completedTurnId={completedTurnId}
-            submissionNonce={submissionNonce}
             threadId={threadId}
             isLoading={isLoading}
             isHistoryLoading={!isHistoryLoaded && !historyError}
             isHistoryReady={isHistoryLoaded}
             hasOlderHistory={historyPage.hasOlderHistory}
-            olderTurnBatchSize={recentTurnCount}
             isLoadingOlderHistory={historyPage.isLoadingOlderHistory}
             olderHistoryError={historyPage.olderHistoryError ?? undefined}
             onLoadOlderHistory={loadOlderHistory}

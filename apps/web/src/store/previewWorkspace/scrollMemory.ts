@@ -63,6 +63,20 @@ export function readMessageListScrollBookmark(
     : undefined;
 }
 
+export function remapMessageListScrollAnchor(
+  viewKey: string,
+  aliases: ReadonlyMap<string, string>,
+): void {
+  const position = scrollPositionByViewKey.get(viewKey);
+  const previous = position?.messageAnchor;
+  const messageId = previous && aliases.get(previous.messageId);
+  if (!position || !previous || !messageId) return;
+  scrollPositionByViewKey.set(viewKey, {
+    ...position,
+    messageAnchor: { ...previous, messageId },
+  });
+}
+
 export function readChatViewport(
   viewKey: string | undefined,
 ): ChatViewportSnapshot | undefined {

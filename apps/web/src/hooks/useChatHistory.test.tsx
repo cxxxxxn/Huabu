@@ -14,19 +14,25 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ApiError } from '@/api/_client';
 import { selectThreadHistoryLoaded, useChatStore } from '@/store/chatStore';
 import {
   conversationTitleKey,
   getConversationTitle,
   useConversationTitleStore,
 } from '@/store/conversationTitleStore';
+import {
+  messageListViewKey,
+  readMessageListScrollBookmark,
+  rememberMessageListScrollAnchor,
+} from '@/store/previewWorkspace/scrollMemory';
 
 import {
   claimAgentStream,
   hasAgentStreamClaim,
 } from './agentStreamCoordinator';
 import * as turnController from './agentTurnController';
-import { useChatHistory } from './useChatHistory';
+import { useChatHistory, type ChatHistoryWindow } from './useChatHistory';
 
 import type { ChatSession } from './useChatSession';
 import type {
@@ -115,6 +121,7 @@ const SESSION: ChatSession = {
 
 function Harness({ session = SESSION }: { session?: ChatSession }) {
   const history = useChatHistory(session, noopSetIsLoading);
+  latestHistory = history;
   latestLoadOlderHistory = history.loadOlderHistory;
   latestRetryHistory = history.retryHistory;
   return null;
@@ -124,6 +131,7 @@ let root: Root | undefined;
 let container: HTMLDivElement | undefined;
 let latestLoadOlderHistory: (() => void) | undefined;
 let latestRetryHistory: (() => void) | undefined;
+let latestHistory: ChatHistoryWindow;
 
 /** History ends on a user turn: the state that arms the reconnect. */
 function seedStore(isStreaming: boolean) {
@@ -164,6 +172,7 @@ async function renderHarness(session: ChatSession = SESSION): Promise<void> {
 }
 
 beforeEach(() => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   useConversationTitleStore.setState({
     entries: {},
     pending: {},
@@ -200,6 +209,194 @@ afterEach(() => {
   container?.remove();
   root = undefined;
   container = undefined;
+  vi.unstubAllGlobals();
+});
+
+describe('bounded history refill and completion', () => {
+  function seedPages() {
+    seedStore(false);
+    const state = useChatStore.getState();
+    state.setMessages(THREAD_ID, [
+      {
+        id: 'latest:1',
+        historyTurnId: 'latest',
+        role: 'assistant',
+        segments: [{ kind: 'text', text: 'Latest answer' }],
+      },
+    ]);
+    const page = {
+      before: 'older-page',
+      limit: 2,
+      messageIds: ['old:0', 'old:1'],
+      loaded: false,
+    };
+    state.setHistoryPages(THREAD_ID, [
+      page,
+      { limit: 3, messageIds: ['latest:1'], loaded: true },
+    ]);
+    return page;
+  }
+
+  it('deduplicates page refills and reuses the original page size and cursor', async () => {
+    const page = seedPages();
+    let resolve!: (value: unknown) => void;
+    apiMocks.fetchHistoryPage.mockReturnValue(
+      new Promise((done) => {
+        resolve = done;
+      }),
+    );
+    await renderHarness();
+    act(() => {
+      latestHistory.loadHistoryPage(page);
+      latestHistory.loadHistoryPage(page);
+    });
+    expect(apiMocks.fetchHistoryPage).toHaveBeenCalledExactlyOnceWith(
+      THREAD_ID,
+      CANVAS_ID,
+      2,
+      'older-page',
+    );
+    await act(async () =>
+      resolve({
+        threadId: THREAD_ID,
+        turns: [
+          {
+            id: 'old',
+            messages: [
+              { role: 'user', content: 'Old question' },
+              {
+                role: 'assistant',
+                parts: [{ kind: 'text', text: 'Old answer' }],
+              },
+            ],
+          },
+        ],
+        hasMore: false,
+      }),
+    );
+    expect(
+      useChatStore
+        .getState()
+        .threadsById[THREAD_ID]?.messages.map((message) => message.id),
+    ).toEqual(['old:0', 'old:1', 'latest:1']);
+  });
+
+  it('keeps visible history on a stale cursor until an explicit reload retry', async () => {
+    const page = seedPages();
+    apiMocks.fetchHistoryPage.mockRejectedValueOnce(
+      new ApiError(409, { message: 'History changed' }, 'History changed'),
+    );
+    await renderHarness();
+    await act(async () => latestHistory.loadHistoryPage(page));
+    expect(latestHistory.historyPageError).toBe('History changed');
+    expect(
+      useChatStore.getState().threadsById[THREAD_ID]?.messages[0]?.id,
+    ).toBe('latest:1');
+    apiMocks.fetchHistoryPage.mockResolvedValue({
+      threadId: THREAD_ID,
+      turns: [
+        {
+          id: 'replacement',
+          messages: [
+            {
+              role: 'assistant',
+              parts: [{ kind: 'text', text: 'New generation' }],
+            },
+          ],
+        },
+      ],
+      hasMore: false,
+    });
+    await act(async () => latestHistory.retryHistoryPage());
+    expect(
+      useChatStore.getState().threadsById[THREAD_ID]?.messages[0]?.id,
+    ).toBe('replacement:0');
+    expect(
+      useChatStore.getState().threadsById[THREAD_ID]?.historyPages,
+    ).toHaveLength(1);
+  });
+
+  it('does not drop a completed local tail before the server has persisted it', async () => {
+    seedPages();
+    useChatStore.getState().addMessage(THREAD_ID, {
+      id: 'live-user',
+      role: 'user',
+      content: 'New question',
+    });
+    useChatStore.getState().addMessage(THREAD_ID, {
+      id: 'live-answer',
+      role: 'assistant',
+      segments: [{ kind: 'text', text: 'New answer' }],
+    });
+    const scrollRoot = document.createElement('div');
+    const row = document.createElement('div');
+    row.dataset.chatMessageId = 'live-answer';
+    row.getBoundingClientRect = () => new DOMRect(0, 20, 100, 100);
+    scrollRoot.append(row);
+    const viewKey = messageListViewKey(CANVAS_ID, THREAD_ID);
+    rememberMessageListScrollAnchor(scrollRoot, viewKey);
+    apiMocks.fetchHistoryPage.mockResolvedValue({
+      threadId: THREAD_ID,
+      turns: [
+        {
+          id: 'latest',
+          messages: [
+            { role: 'user', content: 'Old question' },
+            {
+              role: 'assistant',
+              parts: [{ kind: 'text', text: 'Latest answer' }],
+            },
+          ],
+        },
+      ],
+      hasMore: false,
+    });
+    await renderHarness();
+    await act(async () =>
+      useChatStore.getState().markTurnCompleted(THREAD_ID, 'live-answer'),
+    );
+    expect(
+      useChatStore.getState().threadsById[THREAD_ID]?.messages.at(-1)?.id,
+    ).toBe('live-answer');
+    expect(latestHistory.historyPageError).toContain(
+      'not available in history',
+    );
+    apiMocks.fetchHistoryPage.mockResolvedValue({
+      threadId: THREAD_ID,
+      turns: [
+        {
+          id: 'latest',
+          messages: [
+            { role: 'user', content: 'Old question' },
+            {
+              role: 'assistant',
+              parts: [{ kind: 'text', text: 'Latest answer' }],
+            },
+          ],
+        },
+        {
+          id: 'completed',
+          messages: [
+            { role: 'user', content: 'New question' },
+            {
+              role: 'assistant',
+              parts: [{ kind: 'text', text: 'New answer' }],
+            },
+          ],
+        },
+      ],
+      hasMore: false,
+    });
+    await act(async () => latestHistory.retryHistoryPage());
+    expect(
+      useChatStore.getState().threadsById[THREAD_ID]?.messages.at(-1)?.id,
+    ).toBe('completed:1');
+    expect(latestHistory.historyPageError).toBeUndefined();
+    expect(readMessageListScrollBookmark(viewKey)).toEqual({
+      messageId: 'completed:1',
+      offsetTop: 20,
+    });
+  });
 });
 
 describe('useChatHistory paging', () => {
@@ -460,7 +657,7 @@ describe('useChatHistory paging', () => {
                 role: 'user',
                 content: '# A heading that must not become a title',
               },
-              { role: 'assistant', content: 'Answer' },
+              { role: 'assistant', parts: [{ kind: 'text', text: 'Answer' }] },
             ],
           },
         ],
@@ -486,7 +683,7 @@ describe('useChatHistory paging', () => {
           id: 'turn-latest',
           messages: [
             { role: 'user', content: 'question' },
-            { role: 'assistant', content: 'answer' },
+            { role: 'assistant', parts: [{ kind: 'text', text: 'answer' }] },
           ],
         },
       ],
@@ -834,13 +1031,24 @@ describe('useChatHistory reconnect', () => {
       },
       { id: 'live-user', role: 'user', content: 'new work' },
     ]);
+    useChatStore
+      .getState()
+      .setHistoryPages(THREAD_ID, [
+        { limit: 3, messageIds: ['turn-1:0'], loaded: true },
+      ]);
+    useChatStore.getState().setHistoryPageState(THREAD_ID, {
+      before: 'older-than-1',
+      hasOlder: true,
+    });
     apiMocks.fetchHistoryPage
       .mockResolvedValueOnce({
         threadId: THREAD_ID,
         turns: [
           {
             id: 'turn-3',
-            messages: [{ role: 'assistant', content: 'latest' }],
+            messages: [
+              { role: 'assistant', parts: [{ kind: 'text', text: 'latest' }] },
+            ],
           },
         ],
         before: 'before-3',
@@ -851,11 +1059,15 @@ describe('useChatHistory reconnect', () => {
         turns: [
           {
             id: 'turn-1',
-            messages: [{ role: 'assistant', content: 'cached' }],
+            messages: [
+              { role: 'assistant', parts: [{ kind: 'text', text: 'cached' }] },
+            ],
           },
           {
             id: 'turn-2',
-            messages: [{ role: 'assistant', content: 'middle' }],
+            messages: [
+              { role: 'assistant', parts: [{ kind: 'text', text: 'middle' }] },
+            ],
           },
         ],
         hasMore: false,
@@ -878,5 +1090,9 @@ describe('useChatHistory reconnect', () => {
           THREAD_ID
         ]?.messages.map((message) => message.historyTurnId),
     ).toEqual(['turn-1', 'turn-2', 'turn-3']);
+    expect(useChatStore.getState().threadsById[THREAD_ID]).toMatchObject({
+      hasOlderHistory: false,
+      historyBefore: null,
+    });
   });
 });
