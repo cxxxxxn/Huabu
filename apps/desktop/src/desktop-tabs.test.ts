@@ -1660,6 +1660,81 @@ describe('desktop Space Tab lifecycle', () => {
     expect(a.webContents.reload).toHaveBeenCalledTimes(1);
   });
 
+  it('closes an initializing Tab without requesting a save or discard confirmation', async () => {
+    tabs.open({ canvasId: 'loading' });
+    const view = mocks.views.at(-1);
+    if (!view) throw new Error('Missing loading view');
+    expect(tabs.snapshot.tabs.at(-1)).toMatchObject({
+      title: '',
+      loading: true,
+    });
+
+    await tabs.close(tabs.snapshot.activeId);
+
+    expect(view.webContents.close).toHaveBeenCalledOnce();
+    expect(view.webContents.send).not.toHaveBeenCalledWith(
+      'tabs:prepare-close',
+      expect.anything(),
+    );
+    expect(mocks.showMessageBox).not.toHaveBeenCalled();
+    expect(mocks.showErrorBox).not.toHaveBeenCalled();
+    expect(tabs.snapshot).toMatchObject({ activeId: 'home', busy: false });
+    expect(tabs.snapshot.tabs).toHaveLength(1);
+    const stored = JSON.parse(
+      readFileSync(join(directory, 'desktop-tabs.json'), 'utf8'),
+    );
+    expect(stored[JSON.stringify(['local', 'workspace'])].canvasIds).toEqual(
+      [],
+    );
+  });
+
+  it('closes a saved Tab during reload without requesting another save', async () => {
+    const view = open('reloading');
+    const id = tabs.snapshot.activeId;
+    const reload = tabs.reload(id);
+    finish(view);
+    await reload;
+    view.webContents.send.mockClear();
+
+    await tabs.close(id);
+
+    expect(view.webContents.close).toHaveBeenCalledOnce();
+    expect(view.webContents.send).not.toHaveBeenCalledWith(
+      'tabs:prepare-close',
+      expect.anything(),
+    );
+    expect(mocks.showMessageBox).not.toHaveBeenCalled();
+  });
+
+  it('ignores load failures caused by destroying an initializing Tab', async () => {
+    tabs.open({ canvasId: 'loading' });
+    const view = mocks.views.at(-1);
+    if (!view) throw new Error('Missing loading view');
+    const failLoad = view.webContents.callbacks.get('did-fail-load');
+    if (!failLoad) throw new Error('Missing load failure handler');
+    view.webContents.close.mockImplementationOnce(() =>
+      failLoad(
+        {} as never,
+        -2 as never,
+        'Load cancelled by closing' as never,
+        '' as never,
+        true as never,
+      ),
+    );
+
+    await tabs.close(tabs.snapshot.activeId);
+    failLoad(
+      {} as never,
+      -2 as never,
+      'Late load failure' as never,
+      '' as never,
+      true as never,
+    );
+
+    expect(mocks.showErrorBox).not.toHaveBeenCalled();
+    expect(mocks.showMessageBox).not.toHaveBeenCalled();
+  });
+
   it('asks before closing an unavailable renderer', async () => {
     const a = open('a');
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});

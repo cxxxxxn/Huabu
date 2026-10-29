@@ -349,6 +349,7 @@ export class DesktopTabs {
   }
 
   private fail(tab: ContentTab, message: string): void {
+    if (!tab.view) return;
     console.error('[desktop-tabs]', message);
     const notify = !tab.failureNotified;
     tab.failureNotified = true;
@@ -875,7 +876,7 @@ export class DesktopTabs {
           this.resume();
           return;
         }
-      } else {
+      } else if (content.ready || !content.state.loading) {
         await this.drainBeforeDestruction(content, 'close');
       }
       const index = this.tabs.indexOf(tab);
@@ -1213,10 +1214,11 @@ export class DesktopTabs {
   }
 
   private destroyTab(tab: ContentTab): void {
-    if (!tab.view) return;
-    this.win.contentView.removeChildView(tab.view);
-    tab.view.webContents.close({ waitForBeforeUnload: false });
+    const view = tab.view;
+    if (!view) return;
     tab.view = null;
+    this.win.contentView.removeChildView(view);
+    view.webContents.close({ waitForBeforeUnload: false });
   }
 
   dispose(): void {
