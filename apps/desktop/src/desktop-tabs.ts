@@ -670,7 +670,9 @@ export class DesktopTabs {
   finishDrain(contents: WebContents, requestId: unknown, raw: unknown): void {
     if (typeof requestId !== 'string') throw new Error('Invalid save request');
     const request = this.drains.get(requestId);
-    if (!request || request.contentsId !== contents.id)
+    // A cancelled or timed-out preparation can still have a response in transit.
+    if (!request) return;
+    if (request.contentsId !== contents.id)
       throw new Error('Save request does not belong to this Tab');
     if (!raw || typeof raw !== 'object' || !('ok' in raw))
       throw new Error('Invalid save response');
@@ -685,6 +687,33 @@ export class DesktopTabs {
           pending.reject(new DesktopCloseCancelledError());
       } else request.reject(new Error(raw.error));
     else throw new Error('Invalid save response');
+  }
+
+  private async drainBeforeDestruction(
+    tab: ContentTab,
+    action: 'close' | 'reload',
+  ): Promise<void> {
+    try {
+      await this.drain(tab);
+    } catch (error) {
+      if (error instanceof DesktopCloseCancelledError) throw error;
+      this.closePrepared();
+      const { response } = await dialog.showMessageBox(this.win, {
+        type: 'warning',
+        message: `Could not save "${tab.state.title}"`,
+        detail: `${error instanceof Error ? error.message : String(error)}\n\nUnsaved changes may be lost if you continue. Cancel to keep this page and retry after the server is available.`,
+        buttons: [
+          'Cancel',
+          action === 'reload'
+            ? 'Reload without saving'
+            : 'Close without saving',
+        ],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      });
+      if (response !== 1) throw error;
+    }
   }
 
   resume(): void {
@@ -812,7 +841,7 @@ export class DesktopTabs {
           return;
         }
       } else {
-        await this.drain(content);
+        await this.drainBeforeDestruction(content, 'close');
       }
       const index = this.tabs.indexOf(tab);
       const remaining = this.tabs.filter((entry) => entry !== tab);
@@ -943,7 +972,7 @@ export class DesktopTabs {
     this.busy = true;
     this.publish();
     try {
-      if (tab.ready) await this.drain(tab);
+      if (tab.ready) await this.drainBeforeDestruction(tab, 'reload');
       tab.ready = false;
       tab.state.loading = true;
       tab.state.error = null;

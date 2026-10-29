@@ -527,6 +527,33 @@ describe('desktop save presentation', () => {
     expectPresentation(false, false);
   });
 
+  it.each(['replace', 'resume'] as const)(
+    'can retry a pending preparation immediately after %s',
+    async (mode) => {
+      let complete!: () => void;
+      mocks.save.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          complete = resolve;
+        }),
+      );
+      await render();
+      await prepare();
+      await act(async () => {
+        if (mode === 'resume') mocks.resume.mock.calls[0][0]();
+        mocks.prepare.mock.calls[0][0]('retry-request');
+      });
+      expect(mocks.finish).toHaveBeenCalledExactlyOnceWith('retry-request', {
+        ok: true,
+      });
+      expect(mocks.toast).not.toHaveBeenCalled();
+      await act(async () => complete());
+      expect(mocks.finish).toHaveBeenCalledOnce();
+      await resume();
+      expectPresentation(false, false);
+      expect(isDesktopInputFrozen()).toBe(false);
+    },
+  );
+
   it('blocks window shortcuts and portal clicks after acknowledgement until resume', async () => {
     await render();
     const shortcut = vi.fn();
