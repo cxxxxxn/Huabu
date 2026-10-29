@@ -44,6 +44,11 @@
   "app": {
     "loadingWorkspace": "Loading your Home folder…",
     "savingCanvas": "Saving…",
+    "unsavedChangesTitle": "Space could not be saved",
+    "unsavedChangesDescription": "Stay to keep your edits and retry saving. Leaving discards changes that have not been saved; changes already saved are kept.",
+    "stayInSpace": "Stay in this Space",
+    "discardAndLeave": "Discard and leave",
+    "discardFailed": "Could not finish discarding changes. Stay here or try again.",
     "logoAlt": "Logo"
   },
   "actions": {
@@ -412,8 +417,8 @@
     "inputMode_pen": "Pen",
     "inputMode_finger": "Finger",
     "automaticResolved": "Auto ({{mode}})",
-    "recentChatTurns": "Recent chat turns",
-    "recentChatTurnsDescription": "Older chat history is collapsed and can be expanded anytime.",
+    "recentChatTurns": "Chat history page size",
+    "recentChatTurnsDescription": "Number of complete turns fetched per page. Older history loads automatically as you scroll.",
     "externalAgentIdleTimeout": "Agent idle pause time",
     "externalAgentIdleTimeoutDescription": "Pause the Agent after this idle time; resume when used again.",
     "externalAgentIdleTimeoutSaved": "External agent idle timeout updated",
@@ -1072,7 +1077,7 @@
     "showEarlierTurns": "Show {{count}} earlier turns",
     "loadingEarlierTurns": "Loading earlier turns…",
     "backToBottom": "Back to bottom",
-    "returnToReadingPosition": "Return to previous reading position",
+    "returnToReadingPosition": "Back to last reading position",
     "readingPositionUnavailable": "Your previous reading position is no longer available.",
     "newMessage": "New message",
     "conversationIntegrityError": "This Agent node's conversation is no longer available. Reopen the node to continue.",
@@ -1225,6 +1230,7 @@
     "partialStrokeCount_other": "{{count}} strokes"
   },
   "messages": {
+    "listLabel": "Conversation messages",
     "generationInterrupted": "Generation interrupted",
     "somethingWentWrong": "Something went wrong",
     "inkRequest": "Ink request",

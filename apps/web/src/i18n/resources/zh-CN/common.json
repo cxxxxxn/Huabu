@@ -44,6 +44,11 @@
   "app": {
     "loadingWorkspace": "正在加载你的 Home 文件夹…",
     "savingCanvas": "正在保存…",
+    "unsavedChangesTitle": "Space 保存失败",
+    "unsavedChangesDescription": "留在这里可保留修改并重试保存。离开将放弃尚未保存的修改，已保存的内容不会撤销。",
+    "stayInSpace": "先不切换",
+    "discardAndLeave": "放弃修改并离开",
+    "discardFailed": "未能完成放弃修改，请留在这里或重试。",
     "logoAlt": "Logo"
   },
   "actions": {
@@ -412,8 +417,8 @@
     "inputMode_pen": "手写笔",
     "inputMode_finger": "手指",
     "automaticResolved": "自动（{{mode}}）",
-    "recentChatTurns": "近期聊天轮次",
-    "recentChatTurnsDescription": "较早的聊天记录折叠显示，可随时展开。",
+    "recentChatTurns": "聊天历史分页大小",
+    "recentChatTurnsDescription": "每页获取的完整对话轮次数。向上滚动时自动加载更早的记录。",
     "externalAgentIdleTimeout": "Agent 空闲暂停时间",
     "externalAgentIdleTimeoutDescription": "Agent 空闲超过此时间后暂停，下次使用时恢复。",
     "externalAgentIdleTimeoutSaved": "已更新外部 Agent 空闲超时",
@@ -1072,7 +1077,7 @@
     "showEarlierTurns": "显示更早的 {{count}} 个轮次",
     "loadingEarlierTurns": "正在加载更早的轮次…",
     "backToBottom": "回到底部",
-    "returnToReadingPosition": "回到刚才阅读的位置",
+    "returnToReadingPosition": "回到上次浏览处",
     "readingPositionUnavailable": "之前的阅读位置已不可用。",
     "newMessage": "新消息",
     "conversationIntegrityError": "此 Agent 节点的对话已不可用。请重新打开节点以继续。",
@@ -1225,6 +1230,7 @@
     "partialStrokeCount_other": "{{count}} 笔"
   },
   "messages": {
+    "listLabel": "对话消息",
     "generationInterrupted": "生成已中断",
     "somethingWentWrong": "出了点问题",
     "inkRequest": "笔迹请求",
