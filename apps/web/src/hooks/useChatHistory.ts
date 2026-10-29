@@ -16,7 +16,6 @@ import { settleInkInterpretation } from '@huabu/shared/ink-interpretation';
 import { ApiError } from '@/api/_client';
 import { agentApi } from '@/api/agent';
 import { useAcpThreadChangesStore } from '@/store/acpThreadChangesStore';
-import useCanvasStore from '@/store/canvasStore';
 import { MAX_HISTORY_PAGES } from '@/store/chatHistoryCache';
 import { useChatPreferencesStore } from '@/store/chatPreferencesStore';
 import {
@@ -24,11 +23,13 @@ import {
   selectThreadHistoryPageState,
   selectThreadLastAction,
   selectThreadMessages,
+  selectThreadIsLoading,
   useChatStore,
 } from '@/store/chatStore';
 import {
   ConversationIntegrityError,
   validateConversationView,
+  useConversationOwnerSource,
 } from '@/store/conversationOwner';
 import { refreshConversationTitleAfterStream } from '@/store/conversationTitleStore';
 import {
@@ -390,6 +391,7 @@ export interface ChatHistoryWindow {
   historyPageError?: string;
   retryHistoryPage: () => void;
   updateHistoryViewport: (ids: string[]) => void;
+  isCurrentOwnerHistory: boolean;
 }
 
 /**
@@ -451,11 +453,6 @@ export function useChatHistory(
     effectiveConversationView?.conversationOwner.canvasId || canvasId;
   const ownerNodeId =
     effectiveConversationView?.conversationOwner.nodeId ?? null;
-  const ownerStatus = useCanvasStore((state) => {
-    if (!ownerNodeId || state.canvasId !== ownerCanvasId) return undefined;
-    const owner = state.nodes.find((node) => node.id === ownerNodeId);
-    return (owner?.data as { status?: unknown } | undefined)?.status;
-  });
   useLayoutEffect(() => {
     if (!threadId || !ownerCanvasId) return;
     return useChatStore.getState().retainHistoryView(threadId, historyViewId);
@@ -480,8 +477,25 @@ export function useChatHistory(
     state.setHistoryError(threadId, null);
     state.setHistoryLoaded(threadId, false);
   }, [threadId, ownerCanvasId, setRefreshError]);
+  const ownerSource = useConversationOwnerSource(effectiveConversationView);
+  const ownerStatus = ownerSource?.status;
+  const ownerHistoryKey = effectiveConversationView
+    ? JSON.stringify([
+        ownerCanvasId,
+        threadId,
+        ownerSource?.invocationToken ?? null,
+        ownerStatus,
+      ])
+    : null;
+  const [hydratedOwnerKey, setHydratedOwnerKey] = useState<string | null>(null);
+  const isStreaming = useChatStore((state) =>
+    selectThreadIsLoading(state, threadId),
+  );
+  const needsOwnerRefresh =
+    (ownerStatus === 'done' || ownerStatus === 'error') &&
+    ownerHistoryKey !== hydratedOwnerKey;
 
-  // Load history on first mount and when the thread's cache is invalidated.
+  // A terminal token can change without a visible running transition.
   // Wait for canvasId to be available — on initial mount the canvas may
   // not have loaded yet, causing a request without canvasId that 404s.
   useEffect(() => {
@@ -490,7 +504,8 @@ export function useChatHistory(
     // mid-fetch, we still want to land the response on the originating
     // thread (cache survives navigation) rather than the current one.
     const tid = threadId;
-    if (selectThreadHistoryLoaded(useChatStore.getState(), tid)) return;
+    const loaded = selectThreadHistoryLoaded(useChatStore.getState(), tid);
+    if (loaded && (!needsOwnerRefresh || isStreaming)) return;
     if (historyError) return;
 
     let cancelled = false;
@@ -504,10 +519,10 @@ export function useChatHistory(
           await validateConversationView(effectiveConversationView);
         } catch (error) {
           if (error instanceof ConversationIntegrityError) {
-            if (previewTabId) {
+            if (previewTabId && canvasId === ownerCanvasId) {
               usePreviewWorkspaceStore.getState().closeTab(previewTabId);
+              return;
             }
-            return;
           }
           throw error;
         }
@@ -566,6 +581,7 @@ export function useChatHistory(
           { ...window, response: { ...res, threadId: finalTid } },
           ownerCanvasId,
         );
+        setHydratedOwnerKey(ownerHistoryKey);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -590,6 +606,9 @@ export function useChatHistory(
     recentTurnCount,
     historyError,
     isHistoryLoaded,
+    isStreaming,
+    needsOwnerRefresh,
+    ownerHistoryKey,
   ]);
 
   const loadOlderHistory = useCallback(() => {
@@ -992,15 +1011,7 @@ export function useChatHistory(
         queueCompletedNormally = false;
         if (cancelled || claim.signal.aborted) return;
         console.error('[useChatHistory] reconnect failed', error);
-        const current = useCanvasStore.getState();
-        const ownerStillRunning =
-          !!ownerNodeId &&
-          current.canvasId === ownerCanvasId &&
-          (
-            current.nodes.find((node) => node.id === ownerNodeId)?.data as
-              | { status?: unknown }
-              | undefined
-          )?.status === 'running';
+        const ownerStillRunning = ownerStatus === 'running';
         if (
           ownerStillRunning ||
           historyLooksIncomplete ||
@@ -1063,5 +1074,7 @@ export function useChatHistory(
       setPageFailure(undefined);
       if (refreshError) setRefreshNonce((nonce) => nonce + 1);
     },
+    isCurrentOwnerHistory:
+      isHistoryLoaded && !historyError && hydratedOwnerKey === ownerHistoryKey,
   };
 }

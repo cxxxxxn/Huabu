@@ -16,6 +16,7 @@ import { readTypedSSEStream } from './_sse';
 
 import type {
   AgentBinding,
+  AgentConversationOwnerResponse,
   AgentHostStreamEvent,
   AgentInputKind,
   AgentMode,
@@ -31,6 +32,16 @@ import type {
   ForkThreadResponse,
   StopThreadResponse,
 } from '@huabu/shared';
+
+export function getAgentConversationOwner(canvasId: string, threadId: string) {
+  return apiFetch<AgentConversationOwnerResponse>(
+    routes.agentConversationOwner(canvasId, threadId),
+    {
+      cache: 'no-store',
+      fallbackMessage: 'Unable to load the Agent conversation owner',
+    },
+  );
+}
 
 // ==================== Stream Callbacks ====================
 

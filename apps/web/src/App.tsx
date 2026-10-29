@@ -103,6 +103,13 @@ const playgroundRoutes = import.meta.env.DEV
         }),
       },
       {
+        path: '/playground/sign-in',
+        lazy: async () => ({
+          Component: (await import('./pages/playground/SignInPlaygroundPage'))
+            .default,
+        }),
+      },
+      {
         path: '/playground/design',
         lazy: async () => ({
           Component: (

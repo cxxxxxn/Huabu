@@ -39,7 +39,7 @@ import type {
   AgentStreamAttachResult,
   AgentStreamCallbacks,
 } from '@/api/agent';
-import type { InkInterpretation } from '@huabu/shared';
+import type { AgentConversationView, InkInterpretation } from '@huabu/shared';
 
 const apiMocks = vi.hoisted(() => ({
   fetchHistoryPage: vi.fn(),
@@ -51,6 +51,9 @@ const apiMocks = vi.hoisted(() => ({
     ): Promise<AgentStreamAttachResult> => ({ status: 'inactive' }),
   ),
   patchOwner: vi.fn(),
+  remoteSource: undefined as
+    | { status: string; invocationToken: string }
+    | undefined,
 }));
 
 const canvasMock = vi.hoisted(() => ({
@@ -92,6 +95,15 @@ vi.mock('@/store/conversationOwner', () => ({
   ),
   patchConversationOwnerNode: apiMocks.patchOwner,
   resolveConversationOwnerSource: vi.fn(() => undefined),
+  useConversationOwnerSource: (view: AgentConversationView | null) => {
+    if (view?.conversationOwner.canvasId === 'remote')
+      return apiMocks.remoteSource;
+    if (!view || view.conversationOwner.canvasId !== canvasMock.state.canvasId)
+      return undefined;
+    return canvasMock.state.nodes.find(
+      (node) => node.id === view.conversationOwner.nodeId,
+    )?.data;
+  },
   validateConversationView: vi.fn(async () => {}),
 }));
 
@@ -124,6 +136,7 @@ function Harness({ session = SESSION }: { session?: ChatSession }) {
   latestHistory = history;
   latestLoadOlderHistory = history.loadOlderHistory;
   latestRetryHistory = history.retryHistory;
+  latestOwnerHistoryReady = history.isCurrentOwnerHistory;
   return null;
 }
 
@@ -132,6 +145,7 @@ let container: HTMLDivElement | undefined;
 let latestLoadOlderHistory: (() => void) | undefined;
 let latestRetryHistory: (() => void) | undefined;
 let latestHistory: ChatHistoryWindow;
+let latestOwnerHistoryReady = false;
 
 /** History ends on a user turn: the state that arms the reconnect. */
 function seedStore(isStreaming: boolean) {
@@ -201,6 +215,7 @@ beforeEach(() => {
   canvasMock.state.nodes = [];
   canvasMock.state.patchNodeSilent.mockClear();
   apiMocks.patchOwner.mockClear();
+  apiMocks.remoteSource = undefined;
   latestLoadOlderHistory = undefined;
 });
 
@@ -631,6 +646,94 @@ describe('bounded history refill and completion', () => {
 });
 
 describe('useChatHistory paging', () => {
+  it('refreshes a new terminal invocation without observing running, preserving older pages', async () => {
+    seedStore(false);
+    useChatStore.getState().setMessages(THREAD_ID, [
+      {
+        id: 'old:0',
+        historyTurnId: 'old',
+        role: 'assistant',
+        segments: [{ kind: 'text', text: 'Old answer' }],
+      },
+    ]);
+    const session: ChatSession = {
+      ...SESSION,
+      ownerCanvasId: 'remote',
+      conversationView: {
+        presentationAnchor: { canvasId: 'remote', nodeId: 'remote-node' },
+        conversationOwner: {
+          canvasId: 'remote',
+          nodeId: 'remote-node',
+          threadId: THREAD_ID,
+        },
+      },
+    };
+    apiMocks.remoteSource = { status: 'done', invocationToken: 'old-run' };
+    apiMocks.fetchHistoryPage.mockResolvedValue({
+      threadId: THREAD_ID,
+      hasMore: false,
+      turns: [
+        {
+          id: 'old',
+          messages: [
+            {
+              role: 'assistant',
+              parts: [{ kind: 'text', text: 'Old answer' }],
+            },
+          ],
+        },
+      ],
+    });
+    await renderHarness(session);
+    expect(latestOwnerHistoryReady).toBe(true);
+    apiMocks.fetchHistoryPage.mockClear();
+    const updatedPage = {
+      threadId: THREAD_ID,
+      hasMore: false,
+      turns: [
+        {
+          id: 'old',
+          messages: [
+            {
+              role: 'assistant',
+              parts: [{ kind: 'text', text: 'Old answer' }],
+            },
+          ],
+        },
+        {
+          id: 'new',
+          messages: [
+            {
+              role: 'assistant',
+              parts: [{ kind: 'text', text: 'New answer' }],
+            },
+          ],
+        },
+      ],
+    };
+    let finishRefresh: ((value: typeof updatedPage) => void) | undefined;
+    apiMocks.fetchHistoryPage.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishRefresh = resolve;
+        }),
+    );
+    apiMocks.remoteSource = { status: 'done', invocationToken: 'new-run' };
+    await act(async () => root?.render(<Harness session={session} />));
+    expect(latestOwnerHistoryReady).toBe(false);
+    await act(async () => finishRefresh?.(updatedPage));
+    expect(apiMocks.fetchHistoryPage).toHaveBeenCalledWith(
+      THREAD_ID,
+      'remote',
+      3,
+    );
+    expect(
+      useChatStore
+        .getState()
+        .threadsById[THREAD_ID]?.messages.map((m) => m.historyTurnId),
+    ).toEqual(['old', 'new']);
+    expect(latestOwnerHistoryReady).toBe(true);
+  });
   it.each(['completed', 'inactive'] as const)(
     'awaits request reconciliation before history refresh and queue settlement after %s attach',
     async (status) => {

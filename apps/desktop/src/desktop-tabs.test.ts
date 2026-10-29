@@ -890,6 +890,7 @@ describe('desktop Space Tab lifecycle', () => {
   });
 
   it('keeps the Tab and resumes input if saving fails', async () => {
+    mocks.showMessageBox.mockResolvedValueOnce({ response: 0 });
     const a = open('a');
     const close = tabs.close(tabs.snapshot.activeId);
     finish(a, false);
@@ -898,9 +899,18 @@ describe('desktop Space Tab lifecycle', () => {
     expect(tabs.snapshot.busy).toBe(false);
     expect(a.webContents.send).toHaveBeenCalledWith('tabs:resume');
     expect(tabs.snapshot.tabs).toHaveLength(2);
+    expect(mocks.showMessageBox).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        buttons: ['Cancel', 'Close without saving'],
+        defaultId: 0,
+        cancelId: 0,
+      }),
+    );
   });
 
   it('times out without pretending a save succeeded', async () => {
+    mocks.showMessageBox.mockResolvedValueOnce({ response: 0 });
     vi.useFakeTimers();
     const a = open('a');
     const close = tabs.close(tabs.snapshot.activeId);
@@ -909,6 +919,91 @@ describe('desktop Space Tab lifecycle', () => {
     await rejected;
     expect(a.webContents.close).not.toHaveBeenCalled();
     expect(tabs.snapshot.busy).toBe(false);
+  });
+
+  it.each(['close', 'reload'] as const)(
+    'requires explicit discard approval to %s after an offline save failure',
+    async (action) => {
+      let confirm!: (value: { response: number }) => void;
+      mocks.showMessageBox.mockReturnValueOnce(
+        new Promise((resolve) => {
+          confirm = resolve;
+        }),
+      );
+      const a = open('a');
+      const task = tabs[action](tabs.snapshot.activeId);
+      const id = a.webContents.send.mock.calls.at(-1)?.[1];
+      tabs.finishDrain(a.webContents as never, id, {
+        ok: false,
+        error: 'Network offline',
+      });
+      await vi.waitFor(() =>
+        expect(mocks.showMessageBox).toHaveBeenCalledOnce(),
+      );
+      expect(a.webContents.close).not.toHaveBeenCalled();
+      expect(a.webContents.reload).not.toHaveBeenCalled();
+      expect(tabs.snapshot.busy).toBe(true);
+      expect(a.webContents.send).toHaveBeenCalledWith('tabs:close-prepared');
+      expect(mocks.showMessageBox).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          detail: expect.stringContaining('Unsaved changes may be lost'),
+          buttons: [
+            'Cancel',
+            action === 'close'
+              ? 'Close without saving'
+              : 'Reload without saving',
+          ],
+          defaultId: 0,
+          cancelId: 0,
+        }),
+      );
+      confirm({ response: 1 });
+      await task;
+      expect(a.webContents[action]).toHaveBeenCalledOnce();
+      expect(tabs.snapshot.busy).toBe(false);
+    },
+  );
+
+  it('keeps failed reloads cancellable and retries saving after recovery', async () => {
+    mocks.showMessageBox.mockResolvedValueOnce({ response: 0 });
+    const a = open('a');
+    const id = tabs.snapshot.activeId;
+    const reload = tabs.reload(id);
+    finish(a, false);
+    await expect(reload).rejects.toThrow('Disk full');
+    expect(a.webContents.reload).not.toHaveBeenCalled();
+    expect(tabs.snapshot.busy).toBe(false);
+    expect(a.webContents.send).toHaveBeenCalledWith('tabs:resume');
+    const retry = tabs.reload(id);
+    finish(a);
+    await retry;
+    expect(a.webContents.reload).toHaveBeenCalledOnce();
+  });
+
+  it('ignores a late response from a cancelled request without settling its retry', async () => {
+    const a = open('a');
+    const id = tabs.snapshot.activeId;
+    const closing = tabs.close(id);
+    const requestId = a.webContents.send.mock.calls.at(-1)?.[1];
+    tabs.finishDrain(a.webContents as never, requestId, {
+      ok: false,
+      error: 'Closing was cancelled.',
+      cancelled: true,
+    });
+    await expect(closing).rejects.toMatchObject({
+      name: 'DesktopCloseCancelledError',
+    });
+    expect(mocks.showMessageBox).not.toHaveBeenCalled();
+    const retry = tabs.reload(id);
+    expect(() =>
+      tabs.finishDrain(a.webContents as never, requestId, { ok: true }),
+    ).not.toThrow();
+    expect(tabs.snapshot.busy).toBe(true);
+    expect(a.webContents.reload).not.toHaveBeenCalled();
+    finish(a);
+    await retry;
+    expect(a.webContents.reload).toHaveBeenCalledOnce();
   });
 
   it('waits beyond the old timeout while the owning renderer remains responsive', async () => {

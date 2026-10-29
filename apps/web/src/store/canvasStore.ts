@@ -140,6 +140,7 @@ import { createUnloadFlush } from './canvasStore/save/unloadFlush';
 import { createResizePreviewController } from './canvasStore/slices/resizePreview';
 import { useChatStore } from './chatStore';
 import { useGesturePreviewStore } from './gesturePreviewStore';
+import { usePanelStore } from './panelStore';
 import {
   selectActiveNodeId,
   selectIsNodeOpen,
@@ -160,6 +161,7 @@ import type {
   FrameFitPreview,
   FrameFitPreviewRole,
 } from './gesturePreviewStore';
+import type { CanvasPreviewWorkspace } from './previewWorkspace/model';
 import type { NodeIngestionInfo } from '@/handler/canvasCommand/preprocess';
 import type {
   AgentChatContext,
@@ -1181,6 +1183,46 @@ export async function discardPendingSaves(canvasId: string): Promise<void> {
   }
 }
 
+/**
+ * Drain every save queue for the current Canvas before the session ends,
+ * and report whether everything reached the Server. Signing out removes the
+ * credential the unload flush would need, so whatever is still queued or
+ * failed then would be lost.
+ */
+export async function savedBeforeSignOut(): Promise<boolean> {
+  try {
+    // The desktop close path: stop recordings, await imports and uploads,
+    // then save structure and every node's content strictly, failing on any
+    // retained structure or content failure.
+    await pageLifecycle.prepare(new AbortController().signal);
+    const { canvasId } = useCanvasStore.getState();
+    if (canvasId) await canvasEvents.flush(canvasId);
+    else await drainPendingSaves();
+    await preprocessQueue.flushAll();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the open Canvas holds an edit the Server has not acknowledged:
+ * queued, in flight or failed. Leaving the page now would lose it.
+ */
+export function hasUnsavedCanvasEdits(): boolean {
+  const { canvasId, isSaving, pendingSave, versionConflict } =
+    useCanvasStore.getState();
+  if (!canvasId) return false;
+  return (
+    isSaving ||
+    pendingSave ||
+    versionConflict ||
+    structureScheduler.hasPending() ||
+    structureSaveErrors.has(canvasId) ||
+    nodeContentQueue.hasUnsavedContent(canvasId)
+  );
+}
+
 export class CanvasSubmissionSaveError extends Error {
   readonly code = 'canvas_save_failed';
 
@@ -1217,7 +1259,7 @@ export function clearNodeDuplicateGuard(nodeId: string): void {
  * editing it (exit-edit "settle").
  *
  * Called for editor-authored nodes (`note` / `text`) from their exit-edit
- * boundaries — `closeExpanded` / `openExpanded` for `note` and `TextNode`'s
+ * boundaries — Preview Workspace departure for `note` and `TextNode`'s
  * blur handler for `text` — whose auto-derived label (the on-disk `.md`
  * filename) must be committed only when the heading is settled, never on
  * every keystroke pause, which churned the filename through every partial
@@ -1232,6 +1274,38 @@ export function clearNodeDuplicateGuard(nodeId: string): void {
 export function settleNodePreprocess(nodeId: string): void {
   const node = useCanvasStore.getState().nodes.find((n) => n.id === nodeId);
   if (node) preprocessQueue.schedule(node);
+}
+
+function settleDepartingPreviewEditors(
+  previous: CanvasPreviewWorkspace,
+  next?: CanvasPreviewWorkspace,
+): void {
+  const { canvasId, nodes } = useCanvasStore.getState();
+  const retained = new Set(
+    next?.groups.flatMap((group) => {
+      const target = group.activeTabId
+        ? next.tabs[group.activeTabId]?.target
+        : undefined;
+      return target?.kind === 'node' && target.canvasId === canvasId
+        ? [target.nodeId]
+        : [];
+    }),
+  );
+  for (const group of previous.groups) {
+    const target = group.activeTabId
+      ? previous.tabs[group.activeTabId]?.target
+      : undefined;
+    if (
+      target?.kind !== 'node' ||
+      target.canvasId !== canvasId ||
+      retained.has(target.nodeId)
+    )
+      continue;
+    const node = nodes.find((candidate) => candidate.id === target.nodeId);
+    if (node?.type === 'note' || node?.type === 'text') {
+      settleNodePreprocess(node.id);
+    }
+  }
 }
 
 export function drainNodePreprocessing(): Promise<void> {
@@ -4746,5 +4820,20 @@ const useCanvasStore = create<RFState>()(
     },
   })),
 );
+
+// Observe topology rather than individual entry points, including reused tabs
+// in another split group. Still-visible editors and ordinary focus changes stay open.
+usePreviewWorkspaceStore.subscribe((next, previous) => {
+  if (next.workspace !== previous.workspace) {
+    settleDepartingPreviewEditors(previous.workspace, next.workspace);
+  }
+});
+usePanelStore.subscribe((next, previous) => {
+  if (next.isRightCollapsed && !previous.isRightCollapsed) {
+    settleDepartingPreviewEditors(
+      usePreviewWorkspaceStore.getState().workspace,
+    );
+  }
+});
 
 export default useCanvasStore;

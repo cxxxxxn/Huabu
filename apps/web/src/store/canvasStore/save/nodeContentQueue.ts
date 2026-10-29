@@ -194,6 +194,8 @@ export type NodeContentQueue = {
    */
   pendingNodeIds(): string[];
   pendingFields(nodeId: string): ReadonlySet<string>;
+  /** Whether a content edit has not reached the Server: queued, in flight or failed. */
+  hasUnsavedContent(canvasId: string): boolean;
 
   /**
    * Seed (or refresh) the optimistic-concurrency baseline revision for
@@ -1217,6 +1219,13 @@ export function createNodeContentQueue(opts: {
     pendingFields(nodeId) {
       if (restoredContent.has(nodeId)) return new Set(NODE_CONTENT_KEYS);
       return new Set(pendingFields.get(nodeId)?.keys());
+    },
+
+    hasUnsavedContent(canvasId) {
+      return (
+        this.pendingNodeIds().length > 0 ||
+        [...failures.values()].some((failure) => failure.canvasId === canvasId)
+      );
     },
   };
 }

@@ -6,6 +6,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from '@/api/_client';
+import { getAgentConversationOwner } from '@/api/agent';
 import { ThreadChatInput } from '@/components/Panels/ChatPanel/ThreadChatInput';
 import { ChatSessionProvider } from '@/hooks/useChatSession';
 import { useAcpThreadChangesStore } from '@/store/acpThreadChangesStore';
@@ -18,6 +19,10 @@ import {
 } from '@/store/chatStore';
 import { resolveConversationPreparation } from '@/store/conversationPreparation';
 import { useGesturePreviewStore } from '@/store/gesturePreviewStore';
+import {
+  conversationOwnerKey,
+  useRemoteConversationOwnerStore,
+} from '@/store/remoteConversationOwner';
 import { createPageLifecycle, pageLifecycle } from '@/utils/pageLifecycle';
 
 import {
@@ -77,6 +82,15 @@ vi.mock('@/components/Panels/ChatPanel/useSlashCommandTypeahead', () => ({
 }));
 
 vi.mock('@/api/agent', () => ({
+  getAgentConversationOwner: vi.fn(
+    async (canvasId: string, threadId: string) => ({
+      canvasId,
+      threadId,
+      nodeId: 'question-1',
+      spaceTitle: 'Original Space',
+      source: { agentBinding: { kind: 'internal' } },
+    }),
+  ),
   agentApi: {
     streamMessage: mocks.stream,
     stopThread: mocks.stop,
@@ -1132,6 +1146,13 @@ describe('queued composer turns', () => {
       const binding = external
         ? { kind: 'external' as const, profileId: 'profile-1', alias: 'Agent' }
         : { kind: 'internal' as const };
+      vi.mocked(getAgentConversationOwner).mockResolvedValue({
+        canvasId: owner.ownerCanvasId,
+        threadId: owner.threadId,
+        nodeId: 'question-1',
+        spaceTitle: 'Original Space',
+        source: { agentBinding: binding, hasAuthoredContent: true },
+      });
       useChatStore.getState().setAgentBinding(owner.threadId, binding);
       const prepared = request('text', owner);
       for (const content of ['Second', 'Third']) {
@@ -1622,6 +1643,110 @@ afterEach(() => {
   root = undefined;
   container = undefined;
   vi.restoreAllMocks();
+});
+
+describe('remote conversation execution', () => {
+  it('requires the source Space to retry historical Canvas references', () => {
+    expect(() =>
+      prepareAgentTurnRetry(
+        { ...questionSession, canvasId: 'parent' },
+        {
+          id: 'message',
+          role: 'user',
+          content: 'Review this',
+          selectedNodeIds: ['source-note'],
+        },
+        'operate',
+      ),
+    ).toThrow('Open the source Space');
+  });
+
+  it.each([false, true])(
+    'sends and stops the original thread without attaching the parent canvas (queued: %s)',
+    async (queued) => {
+      const remote: ChatSession = { ...questionSession, canvasId: 'parent' };
+      useCanvasStore.getState()._setStateNoAutosave({ canvasId: 'parent' });
+      const parentNodes = useCanvasStore.getState().nodes;
+      useRemoteConversationOwnerStore.setState({
+        entries: {
+          [conversationOwnerKey('canvas-1', 'question-1', 'thread-1')]: {
+            owner: {
+              canvasId: 'canvas-1',
+              nodeId: 'question-1',
+              threadId: 'thread-1',
+              spaceTitle: 'Child',
+              source: {
+                hasAuthoredContent: true,
+                agentBinding: { kind: 'internal' },
+                agentMode: 'operate',
+                status: 'done',
+              },
+            },
+          },
+        },
+      });
+      const prepared = request('text', remote);
+      expect(prepared.sources).toEqual({
+        canvasId: 'canvas-1',
+        canvasContext: { selectedNodes: [] },
+      });
+      if (queued) {
+        let hook: UseAgentStreamReturn | undefined;
+        function RemoteComposer() {
+          hook = useAgentStream(remote);
+          return null;
+        }
+        container = document.createElement('div');
+        root = createRoot(container);
+        await act(async () => root?.render(createElement(RemoteComposer)));
+        useChatStore.getState().setSelectionAttachment({
+          type: 'text',
+          source: 'selection',
+          content: 'Parent excerpt',
+          label: 'Parent',
+        });
+        await act(async () => {
+          useChatStore.getState().setThreadLoading(remote.threadId, true);
+          await hook?.startStream('Queued remote task', 'operate');
+        });
+        expect(
+          useChatStore.getState().threadsById[remote.threadId].queuedTurns,
+        ).toHaveLength(1);
+        await act(async () => {
+          useChatStore.getState().setThreadLoading(remote.threadId, false);
+          resumeAgentTurnQueue(remote);
+          await vi.waitFor(() => expect(mocks.stream).toHaveBeenCalledTimes(1));
+        });
+        expect(mocks.stream.mock.calls[0][4].attachments ?? []).toEqual([]);
+        expect(useChatStore.getState().selectionAttachment?.content).toBe(
+          'Parent excerpt',
+        );
+      } else {
+        await dispatchAgentTurn(prepared);
+      }
+      expect(mocks.validate).toHaveBeenCalledWith(
+        questionSession.conversationView,
+      );
+      expect(mocks.stream.mock.calls[0][1]).toBe('thread-1');
+      expect(mocks.stream.mock.calls[0][4]).toMatchObject({
+        canvasId: 'canvas-1',
+        anchorNodeId: 'question-1',
+        canvasContext: { selectedNodes: [] },
+      });
+      expect(mocks.save).not.toHaveBeenCalled();
+      expect(
+        useCanvasStore.getState().flushCanvasEvents,
+      ).not.toHaveBeenCalled();
+      expect(useCanvasStore.getState().nodes).toBe(parentNodes);
+      stopAgentTurn(remote);
+      await Promise.resolve();
+      expect(mocks.stop).toHaveBeenCalledWith(
+        'thread-1',
+        'canvas-1',
+        undefined,
+      );
+    },
+  );
 });
 
 describe('Ink interpretation lifecycle', () => {

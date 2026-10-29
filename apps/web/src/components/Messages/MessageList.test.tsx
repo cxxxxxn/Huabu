@@ -137,6 +137,41 @@ function render(props: Partial<React.ComponentProps<typeof MessageList>> = {}) {
 }
 
 describe('manual virtual chat', () => {
+  it('reports the latest end only after hydration and placement, and clears it when hidden', () => {
+    const onLatestVisibleChange = vi.fn();
+    render({ onLatestVisibleChange, isHistoryReady: false });
+    expect(onLatestVisibleChange).toHaveBeenLastCalledWith(false);
+    render({ onLatestVisibleChange });
+    expect(onLatestVisibleChange).toHaveBeenLastCalledWith(true);
+    const scroller = container.querySelector<HTMLElement>(
+      '[data-chat-thread-root]',
+    );
+    if (!scroller) throw new Error('Missing scroller');
+    Object.defineProperty(scroller, 'scrollHeight', { value: 2000 });
+    act(() => {
+      scroller.scrollTop = 500;
+      scroller.dispatchEvent(new Event('scroll'));
+    });
+    expect(onLatestVisibleChange).toHaveBeenLastCalledWith(false);
+    act(() => {
+      scroller.scrollTop = 1500;
+      scroller.dispatchEvent(new Event('scroll'));
+    });
+    expect(onLatestVisibleChange).toHaveBeenLastCalledWith(true);
+    render({ onLatestVisibleChange, isActive: false });
+    expect(onLatestVisibleChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('does not acknowledge the latest end while its body is a refill placeholder', () => {
+    const onLatestVisibleChange = vi.fn();
+    render({
+      onLatestVisibleChange,
+      messages: [],
+      historyPages: [{ limit: 3, messageIds: ['missing-tail'], loaded: false }],
+    });
+    expect(onLatestVisibleChange).toHaveBeenLastCalledWith(false);
+  });
+
   it('keeps the return control stable between separate show and hide thresholds', () => {
     render();
     const scroller = container.querySelector<HTMLElement>(

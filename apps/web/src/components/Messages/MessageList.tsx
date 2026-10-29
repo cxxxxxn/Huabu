@@ -42,6 +42,7 @@ import type {
 } from 'react-virtuoso';
 
 interface MessageListProps {
+  onLatestVisibleChange?: (visible: boolean) => void;
   messages: ChatMessage[];
   activationId?: number;
   threadId?: string;
@@ -110,6 +111,7 @@ export const MessageList = memo(function MessageList(props: MessageListProps) {
 });
 
 function VirtualMessageList({
+  onLatestVisibleChange,
   messages,
   activationId,
   threadId,
@@ -223,6 +225,42 @@ function VirtualMessageList({
   const positionDeadline = useRef(0);
   const handledRequest = useRef<number | undefined>(undefined);
   const previousTail = useRef(messages.at(-1));
+  const reportLatestVisible = useCallback(() => {
+    const tailId = ids.at(-1);
+    const tailRendered =
+      !tailId ||
+      Array.from(
+        scroller?.querySelectorAll<HTMLElement>('[data-chat-message-id]') ?? [],
+      ).some(
+        (row) =>
+          row.dataset.chatMessageId === tailId &&
+          !row.hasAttribute('data-chat-row-loading'),
+      );
+    onLatestVisibleChange?.(
+      !!scroller &&
+        scroller.clientHeight > 0 &&
+        isActive &&
+        isHistoryReady &&
+        !isHistoryLoading &&
+        (ready.current || !ids.length) &&
+        !positioning.current &&
+        !seeking.current &&
+        tailRendered &&
+        scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <=
+          50,
+    );
+  }, [
+    scroller,
+    ids,
+    isActive,
+    isHistoryReady,
+    isHistoryLoading,
+    onLatestVisibleChange,
+  ]);
+  useEffect(() => {
+    reportLatestVisible();
+    return () => onLatestVisibleChange?.(false);
+  }, [reportLatestVisible, messages, isSeeking]);
   useLayoutEffect(() => {
     if (anchor.current && !ids.includes(anchor.current.messageId)) {
       const reconciled = readMessageListScrollBookmark(viewKey);
@@ -317,6 +355,7 @@ function VirtualMessageList({
               scroller.clientHeight <=
             50;
         saveAnchor();
+        reportLatestVisible();
       };
       if (placementRequest.current) {
         // Let the requested tail finish its initial Markdown measurement, not
@@ -332,7 +371,7 @@ function VirtualMessageList({
         pendingFrame.current = requestAnimationFrame(finish);
       }
     });
-  }, [correctAnchor, saveAnchor, scroller]);
+  }, [correctAnchor, saveAnchor, scroller, reportLatestVisible]);
 
   const takeControl = useCallback(() => {
     following.current = false;
@@ -567,6 +606,7 @@ function VirtualMessageList({
         }
       });
       updateAway();
+      reportLatestVisible();
       if (placementRequest.current || following.current) {
         settlePosition();
         return;
@@ -607,6 +647,7 @@ function VirtualMessageList({
     byId,
     updateVisibleLoading,
     updateAway,
+    reportLatestVisible,
   ]);
 
   useEffect(() => {
@@ -984,6 +1025,7 @@ function VirtualMessageList({
             50;
           atBottom.current = nowAtBottom;
           updateAway();
+          reportLatestVisible();
           if (nowAtBottom) setHasNew(false);
           saveAnchor();
           if (scroller.scrollTop < 200) loadOlder();
